@@ -1,0 +1,12 @@
+[app]
+database_path = ".local/async-api-view.sqlite3"
+host = "127.0.0.1"
+port = 8765
+worker_poll_seconds = 1.0
+cli_timeout_seconds = 30.0
+cli_output_limit_bytes = 8388608
+
+[[databricks]]
+name = "primary-workspace"
+profile = "YOUR_PROFILE"
+workspace_root = "/"

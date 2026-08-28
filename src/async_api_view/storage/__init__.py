@@ -1,0 +1,27 @@
+"""SQLite-backed local durable state.
+
+``SQLiteStore`` is the composition-facing concrete implementation of every
+shared local port.  It also provides synchronous configuration/query helpers
+for bootstrap and future presentation code; adapter workers should use only the
+shared action-lifecycle and observation-ingestion ports.
+"""
+
+from .models import (
+    ConfiguredScopeRecord,
+    IntentScopeRecord,
+    IntentScopeWork,
+    OperationalEventRecord,
+    StoredAction,
+    SystemRecord,
+)
+from .sqlite import SQLiteStore
+
+__all__ = [
+    "ConfiguredScopeRecord",
+    "IntentScopeRecord",
+    "IntentScopeWork",
+    "OperationalEventRecord",
+    "SQLiteStore",
+    "StoredAction",
+    "SystemRecord",
+]

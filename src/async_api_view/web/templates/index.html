@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Remote state · Async API View</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to cached state</a>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Local operational view</p>
+      <h1>Remote state</h1>
+    </div>
+    <div class="snapshot">
+      <span>Snapshot</span>
+      <time>{{ view.loaded_at|timestamp }}</time>
+    </div>
+  </header>
+
+  <main id="main">
+    {% if view.error %}
+    <section class="notice notice--error" role="alert">
+      <strong>{% if view.disconnected %}Disconnected{% else %}State query failed{% endif %}</strong>
+      <span>{{ view.error|display }}</span>
+      <a href="/">Try again</a>
+    </section>
+    {% endif %}
+
+    <section aria-labelledby="systems-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Configuration</p>
+          <h2 id="systems-heading">Systems and scopes</h2>
+        </div>
+        <span class="count">{{ view.systems|length }} configured</span>
+      </div>
+      {% if view.systems %}
+      <div class="system-grid">
+        {% for system in view.systems %}
+        <article class="system-card">
+          <div class="system-title">
+            <div>
+              <h3>{{ system.name|display }}</h3>
+              <code>{{ system.kind|display }}</code>
+            </div>
+            <span class="badge badge--{{ 'current' if system.enabled and system.worker_available else 'unsupported' }}">
+              {% if not system.enabled %}Paused{% elif not system.worker_available %}Worker unavailable{% else %}Enabled{% endif %}
+            </span>
+          </div>
+          <dl class="facts">
+            <div><dt>Connection knowledge</dt><dd>{{ system.connection_state|display }}</dd></div>
+            <div><dt>Configured scopes</dt><dd>{{ system.configured_scopes|join(', ')|display if system.configured_scopes else 'None' }}</dd></div>
+            {% if system.last_activity %}
+            <div><dt>Last activity</dt><dd>{{ system.last_activity.state|display }} · {{ system.last_activity.occurred_at|timestamp }}</dd></div>
+            {% if system.last_activity.failure %}<div><dt>Last failure</dt><dd class="failure">{{ system.last_activity.failure|display }}</dd></div>{% endif %}
+            {% else %}
+            <div><dt>Last activity</dt><dd>None recorded</dd></div>
+            {% endif %}
+          </dl>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state">
+        <strong>No systems configured</strong>
+        <p>The local cache has no configured system or scope to browse.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <section aria-labelledby="objects-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Canonical cache</p>
+          <h2 id="objects-heading">Folders, objects, and facets</h2>
+        </div>
+        <span class="count">{{ view.objects|length }} objects</span>
+      </div>
+      {% if view.objects %}
+      <div class="table-scroll" tabindex="0" aria-label="Scrollable cached object table">
+        <table>
+          <thead><tr><th>Object</th><th>Facet</th><th>Knowledge</th><th>Cached value</th><th>Known as of</th><th>Freshness</th><th>Source</th></tr></thead>
+          <tbody>
+          {% for object in view.objects %}
+            {% if object.facets %}
+              {% for facet in object.facets %}
+              <tr>
+                <td data-label="Object">
+                  <strong>{{ object.name|display }}</strong>
+                  <span class="subtle">{{ object.object_type|display }}{% if object.path %} · {{ object.path|display }}{% endif %}</span>
+                </td>
+                <td data-label="Facet"><code>{{ facet.name|display }}</code></td>
+                <td data-label="Knowledge">{{ facet.knowledge|display }}</td>
+                <td data-label="Cached value" class="cached-value">{% if facet.name == 'content' %}<span class="unknown">Raw content is not displayed</span>{% elif facet.value %}{{ facet.value|display }}{% else %}<span class="unknown">No value observed</span>{% endif %}</td>
+                <td data-label="Known as of"><time>{{ facet.known_as_of|timestamp }}</time></td>
+                <td data-label="Freshness">
+                  <span class="badge badge--{{ facet.freshness|display }}">{{ facet.freshness|display }}</span>
+                  <span class="subtle">Interval {{ facet.effective_interval|display }}</span>
+                </td>
+                <td data-label="Source">{{ facet.provenance|display }}</td>
+              </tr>
+              {% endfor %}
+            {% else %}
+              <tr><td data-label="Object"><strong>{{ object.name|display }}</strong><span class="subtle">{{ object.object_type|display }}</span></td><td colspan="6" class="unknown">No facet knowledge recorded</td></tr>
+            {% endif %}
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state">
+        <strong>No cached objects</strong>
+        <p>Registered refreshes remain available below. Empty cache does not imply an empty remote system.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <section aria-labelledby="refresh-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Ordinary refresh path</p>
+          <h2 id="refresh-heading">Registered refreshes</h2>
+        </div>
+      </div>
+      {% if view.refresh_options %}
+      <div class="refresh-list">
+        {% for option in view.refresh_options %}
+        <form class="refresh-row" method="post" action="/refresh">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="system_id" value="{{ option.system_id|display }}">
+          <input type="hidden" name="target_kind" value="{{ option.target_kind|display }}">
+          <input type="hidden" name="target_id" value="{{ option.target_id|display }}">
+          <input type="hidden" name="capability_key" value="{{ option.capability_key|display }}">
+          <input type="hidden" name="facet" value="{{ option.facet|display }}">
+          <div>
+            <strong>{{ option.label|display }}</strong>
+            <span class="subtle"><code>{{ option.capability_key|display }}</code> · facet {{ option.facet|display }}</span>
+            <span class="subtle">Target: {{ option.target_kind|display }} · <code>{{ option.target_id|display }}</code></span>
+            <span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span>
+          </div>
+          <button type="submit" {% if not option.enabled %}disabled aria-describedby="reason-{{ loop.index }}"{% endif %}>Request refresh</button>
+          {% if option.disabled_reason %}<span id="reason-{{ loop.index }}" class="failure">{{ option.disabled_reason|display }}</span>{% endif %}
+        </form>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state"><strong>Refresh unsupported</strong><p>No observation capability is registered for the configured scopes.</p></div>
+      {% endif %}
+    </section>
+  </main>
+  <footer>Cached knowledge remains visible when a remote system or worker is unavailable.</footer>
+</body>
+</html>

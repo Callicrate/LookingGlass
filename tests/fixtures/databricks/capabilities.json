@@ -1,0 +1,14 @@
+{
+  "workspace_children": {"objects": [{"path": "/Shared/n", "object_type": "NOTEBOOK", "object_id": 1}]},
+  "workspace_children_array": [{"path": "/Shared/n", "object_type": "NOTEBOOK", "object_id": 1}],
+  "workspace_metadata": {"path": "/Shared/n", "object_type": "FILE"},
+  "workspace_content": {"content": "b2s="},
+  "catalogs": {"catalogs": [{"name": "main", "storage_location": "s3://secret"}]},
+  "catalogs_array": [{"name": "main", "storage_location": "s3://secret"}],
+  "schemas": {"schemas": [{"name": "sales"}]},
+  "schemas_array": [{"name": "sales"}],
+  "relations": {"tables": [{"name": "orders", "table_type": "MANAGED", "storage_location": "s3://secret", "columns": [{"name": "id", "type_name": "INT"}]}]},
+  "relations_array": [{"name": "orders", "table_type": "MANAGED", "storage_location": "s3://secret", "columns": [{"name": "id", "type_name": "INT"}]}],
+  "volumes": {"volumes": [{"name": "landing", "storage_location": "s3://secret"}]},
+  "volumes_array": [{"name": "landing", "storage_location": "s3://secret"}]
+}

@@ -1,0 +1,113 @@
+# Async API View
+
+Async API View keeps a local, inspectable cache of remote-system state and refreshes it through controlled API-specific workers.
+The first adapter uses the existing Databricks CLI.
+
+## First usable workflow
+
+The current runnable slice can:
+
+- register a Databricks workspace by named CLI profile;
+- show cached Workspace and Unity Catalog metadata in a loopback dashboard;
+- submit a generic refresh request;
+- validate, queue, and execute it through the Databricks worker;
+- ingest normalized observations into SQLite;
+- keep cached state visible when Databricks or the worker is unavailable;
+- enforce duplicate and minimum-interval refresh controls.
+
+### Prerequisites
+
+- Windows PowerShell for the commands below.
+- Python 3.12.
+- [`uv`](https://docs.astral.sh/uv/).
+- Databricks CLI 0.298 or newer on `PATH`.
+- An existing, valid named Databricks CLI profile.
+
+Check available profiles without printing credential values:
+
+```powershell
+databricks auth profiles
+```
+
+### Set up
+
+```powershell
+Set-Location -LiteralPath 'C:\Users\user\projects\async-api-view'
+Copy-Item -LiteralPath '.\config.example.toml' -Destination '.\config.local.toml'
+```
+
+Edit `config.local.toml` and replace `YOUR_PROFILE` with the intended named profile.
+The file stores only the profile name and configured Workspace root, not Databricks credentials or host secrets.
+
+```powershell
+uv sync --group dev
+uv run async-api-view --config config.local.toml init
+uv run async-api-view --config config.local.toml doctor
+```
+
+`doctor` verifies the installed CLI version and required command groups.
+It does not query workspace inventory or validate the selected profile's authentication.
+
+### Run
+
+```powershell
+uv run async-api-view --config config.local.toml serve
+```
+
+Open [http://127.0.0.1:8765](http://127.0.0.1:8765).
+The dashboard is intentionally bound to loopback.
+Stop it with `Ctrl+C`.
+
+## Databricks scope
+
+The closed worker registry supports:
+
+- Workspace folder membership and object metadata;
+- Workspace file/notebook metadata;
+- policy-gated Workspace content normalization;
+- Unity Catalog catalog, schema, table/view metadata, and volume-object metadata.
+
+It does not use the Databricks SDK, direct REST calls, SQL inspection, or `databricks api`.
+It never reads table/view rows, lists files inside Unity Catalog volumes, reads volume file content, or follows storage locations.
+
+Workspace content artifact persistence remains disabled in the composed application until its size, encryption, and local-access policy is configured.
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `async-api-view init` | Apply SQLite migrations and idempotently register configured systems/scopes. |
+| `async-api-view doctor` | Verify the existing Databricks CLI compatibility surface. |
+| `async-api-view run-once` | Drain currently eligible local coordinator and worker activity, then stop. |
+| `async-api-view serve` | Run the loopback UI, coordinator, and Databricks worker in one process. |
+
+Pass `--config <path>` before the subcommand.
+Use `--log-level DEBUG`, `INFO`, `WARNING`, or `ERROR` when needed.
+
+## Verify
+
+```powershell
+uv run ruff format --check src tests
+uv run ruff check src tests
+uv run pytest -q
+uv lock --check
+```
+
+The default test suite uses fake CLI results and does not contact Databricks.
+A live smoke test requires an explicit named profile and Workspace root.
+
+## Project structure
+
+- `src/async_api_view/contracts/`: versioned canonical and worker ports.
+- `src/async_api_view/core/`: pure refresh policy.
+- `src/async_api_view/storage/`: SQLite schema, queues, leases, and projections.
+- `src/async_api_view/ingestion/`: canonical observation-write boundary.
+- `src/async_api_view/adapters/`: closed Databricks CLI runner, normalizers, and worker.
+- `src/async_api_view/web/`: loopback operational UI.
+- `src/async_api_view/composition.py`: concrete one-process wiring.
+- `docs/architecture.md`: full product and architecture contract.
+
+## Documentation
+
+See the [architecture specification](docs/architecture.md) for schema, freshness, queue, worker, failure, security, and phased-delivery contracts.
+

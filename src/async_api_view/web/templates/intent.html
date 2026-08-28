@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Refresh intent · Async API View</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body data-intent-page data-poll-url="/api/intents/{{ view.intent_id|display }}">
+  <a class="skip-link" href="#main">Skip to intent status</a>
+  <header class="topbar">
+    <div><p class="eyebrow">Refresh receipt</p><h1>Intent <code data-intent-id>{{ view.intent_id|display }}</code></h1></div>
+    <a class="back-link" href="/">← Cached state</a>
+  </header>
+  <main id="main">
+    <section class="intent-summary" aria-labelledby="summary-heading">
+      <div><p class="eyebrow">Requested</p><h2 id="summary-heading" data-requested-at>{{ view.requested_at|timestamp }}</h2></div>
+    <div class="poll-state" role="status" aria-live="polite"><span class="pulse" aria-hidden="true"></span><span data-poll-state>{% if view.terminal %}Final state{% else %}Loading latest status · cached receipt shown{% endif %}</span></div>
+    </section>
+    <div class="notice notice--error{% if not view.error %} is-hidden{% endif %}" role="alert" data-intent-error>{{ view.error|display }}</div>
+    <section aria-labelledby="scope-heading">
+      <div class="section-heading"><div><p class="eyebrow">Per-scope disposition</p><h2 id="scope-heading">Refresh progress</h2></div><time data-updated-at>{{ view.updated_at|timestamp }}</time></div>
+      {% if view.scopes %}
+      <div class="scope-list">
+        {% for scope in view.scopes %}
+        <article class="scope-row" data-scope-index="{{ loop.index0 }}">
+          <div class="scope-title"><strong data-field="label">{{ scope.label|display }}</strong><span class="badge badge--{{ scope.state|display }}" data-field="state">{{ scope.state|display }}</span></div>
+          <dl class="facts facts--wide">
+            <div><dt>Capability / facet</dt><dd><code>{{ scope.capability_key|display }}</code> · {{ scope.facet|display }}</dd></div>
+            <div><dt>Canonical target</dt><dd><span data-field="target_kind">{{ scope.target_kind|display }}</span> · <code data-field="target_id">{{ scope.target_id|display }}</code></dd></div>
+            <div><dt>Linked action</dt><dd data-field="action_id">{{ scope.action_id|display if scope.action_id else 'Not assigned' }}</dd></div>
+            <div><dt>Eligible at</dt><dd data-field="eligible_at">{{ scope.eligible_at|timestamp }}</dd></div>
+            <div><dt>Failure</dt><dd class="failure" data-field="failure">{{ scope.failure|display if scope.failure else 'None' }}</dd></div>
+            <div><dt>Cached-state context</dt><dd data-field="cached_context">{{ scope.cached_context|display }}</dd></div>
+          </dl>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state"><strong>Intent queued</strong><p>Per-scope disposition is not available yet. Cached state remains unchanged.</p></div>
+      {% endif %}
+    </section>
+  </main>
+  <footer>Polling stops when every scope reaches a final disposition or this page closes.</footer>
+</body>
+</html>
