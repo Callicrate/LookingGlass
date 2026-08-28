@@ -731,7 +731,16 @@ def build_runtime(
         targets=resolver,
         runner=actual_runner,
     )
-    app = create_app(backend)
+    allowed_hosts = tuple(
+        dict.fromkeys(
+            (
+                settings.app.host,
+                "localhost",
+                "[::1]",
+            )
+        )
+    )
+    app = create_app(backend, allowed_hosts=allowed_hosts)
     runtime = ApplicationRuntime(
         settings=settings,
         store=store,

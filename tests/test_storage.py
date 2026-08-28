@@ -207,6 +207,34 @@ def test_restart_read_helpers_expose_scopes_and_catalogs_root_without_secrets(tm
         assert reopened.get_object_sync(seeded.unity_catalog_root_object_id) is not None
 
 
+def test_invalid_bootstrap_capability_does_not_leave_partial_state(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "state.sqlite3") as store:
+        service = SystemBootstrapService(store)
+
+        with pytest.raises(ValueError, match="unsupported Databricks capability"):
+            service.configure_databricks_workspace(
+                display_name="partial",
+                profile="DEFAULT",
+                workspace_root="/",
+                enabled_capability_keys=("bad.read",),
+            )
+
+        assert store.list_systems() == ()
+
+
+def test_bootstrap_settings_cannot_override_profile_or_workspace_root(tmp_path) -> None:
+    with (
+        SQLiteStore(tmp_path / "state.sqlite3") as store,
+        pytest.raises(ValueError, match="reserved settings"),
+    ):
+        SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="reserved",
+            profile="DEFAULT",
+            workspace_root="/",
+            non_secret_settings={"profile": "OTHER"},
+        )
+
+
 def test_failed_logical_action_anchors_cooldown_and_creates_one_event(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(

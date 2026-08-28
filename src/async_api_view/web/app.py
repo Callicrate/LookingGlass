@@ -42,6 +42,8 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "X-Permitted-Cross-Domain-Policies": "none",
 }
 
 
@@ -220,7 +222,12 @@ def create_app(
     @app.post("/refresh")
     async def refresh(request: Request) -> Response:
         submitted = await _parse_refresh_form(request, app.state.csrf_token)
-        dashboard_view = await app.state.backend.dashboard()
+        try:
+            dashboard_view = await app.state.backend.dashboard()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail="Local state services are unavailable"
+            ) from exc
         if not any(_option_matches(option, submitted) for option in dashboard_view.refresh_options):
             raise HTTPException(status_code=400, detail="Refresh selection is not registered")
         try:
@@ -232,7 +239,10 @@ def create_app(
 
     @app.get("/intents/{intent_id}", response_class=HTMLResponse)
     async def intent_page(request: Request, intent_id: str) -> HTMLResponse:
-        view = await app.state.backend.intent(_intent_id(intent_id))
+        try:
+            view = await app.state.backend.intent(_intent_id(intent_id))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Intent status is unavailable") from exc
         if view is None:
             raise HTTPException(status_code=404, detail="Intent not found")
         content = templates.get_template("intent.html").render(request=request, view=view)
@@ -240,7 +250,10 @@ def create_app(
 
     @app.get("/api/intents/{intent_id}", response_class=JSONResponse)
     async def intent_poll(intent_id: str) -> JSONResponse:
-        view = await app.state.backend.intent(_intent_id(intent_id))
+        try:
+            view = await app.state.backend.intent(_intent_id(intent_id))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Intent status is unavailable") from exc
         if view is None:
             raise HTTPException(status_code=404, detail="Intent not found")
         return JSONResponse(_intent_payload(view))

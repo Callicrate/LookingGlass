@@ -6,6 +6,7 @@
   <title>Remote state · Async API View</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to cached state</a>
@@ -21,6 +22,18 @@
   </header>
 
   <main id="main">
+    <section class="snapshot-banner" aria-label="Snapshot trust boundary">
+      <div class="snapshot-mark" aria-hidden="true">●</div>
+      <div>
+        <strong>Local cached snapshot</strong>
+        <p>Facts stay readable while remote systems are unavailable. Refreshes are explicit and observation-only.</p>
+      </div>
+      <dl class="snapshot-stats">
+        <div><dt>Systems</dt><dd>{{ view.systems|length }}</dd></div>
+        <div><dt>Objects</dt><dd>{{ view.objects|length }}</dd></div>
+        <div><dt>Refreshes</dt><dd>{{ view.refresh_options|length }}</dd></div>
+      </dl>
+    </section>
     {% if view.error %}
     <section class="notice notice--error" role="alert">
       <strong>{% if view.disconnected %}Disconnected{% else %}State query failed{% endif %}</strong>
@@ -138,7 +151,7 @@
           <div>
             <strong>{{ option.label|display }}</strong>
             <span class="subtle"><code>{{ option.capability_key|display }}</code> · facet {{ option.facet|display }}</span>
-            <span class="subtle">Target: {{ option.target_kind|display }} · <code>{{ option.target_id|display }}</code></span>
+            <span class="subtle">Scope: {{ option.target_kind|display|replace('_', ' ')|capitalize }}</span>
             <span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span>
           </div>
           <button type="submit" {% if not option.enabled %}disabled aria-describedby="reason-{{ loop.index }}"{% endif %}>Request refresh</button>

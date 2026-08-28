@@ -96,6 +96,14 @@ class SystemBootstrapService:
             raise ValueError("profile must be a simple named Databricks CLI profile")
         require_text(workspace_root, "workspace_root", max_length=4096)
         capability_keys = tuple(dict.fromkeys(enabled_capability_keys))
+        unknown_capabilities = set(capability_keys) - set(_CAPABILITIES)
+        if unknown_capabilities:
+            raise ValueError(f"unsupported Databricks capability {sorted(unknown_capabilities)!r}")
+        extra_settings = set(non_secret_settings or ()) & {"profile", "workspace_root"}
+        if extra_settings:
+            raise ValueError(
+                f"non_secret_settings cannot override reserved settings: {sorted(extra_settings)!r}"
+            )
         timestamp = now or datetime.now(UTC)
         system = self.create_system(
             display_name=display_name,
@@ -175,10 +183,7 @@ class SystemBootstrapService:
             )
         capability_ids: list[str] = []
         for capability_key in capability_keys:
-            try:
-                target_kinds, produced_facets = _CAPABILITIES[capability_key]
-            except KeyError as exc:
-                raise ValueError(f"unsupported Databricks capability {capability_key!r}") from exc
+            target_kinds, produced_facets = _CAPABILITIES[capability_key]
             capability_id = str(
                 uuid5(NAMESPACE_URL, f"databricks-capability:{binding_id}:{capability_key}")
             )

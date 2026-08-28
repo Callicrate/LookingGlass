@@ -1,6 +1,16 @@
 "use strict";
 
 (() => {
+  for (const form of document.querySelectorAll("form.refresh-row")) {
+    form.addEventListener("submit", () => {
+      const button = form.querySelector('button[type="submit"]');
+      if (!button || button.disabled) return;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      button.textContent = "Requesting…";
+    });
+  }
+
   const page = document.querySelector("[data-intent-page]");
   if (!page) return;
 

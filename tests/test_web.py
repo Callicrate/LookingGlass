@@ -45,6 +45,7 @@ class FakeBackend:
     intent_view: IntentView | None = None
     intent_id: str = "intent-1"
     dashboard_error: Exception | None = None
+    intent_error: Exception | None = None
     submitted: list[RefreshRequest] = field(default_factory=list)
 
     async def dashboard(self) -> DashboardView:
@@ -57,6 +58,8 @@ class FakeBackend:
         return self.intent_id
 
     async def intent(self, intent_id: str) -> IntentView | None:
+        if self.intent_error:
+            raise self.intent_error
         if intent_id != self.intent_id:
             return None
         return self.intent_view
@@ -166,7 +169,7 @@ def test_remote_markup_is_escaped() -> None:
 
     assert hostile not in response.text
     assert "&lt;img src=x onerror=alert(1)&gt;" in response.text
-    assert response.text.count("<script") == 0
+    assert response.text.count("<script") == 1
 
 
 def test_refresh_requires_valid_csrf() -> None:
@@ -177,6 +180,21 @@ def test_refresh_requires_valid_csrf() -> None:
     response = client.post("/refresh", data=data, headers={"Origin": "http://testserver"})
 
     assert response.status_code == 403
+    assert backend.submitted == []
+
+
+def test_refresh_reports_unavailable_dashboard_without_leaking_error() -> None:
+    backend = FakeBackend(dashboard_view=ready_dashboard())
+    client = client_for(backend)
+    token = csrf_from(client.get("/").text)
+    backend.dashboard_error = RuntimeError("secret profile token")
+
+    response = client.post(
+        "/refresh", data=valid_form(token), headers={"Origin": "http://testserver"}
+    )
+
+    assert response.status_code == 503
+    assert "secret profile token" not in response.text
     assert backend.submitted == []
 
 
@@ -293,6 +311,14 @@ def test_untrusted_host_is_rejected() -> None:
 
     assert response.status_code == 400
     assert "Invalid host header" in response.text
+
+
+def test_explicit_production_host_allowlist_rejects_test_host() -> None:
+    client = TestClient(create_app(FakeBackend(), allowed_hosts=("127.0.0.1",)))
+
+    response = client.get("/", headers={"Host": "testserver"})
+
+    assert response.status_code == 400
 
 
 def test_registered_refresh_redirects_to_receipt() -> None:
@@ -437,6 +463,17 @@ def test_intent_page_and_json_show_each_scope_disposition() -> None:
     assert poll.json()["scopes"][1]["target_kind"] == "object"
     assert poll.json()["scopes"][1]["target_id"] == "object-1"
     assert poll.json()["scopes"][0]["eligible_at"] == "2026-08-25T14:35:09+00:00"
+
+
+def test_intent_status_failures_are_safe_and_retryable() -> None:
+    client = client_for(FakeBackend(intent_error=RuntimeError("secret worker token")))
+
+    page = client.get("/intents/intent-1")
+    poll = client.get("/api/intents/intent-1")
+
+    assert page.status_code == 503
+    assert poll.status_code == 503
+    assert "secret worker token" not in page.text + poll.text
 
 
 def test_security_headers_are_applied_to_html_json_and_errors() -> None:
