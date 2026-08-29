@@ -126,6 +126,56 @@ def test_incompatible_persisted_intent_is_rejected_without_blocking_valid_work(
     assert len(store.list_operational_events(alertable_only=True)) == 1
 
 
+def test_overlong_corrupt_scope_id_quarantines_without_blocking_queue(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "overlong-intent-poison.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        now=NOW,
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    poisoned = run(store.submit_refresh(_intent(scope, NOW)))
+    valid = run(store.submit_refresh(_intent(scope, NOW + timedelta(seconds=1))))
+    overlong_scope_id = "s" * 600
+    dangling_system_id = str(uuid4())
+    store._connection.execute("PRAGMA foreign_keys = OFF")
+    store._connection.execute(
+        """
+        UPDATE refresh_intent_scopes
+        SET intent_scope_id = ?, target_kind = 'invalid', system_id = ?
+        WHERE intent_scope_id = ?
+        """,
+        (overlong_scope_id, dangling_system_id, poisoned.scope_ids[0]),
+    )
+    store._connection.execute("PRAGMA foreign_keys = ON")
+    assert store._connection.execute("PRAGMA foreign_key_check").fetchall()
+
+    result = run(
+        DurableCoordinator(store, worker_id="coordinator").run_once(now=NOW + timedelta(seconds=1))
+    )
+
+    assert result is not None and result.state.value == "admitted"
+    poison_row = store._connection.execute(
+        """
+        SELECT state, disposition_reason FROM refresh_intent_scopes
+        WHERE intent_scope_id = ?
+        """,
+        (overlong_scope_id,),
+    ).fetchone()
+    assert tuple(poison_row) == ("rejected", "persisted_intent_contract_mismatch")
+    assert store.list_intent_scopes(valid.intent_id)[0].state.value == "admitted"
+    events = store.list_operational_events(alertable_only=True)
+    assert len(events) == 1
+    assert events[0].event_type == "refresh.intent.contract_mismatch"
+    assert events[0].system_id is None
+    event_key = store._connection.execute(
+        "SELECT idempotency_key FROM operational_events WHERE event_id = ?",
+        (events[0].event_id,),
+    ).fetchone()[0]
+    assert len(event_key) < 512
+
+
 def test_intent_poison_terminalization_operational_error_rolls_back(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

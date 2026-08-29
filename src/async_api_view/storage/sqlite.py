@@ -384,6 +384,15 @@ def _redact(value: str | None) -> str:
     return cleaned[:_MAX_DIAGNOSTIC_LENGTH]
 
 
+def _quarantine_event_key(item_kind: str, persisted_id: object) -> str:
+    """Identify corrupt rows without revalidating or embedding their persisted IDs."""
+
+    identifier_digest = hashlib.sha256(
+        str(persisted_id).encode("utf-8", errors="surrogatepass")
+    ).hexdigest()
+    return f"{item_kind}-{identifier_digest}-contract-rejected"
+
+
 def _scope_columns(scope: RefreshScope) -> tuple[str, str, str, str, str, str | None, str, str]:
     return (
         scope.system_id,
@@ -2071,11 +2080,14 @@ class SQLiteStore:
         )
         self._insert_event(
             connection,
-            idempotency_key=f"intent-scope-{row['intent_scope_id']}-contract-rejected",
+            idempotency_key=_quarantine_event_key(
+                "intent-scope",
+                row["intent_scope_id"],
+            ),
             event_type="refresh.intent.contract_mismatch",
             severity="error",
             alertable=True,
-            system_id=row["system_id"],
+            system_id=self._known_event_system_id(connection, row["system_id"]),
             action_id=None,
             error_class=ErrorClass.ADAPTER_CONTRACT_MISMATCH.value,
             summary=reason,
@@ -3161,6 +3173,17 @@ class SQLiteStore:
             if result.rowcount != 1:
                 raise ValueError("adapter action lease is no longer current")
 
+    @staticmethod
+    def _known_event_system_id(
+        connection: sqlite3.Connection,
+        persisted_system_id: object,
+    ) -> str | None:
+        row = connection.execute(
+            "SELECT system_id FROM systems WHERE system_id = ?",
+            (persisted_system_id,),
+        ).fetchone()
+        return row["system_id"] if row is not None else None
+
     def _insert_event(
         self,
         connection: sqlite3.Connection,
@@ -3469,11 +3492,11 @@ class SQLiteStore:
         )
         self._insert_event(
             connection,
-            idempotency_key=f"action-{action_id}-terminal-failed",
+            idempotency_key=_quarantine_event_key("action", action_id),
             event_type="refresh.action.failed",
             severity="error",
             alertable=True,
-            system_id=row["system_id"],
+            system_id=self._known_event_system_id(connection, row["system_id"]),
             action_id=action_id,
             error_class=ErrorClass.ADAPTER_CONTRACT_MISMATCH.value,
             summary=reason,
