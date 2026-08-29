@@ -185,9 +185,13 @@ def test_lease_recovery_revalidates_deferred_scope_and_policy_precedence(tmp_pat
         ("system_disabled", "system_disabled"),
         ("unsupported_facet", "unsupported_facet"),
         ("target_unknown", "target_unknown"),
+        ("target_system_mismatch", "target_system_mismatch"),
         ("target_absent", "target_absent"),
         ("target_type_mismatch", "target_type_mismatch"),
+        ("configured_scope_unknown", "configured_scope_unknown"),
+        ("configured_scope_system_mismatch", "configured_scope_system_mismatch"),
         ("configured_scope_disabled", "configured_scope_disabled"),
+        ("configured_scope_type_mismatch", "configured_scope_type_mismatch"),
         ("capability_unavailable", "capability_unavailable"),
     ),
 )
@@ -217,6 +221,16 @@ def test_coordinator_rejects_invalid_local_authority(
             object_type="file",
             facet="metadata",
         )
+    elif case == "target_system_mismatch":
+        other = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="other", profile="OTHER", workspace_root="/Other", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.OBJECT, other.workspace_root_object_id),
+            object_type="folder",
+            facet="membership",
+        )
     elif case == "target_absent":
         store._connection.execute(
             "UPDATE remote_objects SET presence = 'absent' WHERE object_id = ?",
@@ -235,10 +249,37 @@ def test_coordinator_rejects_invalid_local_authority(
             object_type="file",
             facet="metadata",
         )
+    elif case == "configured_scope_unknown":
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, uuid4()),
+            object_type="folder",
+            facet="membership",
+        )
+    elif case == "configured_scope_system_mismatch":
+        other = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="other", profile="OTHER", workspace_root="/Other", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, other.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+        )
     elif case == "configured_scope_disabled":
         store._connection.execute(
             "UPDATE configured_scopes SET enabled = 0 WHERE scope_id = ?",
             (seeded.workspace_root_scope.scope_id,),
+        )
+    elif case == "configured_scope_type_mismatch":
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(
+                TargetKind.CONFIGURED_SCOPE,
+                seeded.workspace_root_scope.scope_id,
+            ),
+            object_type="file",
+            facet="metadata",
         )
     elif case == "capability_unavailable":
         store._connection.execute("UPDATE capability_bindings SET enabled = 0")
@@ -249,6 +290,24 @@ def test_coordinator_rejects_invalid_local_authority(
     assert result is not None and result.state.value == "rejected"
     assert result.reason == expected_reason
     assert store.list_intent_scopes(receipt.intent_id)[0].state.value == "rejected"
+    assert store.list_actions() == ()
+
+
+def test_coordinator_expires_request_before_local_admission(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "expired-intent.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    receipt = run(store.submit_refresh(_intent(scope, NOW, expires_at=NOW + timedelta(seconds=1))))
+
+    result = run(
+        DurableCoordinator(store, worker_id="expired").run_once(now=NOW + timedelta(seconds=2))
+    )
+
+    assert result is not None and result.state.value == "expired"
+    assert result.reason == "request_expired"
+    assert store.list_intent_scopes(receipt.intent_id)[0].state.value == "expired"
     assert store.list_actions() == ()
 
 
