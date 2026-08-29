@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 16:48 ET
+Updated: 2026-08-29 16:50 ET
 
 ## Goal
 
@@ -213,6 +213,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Conditional correction triggers recompute only affected groups when established timestamps move backward or NULL, while normal forward lifecycle writes stay on bounded incremental paths.
 - Independent million-history review measured projection reads below 1,000 VM instructions (~0.06–0.09 ms) versus 25–27 million (~0.8–0.9 s) for legacy reads; normal updates remained sub-millisecond and bounded.
 - The real ignored database was backed up to `.local/backups/rookery-20260829-1647-pre-0018.sqlite3`, migrated through `0018`, and reports `ROOK`, integrity `ok`, zero foreign-key violations, three projection triggers, and empty projections matching its empty action history.
+- The exact committed-head Ubuntu/WSL gate now matches Windows at 399 tests, 88% branch coverage, clean locked audit/lint, and 82/61/30 package verification.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 15:18 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
