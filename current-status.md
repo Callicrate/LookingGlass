@@ -226,7 +226,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
 - Databricks target resolution now derives catalog/schema command arguments from immutable canonical external identity rather than mutable facet payload, and a corruption regression proves later dispatch remains on the intended scope.
 - A fresh audit of the locked runtime-only dependency export reports no known vulnerabilities; the local project package was excluded so the auditor did not substitute an incompatible helper interpreter.
-- The real ignored local database was snapshotted through the new command to `.local/backups/rookery-20260829-0355.sqlite3`; the standalone 315,392-byte copy reports integrity `ok` at migration `0011`.
+- The real ignored local database was snapshotted through the new command to `.local/backups/rookery-20260829-0548.sqlite3`; the standalone 323,584-byte copy reports integrity `ok` at migration `0012`.
 - Shared enum validators now cover target kinds, presence/knowledge states, refresh origin/coverage, observation modes, collection/absence coverage, guard decisions, ingestion results, capability operation/targets, and action records.
 - Persisted intent reconstruction explicitly restores `RefreshOrigin`; a raw `"dispatch"` can no longer make the worker silently abandon a live lease, and raw automatic origins cannot bypass session requirements.
 - Intent polling now reloads on authorization denial instead of retrying forever as a false disconnection, and the unlock page tells expired sessions to restart Rookery for a new link.
