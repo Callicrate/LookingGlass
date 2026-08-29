@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 02:58 ET
+Updated: 2026-08-29 03:07 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 257 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 260 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: continue post-fix residual-risk review after the independently cleared session and schema-invariant repairs.
@@ -63,6 +63,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Fail closed on Workspace content until retention-aware artifact persistence exists.
 - [x] Prove interrupted CLI work remains reclaimable after shutdown and lease expiry.
 - [x] Add consistent, integrity-checked, no-overwrite online SQLite backups.
+- [x] Wake deferred requests for coordinator re-evaluation when refresh policy changes.
+- [x] Enforce one NULL-safe durable identity for broad refresh overrides.
+- [x] Present the user-facing product consistently as Rookery without breaking package/CLI compatibility.
 
 ## Evidence and decisions
 
@@ -190,6 +193,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The 02:43 Murmuration tending pass found no Rookery-specific public discussion; the native identity profile, writes, notifications, and BookStack remain unavailable, so the pass stayed read-only.
 - `backup --output <path>` now snapshots committed SQLite/WAL state without opening the application store, validates the standalone copy, and atomically refuses existing files, symlinks, hardlinks, and publication races.
 - Backup regressions cover a live uncheckpointed WAL, source availability after snapshot, malformed source cleanup, no overwrite, and competing-file preservation; restore and broader operator tooling remain explicitly deferred.
+- Changed refresh overrides now requeue deferred scopes without granting dispatch authority; higher intervals re-defer, lower intervals admit when eligible, and identical writes remain quiet.
+- Migration `0011` deterministically retains the latest duplicate broad override and adds a NULL-safe unique identity; the setter also replaces one logical key atomically rather than relying on SQLite's nullable composite primary key.
+- The ignored local database is migrated through `0011_refresh_override_identity`; `PRAGMA integrity_check` is `ok` with zero foreign-key violations.
+- Browser titles, the dashboard masthead, favicon label, package description, and README now use Rookery; the `async-api-view` package and CLI remain stable compatibility interfaces.
 
 ## Risks / watch list
 
