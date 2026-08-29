@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any, Protocol
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from async_api_view.contracts import (
     ActionAttempt,
@@ -733,6 +733,17 @@ def _generic_locator(source_kind: str, key: str, display_name: str) -> ObjectLoc
     )
 
 
+def _canonical_uc_parent(
+    target: ResolvedTarget,
+    fallback: ObjectLocator,
+) -> ObjectLocator:
+    if target.canonical_object_id is None:
+        return fallback
+    if target.canonical_object_type != "generic_object":
+        raise InvalidDownstreamResponse("Unity Catalog parent has incompatible canonical identity")
+    return ObjectLocator(object_type="generic_object", object_id=target.canonical_object_id)
+
+
 def _generic_payload(item: Mapping[str, Any], *, entity: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "namespace": "databricks.unity_catalog",
@@ -748,8 +759,11 @@ def _generic_payload(item: Mapping[str, Any], *, entity: str) -> dict[str, Any]:
         "updated_at",
         "table_type",
         "data_source_format",
+        "schema_id",
+        "table_id",
+        "volume_id",
     }
-    for key in allowed:
+    for key in sorted(allowed):
         value = item.get(key)
         if isinstance(value, str) and len(value) > (4096 if key == "comment" else 1024):
             raise InvalidDownstreamResponse(f"Databricks {key} exceeds the configured limit")
@@ -780,6 +794,23 @@ def _generic_payload(item: Mapping[str, Any], *, entity: str) -> dict[str, Any]:
                 columns.append(retained)
         payload["columns"] = columns
     return payload
+
+
+def _uc_source_uuid(
+    item: Mapping[str, Any],
+    key: str,
+    *,
+    label: str,
+) -> str | None:
+    if key not in item:
+        return None
+    value = item[key]
+    if not isinstance(value, str):
+        raise InvalidDownstreamResponse(f"Databricks {label} {key} is not a UUID")
+    try:
+        return str(UUID(value))
+    except ValueError as exc:
+        raise InvalidDownstreamResponse(f"Databricks {label} {key} is not a UUID") from exc
 
 
 def _uc_child_name(
@@ -1190,14 +1221,26 @@ def normalize(
         )
     elif capability == "databricks.uc.schemas.read":
         catalog = _name(target.catalog_name, label="catalog name")
-        parent = _generic_locator("databricks.uc.catalog", f"catalog:{catalog}", catalog)
+        parent = _canonical_uc_parent(
+            target,
+            _generic_locator("databricks.uc.catalog", f"catalog:{catalog}", catalog),
+        )
         for item in _items(payload, "schemas"):
             name = _uc_child_name(item, catalog=catalog, label="schema")
-            locator = _generic_locator("databricks.uc.schema", f"schema:{catalog}.{name}", name)
+            source_id = _uc_source_uuid(item, "schema_id", label="schema")
+            external_key = (
+                f"schema:schema_id:{source_id}"
+                if source_id is not None
+                else f"schema:{catalog}.{name}"
+            )
+            locator = _generic_locator("databricks.uc.schema", external_key, name)
             body = _generic_payload(item, entity="schema")
+            body.update({"name": name, "full_name": f"{catalog}.{name}"})
+            if source_id is not None:
+                body["schema_id"] = source_id
             facets.append(
                 FacetObservation(
-                    evidence_id(f"schema:{catalog}.{name}"),
+                    evidence_id(f"schema:{locator.external_key}"),
                     locator,
                     "attributes",
                     "1",
@@ -1224,7 +1267,10 @@ def normalize(
     elif capability in {"databricks.uc.relations.read", "databricks.uc.volumes.read"}:
         catalog = _name(target.catalog_name, label="catalog name")
         schema = _name(target.schema_name, label="schema name")
-        parent = _generic_locator("databricks.uc.schema", f"schema:{catalog}.{schema}", schema)
+        parent = _canonical_uc_parent(
+            target,
+            _generic_locator("databricks.uc.schema", f"schema:{catalog}.{schema}", schema),
+        )
         key, entity = (
             ("tables", "relation")
             if capability.endswith("relations.read")
@@ -1244,15 +1290,25 @@ def normalize(
                 schema=schema,
                 label=item_entity,
             )
+            source_key = "table_id" if entity == "relation" else "volume_id"
+            source_id = _uc_source_uuid(item, source_key, label=item_entity)
+            external_key = (
+                f"{entity}:{source_key}:{source_id}"
+                if source_id is not None
+                else f"{item_entity}:{catalog}.{schema}.{name}"
+            )
             locator = _generic_locator(
                 f"databricks.uc.{item_entity}",
-                f"{item_entity}:{catalog}.{schema}.{name}",
+                external_key,
                 name,
             )
             body = _generic_payload(item, entity=item_entity)
+            body.update({"name": name, "full_name": f"{catalog}.{schema}.{name}"})
+            if source_id is not None:
+                body[source_key] = source_id
             facets.append(
                 FacetObservation(
-                    evidence_id(f"{item_entity}:{catalog}.{schema}.{name}"),
+                    evidence_id(f"{item_entity}:{locator.external_key}"),
                     locator,
                     "attributes",
                     "1",

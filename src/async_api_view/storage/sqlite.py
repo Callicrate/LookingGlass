@@ -157,6 +157,12 @@ _REQUIRED_RUNTIME_INDEXES = {
         ("object_id", "scope_id"),
         "CREATE INDEX ix_configured_scopes_object ON configured_scopes (object_id, scope_id)",
     ),
+    "ix_relationships_object_predicate": (
+        "relationships",
+        ("object_id", "predicate", "presence", "subject_id"),
+        "CREATE INDEX ix_relationships_object_predicate "
+        "ON relationships (object_id, predicate, presence, subject_id)",
+    ),
 }
 
 
@@ -1525,6 +1531,31 @@ class SQLiteStore:
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._relationship_from_row(row) for row in rows)
+
+    def get_present_parent_sync(
+        self,
+        object_id: str,
+        *,
+        predicate: str = "contains",
+    ) -> RemoteObject | None:
+        object_id = require_uuid(object_id, "object_id")
+        require_contract_key(predicate, "predicate")
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT parent.*
+                FROM relationships AS relationship
+                    INDEXED BY ix_relationships_object_predicate
+                JOIN remote_objects AS parent ON parent.object_id = relationship.subject_id
+                WHERE relationship.object_id = ? AND relationship.predicate = ?
+                  AND relationship.presence = 'present'
+                  AND parent.system_id = relationship.system_id
+                  AND parent.presence != 'absent'
+                LIMIT 2
+                """,
+                (object_id, predicate),
+            ).fetchall()
+        return self._object_from_row(rows[0]) if len(rows) == 1 else None
 
     def count_related_objects_sync(
         self,

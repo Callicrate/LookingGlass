@@ -463,6 +463,7 @@ def test_backup_wraps_malformed_source_and_cleans_temporary_file(tmp_path) -> No
     [
         "ix_adapter_action_scopes_target_facet",
         "ix_configured_scopes_object",
+        "ix_relationships_object_predicate",
     ],
 )
 def test_reopen_repairs_missing_runtime_forced_indexes(tmp_path, index_name: str) -> None:
@@ -494,6 +495,11 @@ def test_reopen_repairs_missing_runtime_forced_indexes(tmp_path, index_name: str
             "ix_configured_scopes_object",
             "CREATE INDEX ix_configured_scopes_object ON configured_scopes (scope_id)",
             ("object_id", "scope_id"),
+        ),
+        (
+            "ix_relationships_object_predicate",
+            "CREATE INDEX ix_relationships_object_predicate ON relationships (subject_id)",
+            ("object_id", "predicate", "presence", "subject_id"),
         ),
     ],
 )

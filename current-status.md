@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 14:32 ET
+Updated: 2026-08-29 15:00 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 369 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 378 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: byte/unit-bounded multipart collection ingestion is independently clear after the exact full gate; stable Unity Catalog identity is active, followed by queue selection and latest-action projection.
+- Active review round: typed Unity Catalog source identity and bounded canonical-parent dispatch are independently clear after the exact full gate; queue selection is active, followed by latest-action projection.
 - Next progress report due: 2026-08-29 15:23 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -115,7 +115,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close review of the verified-backup versus deferred-restore operator boundary.
 - [x] Ingest supported 10,000-item collections within byte/unit-bounded writer transactions.
 - [x] Fence exact-expiry final dispatch and renew the running lease atomically.
-- [ ] Preserve Unity Catalog schema/relation/volume identity across rename and recreation.
+- [x] Preserve Unity Catalog schema/relation/volume identity across rename and recreation.
 - [ ] Remove full-backlog temporary sorting from both durable lease selectors.
 - [ ] Read current cooldown/facet action state without replaying retained action history.
 
@@ -196,7 +196,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The 14:23 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - Final dispatch accepted `leased_until == now` even though another worker could reclaim at that exact boundary.
 - Final dispatch now rejects exact expiry and atomically renews the running lease; independent two-connection races proved exact-expiry reclaim and just-before-expiry mutual exclusion with no remaining medium-or-higher finding.
-- Unity Catalog schema/table/view/volume normalization discards stable source UUIDs and keys mutable qualified names, causing rename forks and same-name recreation merges.
+- Unity Catalog schema/table/view/volume normalization discarded stable source UUIDs and keyed mutable qualified names, causing rename forks and same-name recreation merges.
+- The local identity repair validates and keys typed source UUIDs, retains qualified names as facts, leaves witness-less legacy name keys separate, and derives typed-schema dispatch from its canonical leaf plus unique canonical catalog parent rather than mutable facet payload.
+- A required reverse-relationship index bounds parent lookup; ambiguous parents and malformed UUIDs fail closed, while typed schema/table/view/volume rename and same-name recreation regressions pass.
+- Independent identity review reproduced same-ID rename, same-name recreation, legacy separation, corrupted-facet dispatch resistance, source-kind checks, ambiguous-parent rejection, and the forced index plan with no remaining medium-or-higher finding.
 - Both lease selectors require temporary global backlog sorts, and current cooldown/dashboard action reads scan retained history rather than a bounded latest-state projection.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.

@@ -499,6 +499,156 @@ def test_uc_normalization_derives_leaf_name_from_valid_full_name() -> None:
 
 
 @pytest.mark.parametrize(
+    (
+        "capability",
+        "collection_key",
+        "source_key",
+        "external_prefix",
+        "target",
+        "first_item",
+        "renamed_item",
+    ),
+    (
+        (
+            "databricks.uc.schemas.read",
+            "schemas",
+            "schema_id",
+            "schema:schema_id:",
+            ResolvedTarget(catalog_name="main"),
+            {"name": "sales", "full_name": "main.sales"},
+            {"name": "revenue", "full_name": "main.revenue"},
+        ),
+        (
+            "databricks.uc.relations.read",
+            "tables",
+            "table_id",
+            "relation:table_id:",
+            ResolvedTarget(catalog_name="main", schema_name="sales"),
+            {
+                "name": "orders",
+                "full_name": "main.sales.orders",
+                "table_type": "MANAGED",
+            },
+            {
+                "name": "purchases",
+                "full_name": "main.sales.purchases",
+                "table_type": "MANAGED",
+            },
+        ),
+        (
+            "databricks.uc.relations.read",
+            "tables",
+            "table_id",
+            "relation:table_id:",
+            ResolvedTarget(catalog_name="main", schema_name="sales"),
+            {
+                "name": "orders_view",
+                "full_name": "main.sales.orders_view",
+                "table_type": "VIEW",
+            },
+            {
+                "name": "purchases_view",
+                "full_name": "main.sales.purchases_view",
+                "table_type": "VIEW",
+            },
+        ),
+        (
+            "databricks.uc.volumes.read",
+            "volumes",
+            "volume_id",
+            "volume:volume_id:",
+            ResolvedTarget(catalog_name="main", schema_name="sales"),
+            {"name": "raw", "full_name": "main.sales.raw"},
+            {"name": "landing", "full_name": "main.sales.landing"},
+        ),
+    ),
+)
+def test_uc_source_ids_survive_rename_and_separate_same_name_recreation(
+    capability: str,
+    collection_key: str,
+    source_key: str,
+    external_prefix: str,
+    target: ResolvedTarget,
+    first_item: dict[str, object],
+    renamed_item: dict[str, object],
+) -> None:
+    action = _action(capability)
+    binding = _binding()
+    source_id = str(uuid4())
+
+    def normalized(item: dict[str, object], identity: str | None):
+        value = dict(item)
+        if identity is not None:
+            value[source_key] = identity
+        return databricks_adapter.normalize(
+            action=action,
+            binding=binding,
+            target=target,
+            delivery_id=str(uuid4()),
+            stdout=json.dumps({collection_key: [value]}).encode(),
+            observed_at=datetime(2026, 8, 29, tzinfo=UTC),
+        ).batch.facet_observations[0]
+
+    first = normalized(first_item, source_id)
+    renamed = normalized(renamed_item, source_id)
+    recreated = normalized(renamed_item, str(uuid4()))
+    legacy = normalized(renamed_item, None)
+
+    assert first.target.external_key == external_prefix + source_id
+    assert renamed.target.external_key == first.target.external_key
+    assert renamed.target.display_name == renamed_item["name"]
+    assert renamed.payload[source_key] == source_id
+    assert renamed.payload["full_name"] == renamed_item["full_name"]
+    if renamed_item.get("table_type") == "VIEW":
+        assert renamed.target.source_kind == "databricks.uc.view"
+    assert recreated.target.external_key != renamed.target.external_key
+    assert legacy.target.external_key != renamed.target.external_key
+
+
+@pytest.mark.parametrize(
+    ("capability", "collection_key", "source_key", "target", "item"),
+    (
+        (
+            "databricks.uc.schemas.read",
+            "schemas",
+            "schema_id",
+            ResolvedTarget(catalog_name="main"),
+            {"name": "sales"},
+        ),
+        (
+            "databricks.uc.relations.read",
+            "tables",
+            "table_id",
+            ResolvedTarget(catalog_name="main", schema_name="sales"),
+            {"name": "orders"},
+        ),
+        (
+            "databricks.uc.volumes.read",
+            "volumes",
+            "volume_id",
+            ResolvedTarget(catalog_name="main", schema_name="sales"),
+            {"name": "raw"},
+        ),
+    ),
+)
+def test_uc_source_ids_fail_closed_when_present_but_invalid(
+    capability: str,
+    collection_key: str,
+    source_key: str,
+    target: ResolvedTarget,
+    item: dict[str, object],
+) -> None:
+    with pytest.raises(InvalidDownstreamResponse, match="is not a UUID"):
+        normalize(
+            action=_action(capability),
+            binding=_binding(),
+            target=target,
+            stdout=json.dumps({collection_key: [item | {source_key: "not-a-uuid"}]}).encode(),
+            observed_at=datetime(2026, 8, 29, tzinfo=UTC),
+        )
+
+
+@pytest.mark.parametrize(
     ("capability", "facet", "target", "envelope_key", "array_key"),
     [
         (

@@ -1265,6 +1265,8 @@ The adapter owns:
 - Databricks-specific error and rate behavior;
 - redaction of CLI diagnostics.
 
+Unity Catalog schemas, relations, and volumes use their typed source UUIDs when the CLI supplies them. Qualified names remain mutable display/dispatch facts and do not define those objects' identity. Historical name-key objects and responses without a source UUID remain separate: Rookery does not auto-merge them into typed identities because rename versus delete/recreate cannot be proven retrospectively.
+
 Databricks observations may consume API quota and create authentication, access, or audit records.
 The adapter spike MUST verify and record those collateral effects for each capability before it is enabled.
 

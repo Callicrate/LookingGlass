@@ -187,15 +187,32 @@ class SQLiteDatabricksTargetResolver:
             "databricks.uc.relations.read",
             "databricks.uc.volumes.read",
         }:
-            if not remote_object.external_key.startswith("schema:"):
+            if (
+                remote_object.source_kind != "databricks.uc.schema"
+                or not remote_object.external_key.startswith("schema:")
+            ):
                 raise CommandRejected("schema target has no canonical full name")
-            full_name = remote_object.external_key.removeprefix("schema:")
-            parts = full_name.split(".")
-            if len(parts) != 2 or not all(parts):
+            if remote_object.external_key.startswith("schema:schema_id:"):
+                parent = self._store.get_present_parent_sync(remote_object.object_id)
+                if (
+                    parent is None
+                    or parent.source_kind != "databricks.uc.catalog"
+                    or not parent.external_key.startswith("catalog:")
+                ):
+                    raise CommandRejected("schema target has no unique canonical catalog")
+                catalog_name = parent.external_key.removeprefix("catalog:")
+                schema_name = remote_object.display_name
+            else:
+                full_name = remote_object.external_key.removeprefix("schema:")
+                parts = full_name.split(".")
+                if len(parts) != 2 or not all(parts):
+                    raise CommandRejected("schema full name is not catalog.schema")
+                catalog_name, schema_name = parts
+            if not catalog_name or not schema_name:
                 raise CommandRejected("schema full name is not catalog.schema")
             return ResolvedTarget(
-                catalog_name=parts[0],
-                schema_name=parts[1],
+                catalog_name=catalog_name,
+                schema_name=schema_name,
                 display_name=remote_object.display_name,
                 canonical_object_id=remote_object.object_id,
                 canonical_object_type=remote_object.object_type,

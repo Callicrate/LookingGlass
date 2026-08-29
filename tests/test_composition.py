@@ -1762,19 +1762,37 @@ async def test_runtime_stop_cancels_in_flight_worker_without_waiting_for_cli_tim
 async def test_unity_catalog_metadata_capabilities_cascade_without_content(
     tmp_path: Path,
 ) -> None:
+    schema_id = str(uuid4())
+    table_id = str(uuid4())
+    volume_id = str(uuid4())
     runner = CapabilityCliRunner(
         {
             "databricks.uc.catalogs.read": b'[{"name":"main"}]',
-            "databricks.uc.schemas.read": b'[{"name":"sales"}]',
-            "databricks.uc.relations.read": (
-                b'[{"name":"orders","full_name":"main.sales.orders",'
-                b'"table_type":"MANAGED","storage_location":"s3://hidden",'
-                b'"columns":[{"name":"id","type_name":"LONG"}]}]'
-            ),
-            "databricks.uc.volumes.read": (
-                b'[{"name":"raw","full_name":"main.sales.raw",'
-                b'"storage_location":"s3://hidden-volume"}]'
-            ),
+            "databricks.uc.schemas.read": json.dumps(
+                [{"schema_id": schema_id, "name": "sales"}]
+            ).encode(),
+            "databricks.uc.relations.read": json.dumps(
+                [
+                    {
+                        "table_id": table_id,
+                        "name": "orders",
+                        "full_name": "main.sales.orders",
+                        "table_type": "MANAGED",
+                        "storage_location": "s3://hidden",
+                        "columns": [{"name": "id", "type_name": "LONG"}],
+                    }
+                ]
+            ).encode(),
+            "databricks.uc.volumes.read": json.dumps(
+                [
+                    {
+                        "volume_id": volume_id,
+                        "name": "raw",
+                        "full_name": "main.sales.raw",
+                        "storage_location": "s3://hidden-volume",
+                    }
+                ]
+            ).encode(),
         }
     )
     runtime = build_runtime(settings(tmp_path), runner=runner)
@@ -1802,9 +1820,19 @@ async def test_unity_catalog_metadata_capabilities_cascade_without_content(
     schema_object = next(
         item for item in runtime.store.list_objects() if item.source_kind == "databricks.uc.schema"
     )
+    assert schema_object.external_key == f"schema:schema_id:{schema_id}"
     runtime.store._connection.execute(
         "UPDATE facets SET payload_json = ? WHERE object_id = ? AND facet = 'attributes'",
-        ('{"full_name":"other.sales","name":"sales"}', schema_object.object_id),
+        (
+            json.dumps(
+                {
+                    "full_name": "other.sales",
+                    "name": "sales",
+                    "schema_id": schema_id,
+                }
+            ),
+            schema_object.object_id,
+        ),
     )
     await execute("databricks.uc.relations.read")
     await execute("databricks.uc.volumes.read")
@@ -1832,7 +1860,43 @@ async def test_unity_catalog_metadata_capabilities_cascade_without_content(
         for facet in runtime.store.list_facets(remote_object.object_id)
     ]
     serialized = json.dumps(payloads, sort_keys=True)
+    assert schema_id in serialized and table_id in serialized and volume_id in serialized
     assert "storage_location" not in serialized
     assert "s3://hidden" not in serialized
+
+    canonical_parent = runtime.store.get_present_parent_sync(schema_object.object_id)
+    assert canonical_parent is not None and canonical_parent.external_key == "catalog:main"
+    ambiguous_parent = runtime.store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=schema_object.system_id,
+            object_type="generic_object",
+            object_type_version="1",
+            source_kind="databricks.uc.catalog",
+            external_key="catalog:other",
+            display_name="other",
+            presence=PresenceState.PRESENT,
+            first_seen_at=datetime.now(UTC),
+        )
+    )
+    now_text = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    runtime.store._connection.execute(
+        """
+        INSERT INTO relationships (
+            relationship_id, system_id, subject_id, predicate, object_id,
+            presence, observed_at, supporting_observation_id, received_at
+        ) VALUES (?, ?, ?, 'contains', ?, 'present', ?, ?, ?)
+        """,
+        (
+            str(uuid4()),
+            schema_object.system_id,
+            ambiguous_parent.object_id,
+            schema_object.object_id,
+            now_text,
+            str(uuid4()),
+            now_text,
+        ),
+    )
+    assert runtime.store.get_present_parent_sync(schema_object.object_id) is None
 
     runtime.store.close()
