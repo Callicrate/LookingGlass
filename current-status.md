@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 21:41 ET
+Updated: 2026-08-28 21:42 ET
 
 ## Goal
 
@@ -13,7 +13,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
 - Version control: local `main` is clean; every completed implementation batch is committed with focused messages.
 - Active review round: fresh residual-risk audit, package smoke validation, and low-coverage boundary triage.
-- Next progress report due: 2026-08-28 22:07 ET.
+- Next progress report due: 2026-08-28 22:42 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -74,6 +74,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Direct runner tests prove manually assembled wrong subcommands, extra flags, unsafe profiles, missing fixed flags, and traversal paths are rejected before subprocess creation; adapter branch coverage rose from 69% to 74%.
 - The tracked-file secret scan is clean; its sole redaction-fixture false positive is explicitly allowlisted and asserted not to persist.
 - Storage tests now document idempotent close behavior and literal backslash search, covering two operational assumptions used by CLI cleanup and filtering.
+- The paused example-config QA system was removed from local state after proving it contained no actions, observations, facets, relationships, or alerts; a recoverable pre-cleanup backup remains under `.local/`.
 
 ## Risks / watch list
 
