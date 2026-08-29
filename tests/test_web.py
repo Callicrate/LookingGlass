@@ -479,7 +479,11 @@ def ready_dashboard(*, hostile_name: str = "Workspace root") -> DashboardView:
                         known_as_of=NOW,
                         freshness="stale",
                         effective_interval="24 hours",
-                        provenance="observation-1",
+                        provenance=(
+                            "databricks adapter v1 · databricks.workspace.children.read v1"
+                        ),
+                        provenance_observation_id="observation-1",
+                        provenance_action_id=ACTION_ID,
                     ),
                     FacetView(
                         name="content",
@@ -626,6 +630,17 @@ def test_ready_dashboard_keeps_stale_cached_facts_and_activity_visible() -> None
     assert NOW.isoformat() in response.text
     assert "stale" in response.text
     assert "timeout" in response.text
+
+
+def test_dashboard_exposes_readable_linked_fact_provenance() -> None:
+    response = client_for(FakeBackend(dashboard_view=ready_dashboard())).get("/")
+
+    assert response.status_code == 200
+    assert "databricks adapter v1" in response.text
+    assert "databricks.workspace.children.read v1" in response.text
+    assert "Observation observation-1" in response.text
+    assert f'href="/actions/{ACTION_ID}"' in response.text
+    assert "Producing action" in response.text
     assert "Request refresh" in response.text
     assert "Raw content is not displayed" in response.text
     assert "raw secret file contents" not in response.text

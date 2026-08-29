@@ -44,6 +44,7 @@ from async_api_view.storage import (
     ActionActivityRecord,
     ActionAttemptRecord,
     FacetActionStatusRecord,
+    FacetEvidenceRecord,
     OperationalEventRecord,
     SQLiteStore,
     SystemRecord,
@@ -222,9 +223,10 @@ class SQLiteWebBackend:
         system_id: str,
         object_id: str,
         object_type: str,
-        facet: Any,
+        evidence: FacetEvidenceRecord,
         last_action: FacetActionStatusRecord | None,
     ) -> FacetView:
+        facet = evidence.facet
         interval_text = "Unknown"
         freshness = "unobserved"
         if facet.knowledge is KnowledgeState.UNSUPPORTED:
@@ -257,6 +259,17 @@ class SQLiteWebBackend:
         ):
             freshness = "failed"
         value = json.dumps(dict(facet.payload), ensure_ascii=False, sort_keys=True, default=str)
+        provenance_parts: list[str] = []
+        if evidence.adapter_key is not None:
+            provenance_parts.append(
+                f"{evidence.adapter_key} adapter"
+                + (f" v{evidence.adapter_version}" if evidence.adapter_version else "")
+            )
+        if evidence.capability_key is not None:
+            provenance_parts.append(
+                evidence.capability_key
+                + (f" v{evidence.capability_version}" if evidence.capability_version else "")
+            )
         return FacetView(
             name=facet.facet,
             knowledge=facet.knowledge.value,
@@ -264,7 +277,9 @@ class SQLiteWebBackend:
             known_as_of=facet.observed_at,
             freshness=freshness,
             effective_interval=interval_text,
-            provenance=facet.supporting_observation_id or "Unknown",
+            provenance=" · ".join(provenance_parts) or "Unknown source",
+            provenance_observation_id=evidence.observation_id,
+            provenance_action_id=evidence.action_id,
             last_action_id=last_action.action_id if last_action is not None else None,
             failure=(
                 last_action.redacted_diagnostic
@@ -281,16 +296,17 @@ class SQLiteWebBackend:
     ) -> ObjectView:
         object_id = str(remote_object.object_id)
         system_id = str(remote_object.system_id)
-        facets = self._store.list_facets(object_id)
+        facet_evidence = self._store.list_facet_evidence(object_id)
+        facets = tuple(evidence.facet for evidence in facet_evidence)
         facet_views = tuple(
             self._facet_view(
                 system_id=system_id,
                 object_id=object_id,
                 object_type=remote_object.object_type,
-                facet=facet,
-                last_action=latest_facet_actions.get((system_id, object_id, facet.facet)),
+                evidence=evidence,
+                last_action=latest_facet_actions.get((system_id, object_id, evidence.facet.facet)),
             )
-            for facet in facets
+            for evidence in facet_evidence
         )
         path = next(
             (

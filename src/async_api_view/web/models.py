@@ -189,6 +189,8 @@ class FacetView:
     ] = "unobserved"
     effective_interval: str = "Unknown"
     provenance: str = "Unknown"
+    provenance_observation_id: str | None = None
+    provenance_action_id: str | None = None
     last_action_id: str | None = None
     failure: str | None = None
 

@@ -37,6 +37,7 @@ from async_api_view.storage import (
     ActionActivityRecord,
     ActionAttemptRecord,
     FacetActionStatusRecord,
+    FacetEvidenceRecord,
     SQLiteStore,
 )
 from async_api_view.web import (
@@ -213,6 +214,12 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
     assert runtime.store.get_facet_sync(root_scope.object_id, "membership") is not None
     detail = await runtime.backend.object_detail(root_scope.object_id)
     assert detail is not None
+    membership_facet = next(facet for facet in detail.object.facets if facet.name == "membership")
+    assert membership_facet.provenance == (
+        "databricks adapter v1 · databricks.workspace.children.read v1"
+    )
+    assert membership_facet.provenance_action_id == admitted.action_id
+    assert membership_facet.provenance_observation_id is not None
     assert detail.relationship_total == 2
     assert {child.name for child in detail.children} == {"Shared", "Demo"}
     assert any(option.target_id == root_scope.object_id for option in detail.refresh_options)
@@ -243,6 +250,22 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
     assert deferred.state.value == "deferred"
     assert not await runtime.worker.run_once()
     assert len(runner.calls) == 1
+    runtime.store._connection.execute(
+        """
+        UPDATE observation_batches SET action_id = ?
+        WHERE batch_id = (
+            SELECT batch_id FROM observation_journal WHERE observation_id = ?
+        )
+        """,
+        (str(uuid4()), membership_facet.provenance_observation_id),
+    )
+    stale_provenance = await runtime.backend.object_detail(root_scope.object_id)
+    assert stale_provenance is not None
+    stale_membership = next(
+        facet for facet in stale_provenance.object.facets if facet.name == "membership"
+    )
+    assert stale_membership.provenance.startswith("databricks adapter v1")
+    assert stale_membership.provenance_action_id is None
     second = await runtime.backend.intent(second_intent)
     assert second is not None
     assert not second.terminal
@@ -764,7 +787,16 @@ def test_facet_view_distinguishes_due_failed_refreshing_and_current(tmp_path: Pa
         "system_id": root.system_id,
         "object_id": root.object_id,
         "object_type": root.object_type,
-        "facet": facet,
+        "evidence": FacetEvidenceRecord(
+            facet=facet,
+            observation_id=None,
+            batch_id=None,
+            adapter_key=None,
+            adapter_version=None,
+            action_id=None,
+            capability_key=None,
+            capability_version=None,
+        ),
     }
 
     due = runtime.backend._facet_view(**arguments, last_action=None)
@@ -773,7 +805,15 @@ def test_facet_view_distinguishes_due_failed_refreshing_and_current(tmp_path: Pa
         **arguments, last_action=replace(failed_action, state="running")
     )
     current = runtime.backend._facet_view(
-        **(arguments | {"facet": replace(facet, observed_at=datetime.now(UTC))}),
+        **(
+            arguments
+            | {
+                "evidence": replace(
+                    arguments["evidence"],
+                    facet=replace(facet, observed_at=datetime.now(UTC)),
+                )
+            }
+        ),
         last_action=failed_action,
     )
 

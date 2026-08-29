@@ -80,6 +80,7 @@ from .models import (
     ActionAttemptRecord,
     ConfiguredScopeRecord,
     FacetActionStatusRecord,
+    FacetEvidenceRecord,
     IntentScopeRecord,
     IntentScopeWork,
     OperationalEventRecord,
@@ -1419,6 +1420,48 @@ class SQLiteStore:
                 "SELECT * FROM facets WHERE object_id = ? ORDER BY facet", (object_id,)
             ).fetchall()
         return tuple(self._facet_from_row(row) for row in rows)
+
+    def list_facet_evidence(self, object_id: str) -> tuple[FacetEvidenceRecord, ...]:
+        object_id = require_uuid(object_id, "object_id")
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT facet.*,
+                       journal.observation_id AS provenance_observation_id,
+                       batch.batch_id AS provenance_batch_id,
+                       batch.adapter_key AS provenance_adapter_key,
+                       batch.adapter_version AS provenance_adapter_version,
+                       action.action_id AS provenance_action_id,
+                       action.capability_key AS provenance_capability_key,
+                       action.capability_version AS provenance_capability_version
+                FROM facets AS facet
+                LEFT JOIN observation_journal AS journal
+                  ON journal.observation_id = facet.supporting_observation_id
+                LEFT JOIN observation_batches AS batch ON batch.batch_id = journal.batch_id
+                LEFT JOIN adapter_actions AS action
+                  ON action.action_id = batch.action_id
+                 AND action.system_id = batch.system_id
+                 AND action.connection_binding_id = batch.connection_binding_id
+                 AND action.adapter_key = batch.adapter_key
+                 AND action.adapter_version = batch.adapter_version
+                WHERE facet.object_id = ?
+                ORDER BY facet.facet
+                """,
+                (object_id,),
+            ).fetchall()
+        return tuple(
+            FacetEvidenceRecord(
+                facet=self._facet_from_row(row),
+                observation_id=row["provenance_observation_id"],
+                batch_id=row["provenance_batch_id"],
+                adapter_key=row["provenance_adapter_key"],
+                adapter_version=row["provenance_adapter_version"],
+                action_id=row["provenance_action_id"],
+                capability_key=row["provenance_capability_key"],
+                capability_version=row["provenance_capability_version"],
+            )
+            for row in rows
+        )
 
     @staticmethod
     def _relationship_from_row(row: sqlite3.Row) -> RelationshipState:

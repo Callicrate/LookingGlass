@@ -152,7 +152,7 @@
                   {% if facet.failure %}<span class="subtle failure">{{ facet.failure|display }}</span>{% endif %}
                   {% if facet.freshness == 'failed' and facet.last_action_id %}<a class="subtle" href="/actions/{{ facet.last_action_id|display }}">View failed action →</a>{% endif %}
                 </td>
-                <td data-label="Source">{{ facet.provenance|display }}</td>
+                <td data-label="Source"><strong>{{ facet.provenance|display }}</strong>{% if facet.provenance_action_id %}<a class="subtle" href="/actions/{{ facet.provenance_action_id|display }}">Producing action →</a>{% endif %}{% if facet.provenance_observation_id %}<code class="subtle">Observation {{ facet.provenance_observation_id|display }}</code>{% endif %}</td>
               </tr>
               {% endfor %}
             {% else %}

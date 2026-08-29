@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 348 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 349 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: worker-degradation labeling and README hierarchy are independently clear; provenance and temporal ordering findings remain queued.
+- Active review round: readable adapter/action fact provenance is independently clear; temporal/source-revision ordering is the remaining known medium finding.
 - Next progress report due: 2026-08-29 11:03 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -100,7 +100,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close review of exact partial/patch field-mask enforcement.
 - [ ] Define source-revision and equal-time projection ordering.
 - [x] Render refresh-worker degradation without claiming local disconnection.
-- [ ] Expose bounded adapter/action provenance for displayed facts.
+- [x] Close review of bounded adapter/action fact provenance.
 - [x] Separate standalone and source-checkout setup hierarchy.
 - [x] Enforce a practical minimum worker poll interval.
 - [x] Share profile validation before database creation and doctor.
@@ -149,6 +149,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Independent config/CLI review cleared TOML and programmatic settings, inclusive timing bounds, profile parity, allowed redirected/interactive serving, corrupt-state handling, cleanup, and activation secrecy.
 - Successful local dashboard reads now separate `refresh_unavailable` from true disconnection and render a warning that cached snapshot data loaded; local query failure retains the red Disconnected alert.
 - Independent product review cleared degraded/recovered copy, escaped worker summaries, accessible disabled reasons/status semantics, responsive structure, and peer standalone/source-checkout README flow.
+- Facet reads now join their supporting observation batch in the existing query, exposing adapter/capability versions, exact observation ID, and optional producing-action link without an N+1 query.
+- Provenance action links now require matching action/system/binding/adapter context; corrupt or stale action IDs fall back to unlinked adapter provenance, and independent review found no remaining attribution or leakage issue.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.

@@ -13,6 +13,7 @@ from datetime import datetime
 from async_api_view.contracts import (
     ActionState,
     AdapterAction,
+    FacetState,
     IntentScopeState,
     RefreshIntent,
     RefreshScope,
@@ -120,6 +121,18 @@ class FacetActionStatusRecord:
     state: str
     occurred_at: datetime
     redacted_diagnostic: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class FacetEvidenceRecord:
+    facet: FacetState
+    observation_id: str | None
+    batch_id: str | None
+    adapter_key: str | None
+    adapter_version: str | None
+    action_id: str | None
+    capability_key: str | None
+    capability_version: str | None
 
 
 @dataclass(frozen=True, slots=True)
