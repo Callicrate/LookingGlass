@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -73,6 +74,78 @@ def test_racing_equivalent_intents_elect_one_active_action(tmp_path) -> None:
     outcomes = run(coordinate())
     assert {outcome.state.value for outcome in outcomes} == {"admitted", "coalesced"}
     assert len(store.list_actions()) == 1
+
+
+def test_incompatible_persisted_intent_is_rejected_without_blocking_valid_work(
+    tmp_path,
+) -> None:
+    store = SQLiteStore(tmp_path / "intent-poison.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    poisoned = run(store.submit_refresh(_intent(scope, NOW)))
+    valid = run(store.submit_refresh(_intent(scope, NOW + timedelta(seconds=1))))
+    store._connection.execute(
+        "UPDATE refresh_intents SET contract_version = '2' WHERE intent_id = ?",
+        (poisoned.intent_id,),
+    )
+
+    result = run(
+        DurableCoordinator(store, worker_id="coordinator").run_once(now=NOW + timedelta(seconds=1))
+    )
+
+    assert result is not None and result.state.value == "admitted"
+    assert result.action_id is not None
+    poisoned_scope = store.list_intent_scopes(poisoned.intent_id)[0]
+    valid_scope = store.list_intent_scopes(valid.intent_id)[0]
+    assert poisoned_scope.state.value == "rejected"
+    assert poisoned_scope.disposition_reason == "persisted_intent_contract_mismatch"
+    assert valid_scope.state.value == "admitted"
+    poison_aggregate = store._connection.execute(
+        "SELECT aggregate_state FROM refresh_intents WHERE intent_id = ?",
+        (poisoned.intent_id,),
+    ).fetchone()[0]
+    assert poison_aggregate == "complete"
+    events = store.list_operational_events(alertable_only=True)
+    assert len(events) == 1
+    assert events[0].event_type == "refresh.intent.contract_mismatch"
+    assert events[0].redacted_summary == "persisted_intent_contract_mismatch"
+    assert (
+        run(DurableCoordinator(store, worker_id="second").run_once(now=NOW + timedelta(seconds=1)))
+        is None
+    )
+    assert len(store.list_operational_events(alertable_only=True)) == 1
+
+
+def test_intent_poison_terminalization_operational_error_rolls_back(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SQLiteStore(tmp_path / "intent-poison-rollback.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    poisoned = run(store.submit_refresh(_intent(scope, NOW)))
+    store._connection.execute(
+        "UPDATE refresh_intents SET contract_version = '2' WHERE intent_id = ?",
+        (poisoned.intent_id,),
+    )
+
+    def fail_terminalization(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("injected storage failure")
+
+    monkeypatch.setattr(
+        store,
+        "_terminalize_intent_scope_contract_failure",
+        fail_terminalization,
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="injected storage failure"):
+        run(DurableCoordinator(store, worker_id="coordinator").run_once(now=NOW))
+
+    assert store.list_intent_scopes(poisoned.intent_id)[0].state.value == "queued"
+    assert store.list_operational_events(alertable_only=True) == ()
 
 
 def test_lease_recovery_revalidates_deferred_scope_and_policy_precedence(tmp_path) -> None:

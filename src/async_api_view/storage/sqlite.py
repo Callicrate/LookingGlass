@@ -1461,6 +1461,48 @@ class SQLiteStore:
             ).fetchone()
             return self._intent_from_row(row) if row else None
 
+    def get_refresh_intent_requested_at(self, intent_id: str) -> datetime | None:
+        intent_id = require_uuid(intent_id, "intent_id")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT requested_at FROM refresh_intents WHERE intent_id = ?", (intent_id,)
+            ).fetchone()
+        return _dt(row["requested_at"]) if row is not None else None
+
+    def _terminalize_intent_scope_contract_failure(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        row: sqlite3.Row,
+        now: datetime,
+    ) -> None:
+        reason = "persisted_intent_contract_mismatch"
+        connection.execute(
+            """
+            UPDATE refresh_intent_scopes
+            SET state = 'rejected', disposition_reason = ?, eligible_at = NULL,
+                lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
+            WHERE intent_scope_id = ?
+            """,
+            (reason, row["intent_scope_id"]),
+        )
+        self._insert_event(
+            connection,
+            idempotency_key=f"intent-scope-{row['intent_scope_id']}-contract-rejected",
+            event_type="refresh.intent.contract_mismatch",
+            severity="error",
+            alertable=True,
+            system_id=row["system_id"],
+            action_id=None,
+            error_class=ErrorClass.ADAPTER_CONTRACT_MISMATCH.value,
+            summary=reason,
+            occurred_at=now,
+        )
+        self._refresh_intent_aggregate(
+            connection,
+            intent_scope_id=row["intent_scope_id"],
+        )
+
     async def lease_next_intent_scope(
         self,
         *,
@@ -1475,26 +1517,49 @@ class SQLiteStore:
         now_text = _utc_text(now)
         leased_until = now + lease_duration
         with self._immediate_transaction() as connection:
-            row = connection.execute(
-                """
-                SELECT scope.*, intent.idempotency_key, intent.origin, intent.actor_id,
-                       intent.ui_session_id, intent.requested_at, intent.expires_at,
-                       intent.priority, intent.contract_version
-                FROM refresh_intent_scopes AS scope
-                JOIN refresh_intents AS intent ON intent.intent_id = scope.intent_id
-                WHERE scope.state = 'queued'
-                   OR (
-                       scope.state = 'deferred'
-                       AND (scope.eligible_at IS NULL OR scope.eligible_at <= ?)
-                   )
-                   OR (scope.state = 'leased' AND scope.leased_until <= ?)
-                ORDER BY intent.priority DESC, intent.requested_at, scope.intent_scope_id
-                LIMIT 1
-                """,
-                (now_text, now_text),
-            ).fetchone()
-            if row is None:
-                return None
+            while True:
+                row = connection.execute(
+                    """
+                    SELECT scope.*, intent.idempotency_key, intent.origin, intent.actor_id,
+                           intent.ui_session_id, intent.requested_at, intent.expires_at,
+                           intent.priority, intent.contract_version
+                    FROM refresh_intent_scopes AS scope
+                    JOIN refresh_intents AS intent ON intent.intent_id = scope.intent_id
+                    WHERE scope.state = 'queued'
+                       OR (
+                           scope.state = 'deferred'
+                           AND (scope.eligible_at IS NULL OR scope.eligible_at <= ?)
+                       )
+                       OR (scope.state = 'leased' AND scope.leased_until <= ?)
+                    ORDER BY intent.priority DESC, intent.requested_at, scope.intent_scope_id
+                    LIMIT 1
+                    """,
+                    (now_text, now_text),
+                ).fetchone()
+                if row is None:
+                    return None
+                try:
+                    scope = _scope_from_row(row)
+                    intent = RefreshIntent(
+                        intent_id=row["intent_id"],
+                        idempotency_key=row["idempotency_key"],
+                        origin=row["origin"],
+                        actor_id=row["actor_id"],
+                        scopes=(scope,),
+                        requested_at=_dt(row["requested_at"]),  # type: ignore[arg-type]
+                        ui_session_id=row["ui_session_id"],
+                        expires_at=_dt(row["expires_at"]),
+                        priority=row["priority"],
+                        contract_version=row["contract_version"],
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    self._terminalize_intent_scope_contract_failure(
+                        connection,
+                        row=row,
+                        now=now,
+                    )
+                    continue
+                break
             lease_id = str(uuid4())
             result = connection.execute(
                 """
@@ -1518,22 +1583,10 @@ class SQLiteStore:
                 result.rowcount != 1
             ):  # pragma: no cover - lock and transaction make this unreachable
                 return None
-            intent = RefreshIntent(
-                intent_id=row["intent_id"],
-                idempotency_key=row["idempotency_key"],
-                origin=row["origin"],
-                actor_id=row["actor_id"],
-                scopes=(_scope_from_row(row),),
-                requested_at=_dt(row["requested_at"]),  # type: ignore[arg-type]
-                ui_session_id=row["ui_session_id"],
-                expires_at=_dt(row["expires_at"]),
-                priority=row["priority"],
-                contract_version=row["contract_version"],
-            )
         return IntentScopeWork(
             intent_scope_id=row["intent_scope_id"],
             intent=intent,
-            scope=_scope_from_row(row),
+            scope=scope,
             state=IntentScopeState.LEASED,
             lease_id=lease_id,
             leased_until=leased_until,

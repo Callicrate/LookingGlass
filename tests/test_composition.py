@@ -11,6 +11,7 @@ import pytest
 
 from async_api_view.adapters.databricks import CliExecution, CliInvocation, CliRunner
 from async_api_view.application import SystemBootstrapService
+from async_api_view.cli import _run_once
 from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
 from async_api_view.contracts import (
@@ -424,6 +425,60 @@ async def test_malformed_action_deadline_terminalizes_without_cli_call(tmp_path:
     ).fetchone()
     assert tuple(action_row) == ("failed", "adapter_contract_mismatch")
     assert runtime.store.list_intent_scopes(intent_id)[0].state.value == "rejected"
+    runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_run_once_skips_incompatible_intent_and_drains_valid_work(tmp_path: Path) -> None:
+    runner = FakeCliRunner(b"[]")
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    poisoned_option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.workspace.children.read"
+        and item.target_kind == "configured_scope"
+    )
+    healthy_option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.uc.catalogs.read"
+    )
+    poisoned_intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=poisoned_option.system_id,
+            target_kind=poisoned_option.target_kind,
+            target_id=poisoned_option.target_id,
+            capability_key=poisoned_option.capability_key,
+            facet=poisoned_option.facet,
+        )
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=healthy_option.system_id,
+            target_kind=healthy_option.target_kind,
+            target_id=healthy_option.target_id,
+            capability_key=healthy_option.capability_key,
+            facet=healthy_option.facet,
+        )
+    )
+    runtime.store._connection.execute(
+        "UPDATE refresh_intents SET contract_version = '2' WHERE intent_id = ?",
+        (poisoned_intent_id,),
+    )
+
+    await _run_once(runtime)
+
+    assert [call.capability_key for call in runner.calls] == ["databricks.uc.catalogs.read"]
+    assert runtime.store.list_intent_scopes(poisoned_intent_id)[0].state.value == "rejected"
+    assert len(runtime.store.list_operational_events(alertable_only=True)) == 1
+    poisoned_view = await runtime.backend.intent(poisoned_intent_id)
+    assert poisoned_view is not None and poisoned_view.terminal
+    assert poisoned_view.scopes[0].state == "rejected"
+    assert poisoned_view.error == (
+        "Stored request contract is unsupported; durable dispositions remain available."
+    )
     runtime.store.close()
 
 

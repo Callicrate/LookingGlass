@@ -902,12 +902,21 @@ class SQLiteWebBackend:
         return intent_id
 
     async def intent(self, intent_id: str) -> IntentView | None:
-        intent = self._store.get_refresh_intent(intent_id)
+        unsupported_contract = False
+        try:
+            intent = self._store.get_refresh_intent(intent_id)
+        except (TypeError, ValueError):
+            intent = None
+            unsupported_contract = True
         if intent is None:
-            return None
+            requested_at = self._store.get_refresh_intent_requested_at(intent_id)
+            if requested_at is None:
+                return None
+        else:
+            requested_at = intent.requested_at
         views: list[IntentScopeView] = []
         terminal = True
-        updated_at = intent.requested_at
+        updated_at = requested_at
         for record in self._store.list_intent_scopes(intent_id):
             state = record.state.value
             failure: str | None = None
@@ -950,11 +959,16 @@ class SQLiteWebBackend:
                 )
             )
         return IntentView(
-            intent_id=intent.intent_id,
-            requested_at=intent.requested_at,
+            intent_id=intent_id,
+            requested_at=requested_at,
             scopes=tuple(views),
             updated_at=updated_at,
             terminal=terminal,
+            error=(
+                "Stored request contract is unsupported; durable dispositions remain available."
+                if unsupported_contract
+                else None
+            ),
         )
 
 
