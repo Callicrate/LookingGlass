@@ -841,6 +841,10 @@ def test_action_history_shows_filters_paging_and_escaped_diagnostics() -> None:
     assert "databricks.workspace.metadata.read" in response.text
     assert "downstream_rate_limit" in response.text
     assert "/actions?page=2" in response.text
+    assert (
+        f"/actions/{ACTION_ID}?return=%2Factions%3Fstate%3Dretry_wait%26system%3D{SYSTEM_ID}"
+        in response.text
+    )
     assert '<script>alert("secret")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
     assert backend.action_queries == [ActionHistoryQuery(state="retry_wait", system_id=SYSTEM_ID)]
@@ -890,6 +894,39 @@ def test_action_detail_shows_bounded_escaped_attempts() -> None:
     assert '<script>alert("attempt")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
     assert backend.action_detail_ids == [ACTION_ID]
+
+
+def test_action_detail_restores_valid_filtered_return_context() -> None:
+    backend = FakeBackend(action_detail_view=ready_action_detail())
+
+    response = client_for(backend).get(
+        f"/actions/{ACTION_ID}?return=%2Factions%3Fstate%3Dfailed%26page%3D2"
+    )
+
+    assert response.status_code == 200
+    assert 'href="/actions?state=failed&amp;page=2"' in response.text
+    assert backend.action_detail_ids == [ACTION_ID]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?return=https%3A%2F%2Fattacker.example",
+        "?return=%2Falerts",
+        "?return=%2Factions%23fragment",
+        "?return=%2Factions%3Funknown%3Dvalue",
+        f"?return=%2Factions%3Faction%3D{ACTION_ID}%26state%3Dfailed",
+        "?return=%2Factions&return=%2Factions%3Fpage%3D2",
+        "?unknown=value",
+    ],
+)
+def test_action_detail_rejects_unsafe_return_context_before_backend(query: str) -> None:
+    backend = FakeBackend(action_detail_view=ready_action_detail())
+
+    response = client_for(backend).get(f"/actions/{ACTION_ID}{query}")
+
+    assert response.status_code == 400
+    assert backend.action_detail_ids == []
 
 
 def test_action_detail_returns_safe_not_found_and_unavailable_states() -> None:

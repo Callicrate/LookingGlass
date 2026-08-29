@@ -5,7 +5,7 @@ from __future__ import annotations
 import hmac
 import re
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, urlsplit
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
@@ -170,6 +170,47 @@ def _action_history_query(request: Request) -> ActionHistoryQuery:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid action query") from exc
+
+
+def _action_detail_return(request: Request) -> str:
+    values = list(request.query_params.multi_items())
+    if any(name != "return" for name, _value in values):
+        raise HTTPException(status_code=400, detail="Unexpected action detail query parameter")
+    if len(values) > 1:
+        raise HTTPException(status_code=400, detail="Duplicate action detail query parameter")
+    value = request.query_params.get("return", "")
+    if not value:
+        return "/actions"
+    parsed = urlsplit(value)
+    if (
+        len(value) > 512
+        or parsed.scheme
+        or parsed.netloc
+        or parsed.fragment
+        or parsed.path != "/actions"
+    ):
+        raise HTTPException(status_code=400, detail="Invalid action return path")
+    try:
+        pairs = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=4,
+        )
+        if any(name not in {"page", "state", "system", "action"} for name, _value in pairs):
+            raise ValueError("unexpected return parameter")
+        if len({name for name, _value in pairs}) != len(pairs):
+            raise ValueError("duplicate return parameter")
+        parameters = dict(pairs)
+        ActionHistoryQuery(
+            page=int(parameters.get("page", "1")),
+            state=parameters.get("state", ""),
+            system_id=parameters.get("system", ""),
+            action_id=parameters.get("action", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid action return query") from exc
+    return value
 
 
 async def _parse_refresh_form(request: Request, csrf_token: str) -> RefreshRequest:
@@ -390,19 +431,29 @@ def create_app(
             view = await app.state.backend.action_history(query)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Action activity is unavailable") from exc
-        content = templates.get_template("actions.html").render(request=request, view=view)
+        return_to = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        content = templates.get_template("actions.html").render(
+            request=request,
+            view=view,
+            return_param=quote(return_to, safe=""),
+        )
         return HTMLResponse(content)
 
     @app.get("/actions/{action_id}", response_class=HTMLResponse)
     async def action_detail(request: Request, action_id: str) -> HTMLResponse:
         normalized_id = _action_id(action_id)
+        return_to = _action_detail_return(request)
         try:
             view = await app.state.backend.action_detail(normalized_id)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Action detail is unavailable") from exc
         if view is None:
             raise HTTPException(status_code=404, detail="Action not found")
-        content = templates.get_template("action.html").render(request=request, view=view)
+        content = templates.get_template("action.html").render(
+            request=request,
+            view=view,
+            return_to=return_to,
+        )
         return HTMLResponse(content)
 
     @app.get("/objects/{object_id}", response_class=HTMLResponse)
