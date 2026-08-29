@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 09:23 ET
+Updated: 2026-08-29 09:34 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 333 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
-- Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
+- Latest checks: 335 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: hashed isolated build constraints are independently clear; standalone first-run guidance is the remaining known release finding.
+- Active review round: checkout-free standalone wheel installation is independently clear; no known medium-or-higher finding is open, so fresh residual audits continue.
 - Next progress report due: 2026-08-29 10:04 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -94,7 +94,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close review of complete packaged runtime assets and installed-wheel smoke.
 - [x] Close review of hashed isolated build constraints and reproducibility.
 - [x] Close review of pytest advisory remediation and locked CI dependency auditing.
-- [ ] Complete a documented first-run path for standalone wheel installation.
+- [x] Close review of checkout-free standalone wheel first-run behavior and guidance.
 - [x] Close review of immutable CI action pins and Dependabot updates.
 
 ## Evidence and decisions
@@ -124,6 +124,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Hatchling 1.32.0 and its five transitive build requirements are universally hash-pinned; CI/README require those constraints for both sdist and wheel build stages.
 - Repeated Windows builds are byte-identical. Windows/WSL archive contents are identical, while container metadata remains platform-specific; CI therefore verifies constrained builds on each OS without claiming cross-OS byte identity.
 - Independent build review regenerated identical constraints, proved corrupted hashes fail immediately, confirmed both build stages resolve the same six pinned packages on Windows/Linux, and cleared lock/project metadata coherence.
+- Installed users can now create a loadable no-overwrite starter TOML with `init-config`; the isolated wheel verifier executes `init-config` and `init` from an empty checkout-free directory.
+- Independent standalone review cleared exclusive/racing writer behavior, exact template parity, path semantics, parent/hardlink/symlink refusal, installed upgrade/uninstall, preserved operator files, six-command help, and secret absence.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.

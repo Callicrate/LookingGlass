@@ -19,6 +19,21 @@ from async_api_view.storage import backup_sqlite_database
 
 logger = logging.getLogger(__name__)
 
+_EXAMPLE_CONFIG = """[app]
+database_path = "./rookery.sqlite3"
+host = "127.0.0.1"
+port = 8765
+worker_poll_seconds = 1.0
+cli_timeout_seconds = 30.0
+cli_output_limit_bytes = 8388608
+
+[[databricks]]
+id = "primary-workspace"
+name = "primary-workspace"
+profile = "YOUR_PROFILE"
+workspace_root = "/"
+"""
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -37,6 +52,16 @@ def _parser() -> argparse.ArgumentParser:
         default="INFO",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    init_config = subparsers.add_parser(
+        "init-config",
+        help="Write a no-overwrite starter configuration without opening the database.",
+    )
+    init_config.add_argument(
+        "--output",
+        type=Path,
+        default=Path("config.local.toml"),
+        help="New TOML path (default: config.local.toml); never overwrites an existing path.",
+    )
     subparsers.add_parser("init", help="Initialize the database and configured systems.")
     subparsers.add_parser(
         "doctor",
@@ -84,6 +109,13 @@ def _initialize(settings: ProjectSettings) -> None:
         )
     finally:
         runtime.store.close()
+
+
+def _initialize_config(output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(_EXAMPLE_CONFIG)
+    logger.info("Created starter configuration at %s", output.resolve())
 
 
 async def _doctor(settings: ProjectSettings) -> None:
@@ -142,6 +174,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     try:
+        if args.command == "init-config":
+            _initialize_config(args.output)
+            return 0
         settings = _load(args.config)
         if args.command == "init":
             _initialize(settings)

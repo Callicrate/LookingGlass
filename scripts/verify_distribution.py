@@ -149,8 +149,9 @@ def smoke_installed_wheel(
             env=process_environment,
             timeout=30,
         )
+        cli = _venv_cli(environment)
         help_result = subprocess.run(  # noqa: S603 - local wheel's absolute entry point
-            [str(_venv_cli(environment)), "--help"],
+            [str(cli), "--help"],
             check=True,
             capture_output=True,
             cwd=temporary,
@@ -158,8 +159,27 @@ def smoke_installed_wheel(
             text=True,
             timeout=30,
         )
-        if not all(command in help_result.stdout for command in ("doctor", "backup", "serve")):
+        if not all(
+            command in help_result.stdout
+            for command in ("init-config", "doctor", "backup", "serve")
+        ):
             raise RuntimeError("installed CLI help is missing required commands")
+        config = Path(temporary) / "rookery.toml"
+        for command in (
+            (str(cli), "init-config", "--output", str(config)),
+            (str(cli), "--config", str(config), "init"),
+        ):
+            subprocess.run(  # noqa: S603 - local wheel's absolute entry point
+                command,
+                check=True,
+                capture_output=True,
+                cwd=temporary,
+                env=process_environment,
+                text=True,
+                timeout=30,
+            )
+        if not config.is_file() or not (Path(temporary) / "rookery.sqlite3").is_file():
+            raise RuntimeError("installed CLI could not complete checkout-free initialization")
 
 
 def main() -> None:

@@ -1,5 +1,5 @@
 [app]
-database_path = ".local/async-api-view.sqlite3"
+database_path = "./rookery.sqlite3"
 host = "127.0.0.1"
 port = 8765
 worker_poll_seconds = 1.0

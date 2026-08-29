@@ -1,12 +1,13 @@
 import secrets
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from async_api_view import cli
-from async_api_view.config import AppSettings, ProjectSettings
+from async_api_view.config import AppSettings, ProjectSettings, load_settings
 from async_api_view.web import LocalCallerAuthorizer
 
 
@@ -30,6 +31,50 @@ workspace_root = "/"
 
     assert result == 0
     assert (tmp_path / "state.sqlite3").is_file()
+
+
+def test_init_config_creates_loadable_template_without_overwrite(tmp_path: Path) -> None:
+    output = tmp_path / "standalone" / "rookery.toml"
+
+    created = cli.main(
+        [
+            "--config",
+            str(tmp_path / "missing-is-ignored.toml"),
+            "init-config",
+            "--output",
+            str(output),
+        ]
+    )
+    original = output.read_bytes()
+    refused = cli.main(["init-config", "--output", str(output)])
+
+    assert created == 0
+    assert refused == 2
+    assert original.startswith(b"[app]\n")
+    assert output.read_bytes() == original
+    assert output.read_text(encoding="utf-8") == Path("config.example.toml").read_text(
+        encoding="utf-8"
+    )
+    settings = load_settings(output)
+    assert settings.app.database_path == output.parent / "rookery.sqlite3"
+    assert settings.databricks_systems[0].profile == "YOUR_PROFILE"
+
+
+def test_racing_init_config_writers_publish_one_complete_template(tmp_path: Path) -> None:
+    output = tmp_path / "racing" / "rookery.toml"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(
+            executor.map(
+                lambda _index: cli.main(["init-config", "--output", str(output)]),
+                range(2),
+            )
+        )
+
+    assert sorted(results) == [0, 2]
+    assert output.read_text(encoding="utf-8") == Path("config.example.toml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_init_rejects_missing_config(tmp_path: Path) -> None:

@@ -7,6 +7,7 @@ The first adapter uses the existing Databricks CLI.
 ## Contents
 
 - [First usable workflow](#first-usable-workflow)
+- [Standalone wheel install](#standalone-wheel-install)
 - [Databricks scope](#databricks-scope)
 - [Commands](#commands)
 - [Verify](#verify)
@@ -42,6 +43,27 @@ Check available profiles without printing credential values:
 ```powershell
 databricks auth profiles
 ```
+
+## Standalone wheel install
+
+This path needs the wheel, Python 3.12, `uv`, and the Databricks CLI, but no source checkout or `config.example.toml`.
+
+```powershell
+uv tool install 'C:\path\to\async_api_view-0.1.0-py3-none-any.whl'
+New-Item -ItemType Directory -Path '.\rookery' -Force
+Set-Location -LiteralPath '.\rookery'
+async-api-view init-config --output '.\rookery.toml'
+```
+
+Edit `rookery.toml`: replace `YOUR_PROFILE`, choose a stable workspace `id` and display `name`, and narrow `workspace_root` if `/` is broader than intended. Then initialize and verify compatibility:
+
+```powershell
+async-api-view --config '.\rookery.toml' init
+async-api-view --config '.\rookery.toml' doctor
+async-api-view --config '.\rookery.toml' serve
+```
+
+`init-config` writes UTF-8 TOML, creates parent directories, and refuses to overwrite any existing path. The generated SQLite path is relative to the configuration file. Use `uv tool install --force '<path-to-new-wheel>'` to upgrade and `uv tool uninstall async-api-view` to remove the installed command; configuration and cached SQLite state remain operator-owned files.
 
 ### Set up
 
@@ -104,6 +126,7 @@ The worker rejects content actions before target resolution or CLI execution unt
 
 | Command | Purpose |
 |---|---|
+| `async-api-view init-config --output <path>` | Create a no-overwrite starter TOML without loading configuration or opening SQLite. |
 | `async-api-view init` | Apply SQLite migrations and idempotently register configured systems/scopes. |
 | `async-api-view doctor` | Verify the existing Databricks CLI compatibility surface. |
 | `async-api-view run-once` | Drain currently eligible local coordinator and worker activity, then stop. |
