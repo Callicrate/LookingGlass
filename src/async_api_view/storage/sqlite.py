@@ -23,6 +23,7 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from async_api_view.contracts import (
+    AbsenceAuthority,
     ActionAttempt,
     ActionCompletion,
     ActionLease,
@@ -30,6 +31,7 @@ from async_api_view.contracts import (
     ActionState,
     AdapterAction,
     CapabilityBinding,
+    CapabilityCoveragePolicy,
     CollectionCoverage,
     ConnectionBinding,
     CoverageDeclaration,
@@ -127,6 +129,11 @@ _RUNTIME_EVENT_TYPES = frozenset(
 _RUNTIME_SUMMARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:;()_-]{0,511}$")
 _CONFIG_ID = re.compile(r"\A[a-z0-9._-]{1,128}\Z")
 _ALERT_SEVERITIES = frozenset({"info", "warning", "error", "critical"})
+_COLLECTION_COVERAGE_RANK = {
+    CollectionCoverage.UNKNOWN: 0,
+    CollectionCoverage.PARTIAL: 1,
+    CollectionCoverage.COMPLETE: 2,
+}
 _CAPABILITY_KEY_ALTER_TABLES = {
     "ALTER TABLE refresh_credit ADD COLUMN capability_key TEXT;": "refresh_credit",
     "ALTER TABLE refresh_intent_scopes ADD COLUMN capability_key TEXT;": "refresh_intent_scopes",
@@ -271,6 +278,21 @@ def _scope_from_row(row: sqlite3.Row, *, prefix: str = "") -> RefreshScope:
         capability_key=row[f"{prefix}capability_key"],
         coverage=RefreshCoverage(row[f"{prefix}coverage"]),
         field_mask=tuple(_json_value(row[f"{prefix}field_mask_json"])),
+    )
+
+
+def _coverage_policy_from_value(value: object) -> CapabilityCoveragePolicy:
+    if not isinstance(value, dict):
+        raise ValueError("stored coverage policy is not an object")
+    absence_authority = value.get("absence_authority")
+    if not isinstance(absence_authority, list):
+        raise ValueError("stored coverage absence authority is not a list")
+    return CapabilityCoveragePolicy(
+        target_kind=TargetKind(value.get("target_kind")),
+        facet=value.get("facet"),  # type: ignore[arg-type]
+        coverage=RefreshCoverage(value.get("coverage")),
+        maximum_completeness=CollectionCoverage(value.get("maximum_completeness")),
+        absence_authority=tuple(AbsenceAuthority(item) for item in absence_authority),
     )
 
 
@@ -804,10 +826,10 @@ class SQLiteStore:
                 INSERT INTO capability_bindings (
                     capability_binding_id, connection_binding_id, capability_key,
                     capability_version, operation_class, target_kinds_json,
-                    produced_facets_json, enabled, selection_priority,
+                    produced_facets_json, coverage_policies_json, enabled, selection_priority,
                     collateral_effects_json, mitigations_json, record_created_at,
                     record_updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(capability_binding_id) DO UPDATE SET
                     connection_binding_id = excluded.connection_binding_id,
                     capability_key = excluded.capability_key,
@@ -815,6 +837,7 @@ class SQLiteStore:
                     operation_class = excluded.operation_class,
                     target_kinds_json = excluded.target_kinds_json,
                     produced_facets_json = excluded.produced_facets_json,
+                    coverage_policies_json = excluded.coverage_policies_json,
                     enabled = excluded.enabled,
                     selection_priority = excluded.selection_priority,
                     collateral_effects_json = excluded.collateral_effects_json,
@@ -831,6 +854,10 @@ class SQLiteStore:
                         [item.value for item in capability.target_kinds], field_name="target_kinds"
                     ),
                     _json_text(list(capability.produced_facets), field_name="produced_facets"),
+                    _json_text(
+                        [policy.to_dict() for policy in capability.coverage_policies],
+                        field_name="coverage_policies",
+                    ),
                     int(capability.enabled),
                     capability.selection_priority,
                     _json_text(
@@ -1342,6 +1369,10 @@ class SQLiteStore:
 
     @staticmethod
     def _capability_from_row(row: sqlite3.Row) -> CapabilityBinding:
+        coverage_policies = tuple(
+            _coverage_policy_from_value(value)
+            for value in _json_value(row["coverage_policies_json"])
+        )
         return CapabilityBinding(
             capability_binding_id=row["capability_binding_id"],
             connection_binding_id=row["connection_binding_id"],
@@ -1354,6 +1385,7 @@ class SQLiteStore:
             selection_priority=row["selection_priority"],
             collateral_effects=tuple(_json_value(row["collateral_effects_json"])),
             mitigations=tuple(_json_value(row["mitigations_json"])),
+            coverage_policies=coverage_policies,
         )
 
     async def get_connection_binding(self, binding_id: str) -> ConnectionBinding | None:
@@ -3431,14 +3463,17 @@ class SQLiteStore:
         self, connection: sqlite3.Connection, batch: ObservationBatch
     ) -> tuple[CoverageDeclaration, ...]:
         declarations = tuple(batch.coverage)
-        capability_rows = connection.execute(
-            """
-            SELECT capability_key, target_kinds_json, produced_facets_json
-            FROM capability_bindings
-            WHERE connection_binding_id = ? AND operation_class = 'observe'
-            """,
-            (batch.connection_binding_id,),
-        ).fetchall()
+        action_capability = (
+            connection.execute(
+                """
+                SELECT capability_key, capability_version
+                FROM adapter_actions WHERE action_id = ?
+                """,
+                (batch.action_id,),
+            ).fetchone()
+            if batch.action_id is not None
+            else None
+        )
         seen: set[tuple[str, str, str, str, str, str, str]] = set()
         for declaration in declarations:
             scope = declaration.scope
@@ -3447,14 +3482,61 @@ class SQLiteStore:
             definition = V1_TYPE_DEFINITION_BY_KEY.get(scope.object_type)
             if definition is None or scope.facet not in {item.facet for item in definition.facets}:
                 raise ValueError("coverage_unsupported_facet")
-            supported = any(
-                (scope.capability_key is None or row["capability_key"] == scope.capability_key)
-                and scope.target.kind.value in _json_value(row["target_kinds_json"])
-                and scope.facet in _json_value(row["produced_facets_json"])
+            if action_capability is not None:
+                if scope.capability_key != action_capability["capability_key"]:
+                    raise ValueError("coverage_action_capability_mismatch")
+                capability_rows = connection.execute(
+                    """
+                    SELECT capability_key, target_kinds_json, produced_facets_json,
+                           coverage_policies_json
+                    FROM capability_bindings
+                    WHERE connection_binding_id = ? AND capability_key = ?
+                      AND capability_version = ? AND operation_class = 'observe'
+                    """,
+                    (
+                        batch.connection_binding_id,
+                        action_capability["capability_key"],
+                        action_capability["capability_version"],
+                    ),
+                ).fetchall()
+            else:
+                if scope.capability_key is None:
+                    raise ValueError("incidental_coverage_requires_capability")
+                capability_rows = connection.execute(
+                    """
+                    SELECT capability_key, target_kinds_json, produced_facets_json,
+                           coverage_policies_json
+                    FROM capability_bindings
+                    WHERE connection_binding_id = ? AND capability_key = ?
+                      AND operation_class = 'observe' AND enabled = 1
+                    """,
+                    (batch.connection_binding_id, scope.capability_key),
+                ).fetchall()
+            matching_rows = tuple(
+                row
                 for row in capability_rows
+                if scope.target.kind.value in _json_value(row["target_kinds_json"])
+                and scope.facet in _json_value(row["produced_facets_json"])
             )
-            if not supported:
+            if not matching_rows:
                 raise ValueError("coverage_not_supported_by_binding")
+            authorized = any(
+                any(
+                    policy.target_kind is scope.target.kind
+                    and policy.facet == scope.facet
+                    and policy.coverage is scope.coverage
+                    and _COLLECTION_COVERAGE_RANK[declaration.completeness]
+                    <= _COLLECTION_COVERAGE_RANK[policy.maximum_completeness]
+                    and set(declaration.absence_authority).issubset(policy.absence_authority)
+                    for policy in (
+                        _coverage_policy_from_value(value)
+                        for value in _json_value(row["coverage_policies_json"])
+                    )
+                )
+                for row in matching_rows
+            )
+            if not authorized:
+                raise ValueError("coverage_exceeds_capability_policy")
             columns = _scope_columns(scope)
             if columns in seen:
                 raise ValueError("duplicate_coverage_declaration")

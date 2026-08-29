@@ -1,10 +1,12 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from async_api_view.application import SystemBootstrapService
 from async_api_view.contracts import (
     AbsenceAuthority,
+    AdapterAction,
     CollectionCoverage,
     CoverageDeclaration,
     FacetObservation,
@@ -41,6 +43,7 @@ def test_partial_listing_preserves_members_and_observation_replay_is_idempotent(
         target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
         object_type="folder",
         facet="membership",
+        capability_key="databricks.workspace.children.read",
         coverage=RefreshCoverage.FACET,
     )
     child = ObjectLocator(
@@ -103,6 +106,7 @@ def test_complete_omission_never_overwrites_a_newer_relationship(tmp_path) -> No
         target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
         object_type="folder",
         facet="membership",
+        capability_key="databricks.workspace.children.read",
         coverage=RefreshCoverage.FACET,
     )
     declaration = CoverageDeclaration(
@@ -236,6 +240,25 @@ def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:
         ),
         now=NOW,
     )
+    metadata_capability = store.get_capability_binding_sync(
+        seeded.connection_binding_id,
+        "databricks.workspace.metadata.read",
+        "1",
+    )
+    assert metadata_capability is not None
+    store.upsert_capability_binding(
+        replace(
+            metadata_capability,
+            coverage_policies=tuple(
+                replace(
+                    policy,
+                    absence_authority=(AbsenceAuthority.OBJECT_PRESENCE,),
+                )
+                for policy in metadata_capability.coverage_policies
+            ),
+        ),
+        now=NOW,
+    )
     locator = ObjectLocator(
         object_type="file",
         source_kind="databricks.workspace.file",
@@ -354,6 +377,216 @@ def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:
     assert remote_object.last_seen_at == latest_present_at
 
 
+def test_metadata_capability_cannot_self_grant_object_presence_authority(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        enabled_capability_keys=("databricks.workspace.metadata.read",),
+        now=NOW,
+    )
+    remote_object = store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=seeded.system.system_id,
+            object_type="file",
+            object_type_version="1",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:object_id:101",
+            display_name="report.py",
+            presence=PresenceState.PRESENT,
+            first_seen_at=NOW,
+        )
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.OBJECT, remote_object.object_id),
+        object_type="file",
+        facet="metadata",
+        capability_key="databricks.workspace.metadata.read",
+        coverage=RefreshCoverage.FACET,
+    )
+    forged = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW + timedelta(seconds=1),
+        received_at=NOW + timedelta(seconds=1),
+        facet_observations=(
+            FacetObservation(
+                observation_id=uuid4(),
+                target=ObjectLocator(object_type="file", object_id=remote_object.object_id),
+                facet="metadata",
+                facet_version="1",
+                update_mode=UpdateMode.ABSENCE,
+                field_coverage=FieldCoverage.COMPLETE,
+            ),
+        ),
+        coverage=(
+            CoverageDeclaration(
+                scope=scope,
+                completeness=CollectionCoverage.COMPLETE,
+                absence_authority=(AbsenceAuthority.OBJECT_PRESENCE,),
+            ),
+        ),
+    )
+
+    assert run(store.ingest(forged)).status.value == "rejected"
+    unchanged = store.get_object_sync(remote_object.object_id)
+    assert unchanged is not None and unchanged.presence is PresenceState.PRESENT
+
+
+def test_action_coverage_cannot_borrow_another_capability_policy(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        enabled_capability_keys=(
+            "databricks.workspace.children.read",
+            "databricks.workspace.metadata.read",
+        ),
+        now=NOW,
+    )
+    metadata_scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.OBJECT, seeded.workspace_root_object_id),
+        object_type="folder",
+        facet="metadata",
+        capability_key="databricks.workspace.metadata.read",
+    )
+    action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.metadata.read",
+        capability_version="1",
+        target=metadata_scope.target,
+        requested_scopes=(metadata_scope,),
+    )
+    run(store.enqueue(action))
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+    assert lease is not None
+    run(store.mark_running(action_id=action.action_id, lease_id=lease.lease_id, started_at=NOW))
+    for capability_key in (None, "databricks.workspace.children.read"):
+        borrowed_scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(
+                TargetKind.CONFIGURED_SCOPE,
+                seeded.workspace_root_scope.scope_id,
+            ),
+            object_type="folder",
+            facet="membership",
+            capability_key=capability_key,
+        )
+        forged = ObservationBatch(
+            batch_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            action_id=action.action_id,
+            observed_at=NOW + timedelta(seconds=1),
+            received_at=NOW + timedelta(seconds=1),
+            coverage=(
+                CoverageDeclaration(
+                    borrowed_scope,
+                    CollectionCoverage.COMPLETE,
+                    (AbsenceAuthority.RELATIONSHIP,),
+                ),
+            ),
+        )
+        assert run(store.ingest(forged)).status.value == "rejected"
+
+
+def test_incidental_coverage_requires_enabled_capability_but_running_action_keeps_policy(
+    tmp_path,
+) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        enabled_capability_keys=(
+            "databricks.workspace.children.read",
+            "databricks.workspace.metadata.read",
+        ),
+        now=NOW,
+    )
+    membership_scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+    )
+    store._connection.execute(
+        """
+        UPDATE capability_bindings SET enabled = 0
+        WHERE capability_key = 'databricks.workspace.children.read'
+        """
+    )
+    incidental = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW,
+        coverage=(CoverageDeclaration(membership_scope, CollectionCoverage.COMPLETE),),
+    )
+    assert run(store.ingest(incidental)).status.value == "rejected"
+
+    metadata_scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.OBJECT, seeded.workspace_root_object_id),
+        object_type="folder",
+        facet="metadata",
+        capability_key="databricks.workspace.metadata.read",
+    )
+    action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.metadata.read",
+        capability_version="1",
+        target=metadata_scope.target,
+        requested_scopes=(metadata_scope,),
+    )
+    run(store.enqueue(action))
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+    assert lease is not None
+    run(store.mark_running(action_id=action.action_id, lease_id=lease.lease_id, started_at=NOW))
+    store._connection.execute(
+        """
+        UPDATE capability_bindings SET enabled = 0
+        WHERE capability_key = 'databricks.workspace.metadata.read'
+        """
+    )
+    running_result = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        action_id=action.action_id,
+        observed_at=NOW + timedelta(seconds=1),
+        received_at=NOW + timedelta(seconds=1),
+        coverage=(CoverageDeclaration(metadata_scope, CollectionCoverage.COMPLETE),),
+    )
+    assert run(store.ingest(running_result)).status.value == "accepted"
+
+
 def test_rejected_items_roll_back_identity_and_journal_but_keep_valid_sibling(
     tmp_path,
 ) -> None:
@@ -366,6 +599,7 @@ def test_rejected_items_roll_back_identity_and_journal_but_keep_valid_sibling(
         target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
         object_type="folder",
         facet="membership",
+        capability_key="databricks.workspace.children.read",
         coverage=RefreshCoverage.FACET,
     )
     valid = FacetObservation(

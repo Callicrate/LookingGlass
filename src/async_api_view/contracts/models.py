@@ -596,6 +596,36 @@ class ConnectionBinding(JSONDTO):
 
 
 @dataclass(frozen=True, slots=True)
+class CapabilityCoveragePolicy(JSONDTO):
+    target_kind: TargetKind
+    facet: str
+    coverage: RefreshCoverage
+    maximum_completeness: CollectionCoverage
+    absence_authority: tuple[AbsenceAuthority, ...] = ()
+
+    def __post_init__(self) -> None:
+        require_enum(self.target_kind, TargetKind, "target_kind")
+        require_contract_key(self.facet, "facet")
+        require_enum(self.coverage, RefreshCoverage, "coverage")
+        require_enum(
+            self.maximum_completeness,
+            CollectionCoverage,
+            "maximum_completeness",
+        )
+        object.__setattr__(
+            self,
+            "absence_authority",
+            normalize_enum_tuple(
+                self.absence_authority,
+                AbsenceAuthority,
+                "absence_authority",
+            ),
+        )
+        if self.maximum_completeness is not CollectionCoverage.COMPLETE and self.absence_authority:
+            raise ValueError("absence authority requires complete maximum coverage")
+
+
+@dataclass(frozen=True, slots=True)
 class CapabilityBinding(JSONDTO):
     capability_binding_id: str | UUID
     connection_binding_id: str | UUID
@@ -608,6 +638,7 @@ class CapabilityBinding(JSONDTO):
     selection_priority: int = 0
     collateral_effects: tuple[str, ...] = ()
     mitigations: tuple[str, ...] = ()
+    coverage_policies: tuple[CapabilityCoveragePolicy, ...] = ()
 
     def __post_init__(self) -> None:
         _set_uuid(self, "capability_binding_id")
@@ -621,6 +652,15 @@ class CapabilityBinding(JSONDTO):
             "target_kinds",
             normalize_enum_tuple(self.target_kinds, TargetKind, "target_kinds"),
         )
+        object.__setattr__(
+            self,
+            "coverage_policies",
+            normalize_instance_tuple(
+                self.coverage_policies,
+                CapabilityCoveragePolicy,
+                "coverage_policies",
+            ),
+        )
         if self.operation_class is not OperationClass.OBSERVE:
             raise ValueError("version 1 capabilities must be remote-observation-only")
         if not self.target_kinds or not self.produced_facets:
@@ -632,6 +672,16 @@ class CapabilityBinding(JSONDTO):
             require_text(effect, "collateral effect", max_length=1024)
         for mitigation in self.mitigations:
             require_text(mitigation, "mitigation", max_length=1024)
+        policy_keys = [
+            (policy.target_kind, policy.facet, policy.coverage) for policy in self.coverage_policies
+        ]
+        if len(set(policy_keys)) != len(policy_keys):
+            raise ValueError("capability coverage policies must be unique")
+        for policy in self.coverage_policies:
+            if policy.target_kind not in self.target_kinds:
+                raise ValueError("coverage policy target kind is not enabled")
+            if policy.facet not in self.produced_facets:
+                raise ValueError("coverage policy facet is not produced")
 
 
 @dataclass(frozen=True, slots=True)

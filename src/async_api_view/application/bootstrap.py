@@ -9,10 +9,14 @@ from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from async_api_view.contracts import (
+    AbsenceAuthority,
     CapabilityBinding,
+    CapabilityCoveragePolicy,
+    CollectionCoverage,
     ConnectionBinding,
     OperationClass,
     PresenceState,
+    RefreshCoverage,
     RemoteObject,
     TargetKind,
 )
@@ -47,6 +51,34 @@ _CAPABILITIES: dict[str, tuple[tuple[TargetKind, ...], tuple[str, ...]]] = {
     "databricks.uc.relations.read": ((TargetKind.OBJECT,), ("attributes",)),
     "databricks.uc.volumes.read": ((TargetKind.OBJECT,), ("attributes",)),
 }
+
+
+def _coverage_policies(
+    capability_key: str, target_kinds: tuple[TargetKind, ...]
+) -> tuple[CapabilityCoveragePolicy, ...]:
+    if capability_key == "databricks.workspace.metadata.read":
+        return (
+            CapabilityCoveragePolicy(
+                TargetKind.OBJECT,
+                "metadata",
+                RefreshCoverage.FACET,
+                CollectionCoverage.COMPLETE,
+            ),
+        )
+    if capability_key == "databricks.workspace.content.read":
+        return ()
+    facet = "membership" if capability_key == "databricks.workspace.children.read" else "attributes"
+    return tuple(
+        CapabilityCoveragePolicy(
+            target_kind,
+            facet,
+            coverage,
+            CollectionCoverage.COMPLETE,
+            (AbsenceAuthority.RELATIONSHIP,),
+        )
+        for target_kind in target_kinds
+        for coverage in (RefreshCoverage.FACET, RefreshCoverage.COLLECTION_MEMBERS)
+    )
 
 
 class SystemBootstrapService:
@@ -206,6 +238,7 @@ class SystemBootstrapService:
                         "fixed registered CLI command mapping",
                         "configured scope allowlist",
                     ),
+                    coverage_policies=_coverage_policies(capability_key, target_kinds),
                 ),
                 now=timestamp,
             )

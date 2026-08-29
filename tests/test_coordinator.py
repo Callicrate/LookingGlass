@@ -38,6 +38,7 @@ def _scope(system_id: str, configured_scope_id: str) -> RefreshScope:
         target=TargetRef(TargetKind.CONFIGURED_SCOPE, configured_scope_id),
         object_type="folder",
         facet="membership",
+        capability_key="databricks.workspace.children.read",
         coverage=RefreshCoverage.FACET,
     )
 

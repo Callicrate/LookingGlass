@@ -9,6 +9,7 @@ import pytest
 from async_api_view.contracts import (
     CONTRACT_VERSION,
     V1_TYPE_DEFINITION_BY_KEY,
+    AbsenceAuthority,
     ActionAttempt,
     ActionCompletion,
     ActionLease,
@@ -17,6 +18,7 @@ from async_api_view.contracts import (
     ActionRecord,
     AdapterAction,
     CapabilityBinding,
+    CapabilityCoveragePolicy,
     CollectionCoverage,
     ConnectionBinding,
     CoverageDeclaration,
@@ -291,6 +293,29 @@ def test_contract_models_reject_raw_nested_dto_values() -> None:
             type_key="file",
             version="1",
             facets=({"facet": "metadata"},),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="coverage_policies must be"):
+        CapabilityBinding(
+            capability_binding_id=uuid4(),
+            connection_binding_id=uuid4(),
+            capability_key="example.read",
+            capability_version="1",
+            operation_class=OperationClass.OBSERVE,
+            target_kinds=(TargetKind.OBJECT,),
+            produced_facets=("metadata",),
+            enabled=True,
+            coverage_policies=({"facet": "metadata"},),  # type: ignore[arg-type]
+        )
+
+
+def test_coverage_policy_rejects_absence_without_complete_authority() -> None:
+    with pytest.raises(ValueError, match="complete maximum coverage"):
+        CapabilityCoveragePolicy(
+            target_kind=TargetKind.OBJECT,
+            facet="metadata",
+            coverage=RefreshCoverage.FACET,
+            maximum_completeness=CollectionCoverage.PARTIAL,
+            absence_authority=(AbsenceAuthority.OBJECT_PRESENCE,),
         )
 
 
