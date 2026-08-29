@@ -69,6 +69,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0012_deferred_scope_policy_indexes",
             "0013_capability_coverage_policy",
             "0014_coverage_policy_initialization",
+            "0015_relationship_coverage_watermarks",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -354,6 +355,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0012_deferred_scope_policy_indexes",
         "0013_capability_coverage_policy",
         "0014_coverage_policy_initialization",
+        "0015_relationship_coverage_watermarks",
     )
     assert versions == (expected,) * workers
 
@@ -489,6 +491,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0012_deferred_scope_policy_indexes",
             "0013_capability_coverage_policy",
             "0014_coverage_policy_initialization",
+            "0015_relationship_coverage_watermarks",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":

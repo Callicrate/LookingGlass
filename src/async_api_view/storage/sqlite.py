@@ -3592,6 +3592,46 @@ class SQLiteStore:
             scope = declaration.scope
             if scope.system_id != batch.system_id:
                 raise ValueError("coverage_system_mismatch")
+            if scope.target.kind is TargetKind.OBJECT:
+                target_exists = connection.execute(
+                    """
+                    SELECT 1 FROM remote_objects
+                    WHERE object_id = ? AND system_id = ? AND object_type = ?
+                    """,
+                    (scope.target.target_id, batch.system_id, scope.object_type),
+                ).fetchone()
+                if target_exists is None:
+                    raise ValueError("coverage_object_target_unavailable")
+            elif scope.target.kind is TargetKind.CONFIGURED_SCOPE:
+                configured_target = connection.execute(
+                    """
+                    SELECT configured.object_id, configured.object_type,
+                           object.system_id AS object_system_id,
+                           object.object_type AS canonical_object_type
+                    FROM configured_scopes AS configured
+                    LEFT JOIN remote_objects AS object
+                      ON object.object_id = configured.object_id
+                    WHERE configured.scope_id = ? AND configured.system_id = ?
+                    """,
+                    (scope.target.target_id, batch.system_id),
+                ).fetchone()
+                if configured_target is None or (
+                    configured_target["object_type"] != scope.object_type
+                    or (
+                        configured_target["object_id"] is not None
+                        and (
+                            configured_target["object_system_id"] != batch.system_id
+                            or configured_target["canonical_object_type"] != scope.object_type
+                        )
+                    )
+                ):
+                    raise ValueError("coverage_configured_target_unavailable")
+                if (
+                    scope.facet == "membership"
+                    and AbsenceAuthority.RELATIONSHIP in declaration.absence_authority
+                    and configured_target["object_id"] is None
+                ):
+                    raise ValueError("coverage_relationship_target_unavailable")
             definition = V1_TYPE_DEFINITION_BY_KEY.get(scope.object_type)
             if definition is None or scope.facet not in {item.facet for item in definition.facets}:
                 raise ValueError("coverage_unsupported_facet")
@@ -3944,6 +3984,26 @@ class SQLiteStore:
         subject_id: str,
         object_id: str,
     ) -> None:
+        projected_presence = observation.presence
+        projected_at = batch.observed_at
+        projected_support = observation.observation_id
+        if observation.predicate == "contains":
+            watermark = connection.execute(
+                """
+                SELECT observed_at, supporting_observation_id
+                FROM relationship_coverage_watermarks
+                WHERE system_id = ? AND subject_id = ? AND predicate = ?
+                """,
+                (batch.system_id, subject_id, observation.predicate),
+            ).fetchone()
+            if watermark is not None:
+                watermark_at = _dt(watermark["observed_at"])
+                if watermark_at is None:  # pragma: no cover - schema invariant
+                    raise ValueError("relationship coverage watermark lacks observed time")
+                if batch.observed_at < watermark_at:
+                    projected_presence = PresenceState.ABSENT
+                    projected_at = watermark_at
+                    projected_support = watermark["supporting_observation_id"]
         existing = connection.execute(
             """
             SELECT * FROM relationships
@@ -3951,7 +4011,7 @@ class SQLiteStore:
             """,
             (batch.system_id, subject_id, observation.predicate, object_id),
         ).fetchone()
-        if existing is not None and batch.observed_at < _dt(existing["observed_at"]):
+        if existing is not None and projected_at < _dt(existing["observed_at"]):
             return
         relationship_id = (
             existing["relationship_id"]
@@ -3980,9 +4040,9 @@ class SQLiteStore:
                 subject_id,
                 observation.predicate,
                 object_id,
-                observation.presence.value,
-                _utc_text(batch.observed_at),
-                observation.observation_id,
+                projected_presence.value,
+                _utc_text(projected_at),
+                projected_support,
             ),
         )
 
@@ -4157,6 +4217,23 @@ class SQLiteStore:
         subject_id = self.resolve_target_object_id(scope)
         if subject_id is None:
             return
+        connection.execute(
+            """
+            INSERT INTO relationship_coverage_watermarks (
+                system_id, subject_id, predicate, observed_at, supporting_observation_id
+            ) VALUES (?, ?, 'contains', ?, ?)
+            ON CONFLICT(system_id, subject_id, predicate) DO UPDATE SET
+                observed_at = excluded.observed_at,
+                supporting_observation_id = excluded.supporting_observation_id
+            WHERE excluded.observed_at >= relationship_coverage_watermarks.observed_at
+            """,
+            (
+                batch.system_id,
+                subject_id,
+                _utc_text(batch.observed_at),
+                coverage_observation_id,
+            ),
+        )
         rows = connection.execute(
             """
             SELECT relationship_id, object_id, observed_at FROM relationships

@@ -175,6 +175,304 @@ def test_complete_omission_never_overwrites_a_newer_relationship(tmp_path) -> No
     assert store.count_related_objects_sync(parent) == 0
 
 
+def test_newer_complete_membership_suppresses_delayed_unknown_edge(tmp_path) -> None:
+    path = tmp_path / "state.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        parent = seeded.workspace_root_object_id
+        membership = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+            coverage=RefreshCoverage.FACET,
+        )
+        boundary_at = NOW + timedelta(minutes=10)
+        empty_boundary = ObservationBatch(
+            batch_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=boundary_at,
+            received_at=boundary_at,
+            coverage=(
+                CoverageDeclaration(
+                    scope=membership,
+                    completeness=CollectionCoverage.COMPLETE,
+                    absence_authority=(AbsenceAuthority.RELATIONSHIP,),
+                ),
+            ),
+        )
+        assert run(store.ingest(empty_boundary)).status.value == "accepted"
+        store._connection.execute("DROP TABLE relationship_coverage_watermarks")
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            ("0015_relationship_coverage_watermarks",),
+        )
+
+    child = ObjectLocator(
+        object_type="file",
+        source_kind="databricks.workspace.file",
+        external_key="/Shared/delayed.py",
+        display_name="delayed.py",
+    )
+    delayed = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=boundary_at + timedelta(minutes=1),
+        relationship_observations=(
+            RelationshipObservation(
+                observation_id=uuid4(),
+                subject=ObjectLocator(object_type="folder", object_id=parent),
+                predicate="contains",
+                object=child,
+                presence=PresenceState.PRESENT,
+            ),
+        ),
+    )
+    newer = replace(
+        delayed,
+        batch_id=uuid4(),
+        observed_at=boundary_at + timedelta(minutes=1),
+        received_at=boundary_at + timedelta(minutes=1),
+        relationship_observations=(
+            replace(delayed.relationship_observations[0], observation_id=uuid4()),
+        ),
+    )
+
+    with SQLiteStore(path) as reopened:
+        assert run(reopened.ingest(delayed)).status.value == "accepted"
+        relationship = reopened.list_relationships_sync(parent)[0]
+        assert relationship.presence is PresenceState.ABSENT
+        assert relationship.observed_at == boundary_at
+        assert reopened.count_related_objects_sync(parent) == 0
+
+        assert run(reopened.ingest(newer)).status.value == "accepted"
+        relationship = reopened.list_relationships_sync(parent)[0]
+        assert relationship.presence is PresenceState.PRESENT
+        assert relationship.observed_at == newer.observed_at
+        assert reopened.count_related_objects_sync(parent) == 1
+
+
+def test_migration_reconciles_preexisting_stale_edge_and_skips_unknown_credit(
+    tmp_path,
+) -> None:
+    path = tmp_path / "legacy-stale.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local",
+            profile="DEFAULT",
+            workspace_root="/Shared",
+            enabled_capability_keys=(
+                "databricks.workspace.children.read",
+                "databricks.uc.catalogs.read",
+            ),
+            now=NOW,
+        )
+        assert seeded.unity_catalog_root_scope is not None
+        parent = seeded.workspace_root_object_id
+        membership = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+            coverage=RefreshCoverage.FACET,
+        )
+        child = ObjectLocator(
+            object_type="file",
+            source_kind="databricks.workspace.file",
+            external_key="/Shared/preexisting.py",
+            display_name="preexisting.py",
+        )
+        edge = RelationshipObservation(
+            observation_id=uuid4(),
+            subject=ObjectLocator(object_type="folder", object_id=parent),
+            predicate="contains",
+            object=child,
+            presence=PresenceState.PRESENT,
+        )
+        delayed = ObservationBatch(
+            batch_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=NOW,
+            received_at=NOW,
+            relationship_observations=(edge,),
+        )
+        boundary_at = NOW + timedelta(minutes=10)
+        boundary = ObservationBatch(
+            batch_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=boundary_at,
+            received_at=boundary_at,
+            coverage=(
+                CoverageDeclaration(
+                    scope=membership,
+                    completeness=CollectionCoverage.COMPLETE,
+                    absence_authority=(AbsenceAuthority.RELATIONSHIP,),
+                ),
+            ),
+        )
+        assert run(store.ingest(delayed)).status.value == "accepted"
+        assert run(store.ingest(boundary)).status.value == "accepted"
+
+        store._connection.execute(
+            """
+            UPDATE relationships
+            SET presence = 'present', observed_at = ?, supporting_observation_id = ?
+            WHERE subject_id = ? AND predicate = 'contains'
+            """,
+            (
+                NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                edge.observation_id,
+                parent,
+            ),
+        )
+        store._connection.execute(
+            """
+            INSERT INTO refresh_credit (
+                credit_id, observation_id, system_id, target_kind, target_id,
+                object_type, facet, coverage, field_mask_json, observed_at, capability_key
+            )
+            SELECT ?, observation_id, system_id, 'configured_scope', ?, object_type, facet,
+                   coverage, field_mask_json, observed_at, capability_key
+            FROM refresh_credit
+            WHERE observation_id = ? AND target_kind = 'configured_scope' AND target_id = ?
+            """,
+            (
+                str(uuid4()),
+                seeded.unity_catalog_root_scope.scope_id,
+                store._coverage_observation_id(boundary.batch_id, membership),
+                seeded.workspace_root_scope.scope_id,
+            ),
+        )
+        store._connection.execute(
+            """
+            INSERT INTO refresh_credit (
+                credit_id, observation_id, system_id, target_kind, target_id,
+                object_type, facet, coverage, field_mask_json, observed_at, capability_key
+            )
+            SELECT ?, observation_id, system_id, 'object', ?, object_type, facet,
+                   coverage, field_mask_json, observed_at, capability_key
+            FROM refresh_credit
+            WHERE observation_id = ? AND target_kind = 'configured_scope' AND target_id = ?
+            """,
+            (
+                str(uuid4()),
+                str(uuid4()),
+                store._coverage_observation_id(boundary.batch_id, membership),
+                seeded.workspace_root_scope.scope_id,
+            ),
+        )
+        store._connection.execute("DROP TABLE relationship_coverage_watermarks")
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            ("0015_relationship_coverage_watermarks",),
+        )
+
+    with SQLiteStore(path) as migrated:
+        relationship = migrated.list_relationships_sync(parent)[0]
+        assert relationship.presence is PresenceState.ABSENT
+        assert relationship.observed_at == boundary_at
+        assert migrated.count_related_objects_sync(parent) == 0
+        assert (
+            migrated._connection.execute(
+                "SELECT COUNT(*) FROM relationship_coverage_watermarks"
+            ).fetchone()[0]
+            == 1
+        )
+        assert migrated._connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_coverage_rejects_unknown_and_cross_system_targets(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "invalid-coverage-target.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        enabled_capability_keys=(
+            "databricks.workspace.children.read",
+            "databricks.uc.catalogs.read",
+        ),
+        now=NOW,
+    )
+    other = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="other", profile="OTHER", workspace_root="/Other", now=NOW
+    )
+    assert seeded.unity_catalog_root_scope is not None
+    unity_catalog_object_id = seeded.unity_catalog_root_scope.object_id
+    assert unity_catalog_object_id is not None
+
+    def assert_rejected(target: TargetRef) -> None:
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=target,
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+            coverage=RefreshCoverage.FACET,
+        )
+        batch = ObservationBatch(
+            batch_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=NOW,
+            received_at=NOW,
+            coverage=(
+                CoverageDeclaration(
+                    scope=scope,
+                    completeness=CollectionCoverage.COMPLETE,
+                    absence_authority=(AbsenceAuthority.RELATIONSHIP,),
+                ),
+            ),
+        )
+        assert run(store.ingest(batch)).status.value == "rejected"
+        assert (
+            store._connection.execute(
+                "SELECT COUNT(*) FROM observation_batches WHERE batch_id = ?",
+                (batch.batch_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+    targets = (
+        TargetRef(TargetKind.OBJECT, uuid4()),
+        TargetRef(TargetKind.OBJECT, other.workspace_root_object_id),
+        TargetRef(TargetKind.CONFIGURED_SCOPE, other.workspace_root_scope.scope_id),
+        TargetRef(TargetKind.OBJECT, unity_catalog_object_id),
+        TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.unity_catalog_root_scope.scope_id),
+    )
+    for target in targets:
+        assert_rejected(target)
+
+    store._connection.execute(
+        "UPDATE configured_scopes SET object_id = ? WHERE scope_id = ?",
+        (other.workspace_root_object_id, seeded.workspace_root_scope.scope_id),
+    )
+    assert_rejected(TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id))
+    store._connection.execute(
+        "UPDATE configured_scopes SET object_id = NULL WHERE scope_id = ?",
+        (seeded.workspace_root_scope.scope_id,),
+    )
+    assert_rejected(TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id))
+
+
 def test_partial_facet_patch_never_clears_unobserved_fields(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(

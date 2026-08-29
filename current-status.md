@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 08:03 ET
+Updated: 2026-08-29 08:13 ET
 
 ## Goal
 
@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 324 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: two high upgrade blockers in membership migration `0015` are repaired and under post-fix review; migration identity plus five release-hardening findings remain queued.
+- Active review round: membership migration `0015` is independently clear and applied locally; migration identity plus five release-hardening findings remain queued.
 - Next progress report due: 2026-08-29 09:03 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -88,7 +88,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close independent review of the non-blocking runtime-startup repair.
 - [x] Distinguish current manual refresh from planned Phase 4 automation throughout operator and architecture documentation.
 - [x] Close independent review of action-linked ingestion lease fencing.
-- [ ] Close independent review of authoritative complete-membership watermarks.
+- [x] Close independent review of authoritative complete-membership watermarks.
 - [x] Close independent review of coordinator claim expiry fencing.
 - [ ] Reject incompatible non-Rookery schemas before mutating the migration ledger.
 - [ ] Verify every packaged runtime asset and smoke-test the installed wheel.
@@ -110,6 +110,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Coordinator dispositions and action attachment now compare `leased_until` to fresh store time inside their immediate transaction; exact-expiry regression covers all terminal/deferred outcomes and action admission rollback.
 - The post-fix coordinator review cleared new/existing/racing action attachment, all dispositions, recovery, strict expiry, rollback, and deterministic clock isolation with no remaining finding.
 - Migration `0015` persists the latest relationship-authoritative complete-membership boundary per collection, backfills legacy coverage journals, and projects later-received older unknown edges as absent at that newer boundary.
+- The final migration review cleared stale legacy projection reconciliation, unknown/cross-system/wrong-type target skipping, runtime target validation, restart/concurrency behavior, and foreign-key integrity with no remaining finding.
+- The real ignored database was backed up to `.local/backups/rookery-20260829-0812-pre-0015.sqlite3`, migrated through `0015`, and reports integrity `ok`, zero foreign-key violations, and zero historical membership watermarks to backfill.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
@@ -275,7 +277,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Forged metadata `OBJECT_PRESENCE` authority is rejected, explicit test-only authority still exercises monotonic absence, and relationship-complete collection behavior remains authorized.
 - The ignored local database is migrated through `0013_capability_coverage_policy`; integrity is `ok`, foreign keys are clean, and six configured capabilities carry non-empty explicit policies.
 - Migration `0014` adds an explicit policy-initialization bit: legacy rows may hydrate once, intentional empty policy remains deny-all, and same-version changes are rejected after initialization.
-- The ignored local database is migrated through `0014_coverage_policy_initialization`; integrity and foreign keys are clean, and all seven configured capability rows are initialized.
+- The ignored local database is migrated through `0015_relationship_coverage_watermarks`; integrity and foreign keys are clean, all seven configured capability rows are initialized, and no historical membership watermark required backfill.
 - All system/binding/capability/scope/identity upserts and reconciliation now share one outer `BEGIN IMMEDIATE`; a late bootstrap failure rolls profile rotation and removal state back completely.
 - Final remote-start authorization compares a SHA-256 digest of the exact adapter/settings/secret-reference binding used to build argv; a concurrent profile rotation cancels stale dispatch with zero runner calls.
 - The 06:43 Murmuration tending pass again found no Rookery-specific public context and remained read-only because the native project profile is unavailable.
