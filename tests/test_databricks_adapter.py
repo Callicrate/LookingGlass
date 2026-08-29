@@ -35,6 +35,7 @@ from async_api_view.contracts import (
     CapabilityBinding,
     CollectionCoverage,
     ConnectionBinding,
+    ErrorClass,
     GuardDecision,
     GuardDisposition,
     IngestionResult,
@@ -802,6 +803,15 @@ class _FailRunner(_Runner):
         )
 
 
+class _TimeoutRunner(_Runner):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, *_: object, **__: object) -> CliExecution:
+        self.calls += 1
+        raise CliTimeout("timed out")
+
+
 class _StaleLifecycle(_Lifecycle):
     async def record_attempt(self, attempt: object, *, lease_id: str) -> None:
         raise RuntimeError(f"stale lease {lease_id}")
@@ -958,6 +968,59 @@ def test_worker_maps_all_ingestion_statuses_for_complete_object_read(
     asyncio.run(worker.run_once())
     completed = [event[2] for event in lifecycle.events if event[0] == "complete"]
     assert completed[-1].outcome is expected
+
+
+def test_retryable_failure_schedules_one_durable_attempt_per_lease() -> None:
+    action = _action("databricks.uc.catalogs.read")
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {"profile": "local"},
+    )
+    lifecycle = _Lifecycle()
+    timeout_runner = _TimeoutRunner()
+    first_worker = DatabricksWorker(
+        worker_id="first",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC), attempt_ordinal=1)),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=_Ingestion(),
+        targets=_Targets(),
+        runner=timeout_runner,
+        max_attempts=2,
+    )
+
+    assert asyncio.run(first_worker.run_once())
+
+    attempts = [event[2] for event in lifecycle.events if event[0] == "attempt"]
+    assert timeout_runner.calls == 1
+    assert len(attempts) == 1
+    assert attempts[0].ordinal == 1
+    assert attempts[0].error_class is ErrorClass.CONNECTION_TIMEOUT
+    assert attempts[0].retry_at - attempts[0].ended_at == timedelta(seconds=1)
+    assert not any(event[0] == "complete" for event in lifecycle.events)
+
+    second_worker = DatabricksWorker(
+        worker_id="second",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC), attempt_ordinal=2)),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=_Ingestion(),
+        targets=_Targets(),
+        runner=_Runner(),
+        max_attempts=2,
+    )
+
+    assert asyncio.run(second_worker.run_once())
+    attempts = [event[2] for event in lifecycle.events if event[0] == "attempt"]
+    completed = [event[2] for event in lifecycle.events if event[0] == "complete"]
+    assert [attempt.ordinal for attempt in attempts] == [1, 2]
+    assert completed[-1].outcome is ActionOutcome.PARTIAL
 
 
 def test_stale_lease_or_guard_failure_never_finalizes_action() -> None:

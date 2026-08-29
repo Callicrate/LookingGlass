@@ -476,6 +476,79 @@ def test_expired_running_lease_reopens_with_new_authority_and_preserves_start(tm
         assert reopened.get_stored_action(action.action_id).started_at == NOW
 
 
+def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path) -> None:
+    path = tmp_path / "state.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+        )
+        action = AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="databricks.workspace.children.read",
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+        run(store.enqueue(action))
+        first = run(store.lease_next(adapter_key="databricks", worker_id="first", now=NOW))
+        assert first is not None and first.attempt_ordinal == 1
+        run(store.mark_running(action_id=action.action_id, lease_id=first.lease_id, started_at=NOW))
+        retry_at = NOW + timedelta(seconds=5)
+        run(
+            store.record_attempt(
+                ActionAttempt(
+                    uuid4(),
+                    action.action_id,
+                    1,
+                    NOW,
+                    NOW + timedelta(seconds=1),
+                    ActionOutcome.FAILED,
+                    ErrorClass.CONNECTION_TIMEOUT,
+                    retry_at=retry_at,
+                ),
+                lease_id=first.lease_id,
+            )
+        )
+        assert store.get_stored_action(action.action_id).state.value == "retry_wait"
+
+    with SQLiteStore(path) as reopened:
+        assert (
+            run(
+                reopened.lease_next(
+                    adapter_key="databricks",
+                    worker_id="early",
+                    now=retry_at - timedelta(microseconds=1),
+                )
+            )
+            is None
+        )
+        second = run(
+            reopened.lease_next(adapter_key="databricks", worker_id="second", now=retry_at)
+        )
+        assert second is not None
+        assert second.action.action_id == action.action_id
+        assert second.attempt_ordinal == 2
+        run(
+            reopened.mark_running(
+                action_id=action.action_id,
+                lease_id=second.lease_id,
+                started_at=retry_at,
+            )
+        )
+        assert reopened.get_stored_action(action.action_id).retry_at is None
+
+
 def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(

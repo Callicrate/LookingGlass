@@ -77,6 +77,7 @@ class StoredAction:
     lease_id: str | None
     lease_worker_id: str | None
     leased_until: datetime | None
+    retry_at: datetime | None
     error_class: str | None
     redacted_diagnostic: str | None
 

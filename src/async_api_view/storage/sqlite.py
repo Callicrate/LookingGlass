@@ -1711,6 +1711,7 @@ class SQLiteStore:
             lease_id=row["lease_id"],
             lease_worker_id=row["lease_worker_id"],
             leased_until=_dt(row["leased_until"]),
+            retry_at=_dt(row["retry_at"]),
             error_class=row["error_class"],
             redacted_diagnostic=row["redacted_diagnostic"],
         )
@@ -2138,8 +2139,19 @@ class SQLiteStore:
             )
             if result.rowcount != 1:  # pragma: no cover - transaction invariant
                 return None
+            attempt_ordinal = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM action_attempts WHERE action_id = ?",
+                    (row["action_id"],),
+                ).fetchone()[0]
+            )
             action = self._action_from_row(row)
-        return ActionLease(action=action, lease_id=lease_id, leased_until=leased_until)
+        return ActionLease(
+            action=action,
+            lease_id=lease_id,
+            leased_until=leased_until,
+            attempt_ordinal=attempt_ordinal,
+        )
 
     async def mark_running(self, *, action_id: str, lease_id: str, started_at: datetime) -> None:
         action_id = require_uuid(action_id, "action_id")
@@ -2163,7 +2175,7 @@ class SQLiteStore:
                 """
                 UPDATE adapter_actions
                 SET state = 'running', started_at = COALESCE(started_at, ?), error_class = NULL,
-                    redacted_diagnostic = NULL
+                    redacted_diagnostic = NULL, retry_at = NULL
                 WHERE action_id = ?
                 """,
                 (_utc_text(started_at), action_id),

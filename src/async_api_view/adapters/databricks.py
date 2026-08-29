@@ -56,6 +56,7 @@ DEFAULT_STDOUT_CAP = 8 * 1024 * 1024
 DEFAULT_STDERR_CAP = 64 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_HEARTBEAT_SECONDS = 15.0
+MAX_RETRY_DELAY_SECONDS = 30.0
 MAX_COLLECTION_ITEMS = 10_000
 MAX_TABLE_COLUMNS = 1_000
 MAX_JSON_DEPTH = 32
@@ -1085,6 +1086,12 @@ def _retryable(error: ErrorClass) -> bool:
     }
 
 
+def _retry_delay(error: ErrorClass, ordinal: int) -> timedelta:
+    base_seconds = 5.0 if error is ErrorClass.DOWNSTREAM_RATE_LIMIT else 1.0
+    seconds = min(MAX_RETRY_DELAY_SECONDS, base_seconds * (2 ** min(ordinal - 1, 5)))
+    return timedelta(seconds=seconds)
+
+
 class DatabricksWorker:
     """Queue worker that has no storage dependency or direct canonical writes."""
 
@@ -1171,65 +1178,31 @@ class DatabricksWorker:
         await self.lifecycle.mark_running(
             action_id=action.action_id, lease_id=lease.lease_id, started_at=current
         )
-        for ordinal in range(1, self.max_attempts + 1):
-            started = datetime.now(UTC)
-            try:
-                execution = await self._run_with_heartbeats(lease, invocation)
-                if execution is None:
-                    return
-                normalized = normalize(
-                    action=action,
-                    binding=binding,
-                    target=target,
-                    stdout=execution.stdout,
-                    observed_at=datetime.now(UTC),
-                )
-                result = await self.ingestion.ingest(normalized.batch)
-                if result.status.value == "rejected":
-                    error = ErrorClass.ADAPTER_CONTRACT_MISMATCH
-                    if not await self._record_attempt(
-                        lease,
-                        ActionAttempt(
-                            _id(action, f"attempt:{ordinal}"),
-                            action.action_id,
-                            ordinal,
-                            started,
-                            datetime.now(UTC),
-                            ActionOutcome.FAILED,
-                            error,
-                            redacted_diagnostic=safe_diagnostic(error),
-                        ),
-                    ):
-                        return
-                    await self._complete(
-                        lease, action, ActionOutcome.FAILED, error, datetime.now(UTC)
-                    )
-                    return
-                incomplete = any(
-                    declaration.completeness is not CollectionCoverage.COMPLETE
-                    for declaration in normalized.batch.coverage
-                )
-                outcome = (
-                    ActionOutcome.PARTIAL
-                    if result.status.value == "partial" or incomplete
-                    else ActionOutcome.SUCCEEDED
-                )
-                if not await self._record_attempt(
-                    lease,
-                    ActionAttempt(
-                        _id(action, f"attempt:{ordinal}"),
-                        action.action_id,
-                        ordinal,
-                        started,
-                        datetime.now(UTC),
-                        outcome,
-                    ),
-                ):
-                    return
-                await self._complete(lease, action, outcome, None, datetime.now(UTC))
+        ordinal = lease.attempt_ordinal
+        if ordinal > self.max_attempts:
+            await self._complete(
+                lease,
+                action,
+                ActionOutcome.FAILED,
+                ErrorClass.UNKNOWN_ADAPTER_FAILURE,
+                current,
+            )
+            return
+        started = datetime.now(UTC)
+        try:
+            execution = await self._run_with_heartbeats(lease, invocation)
+            if execution is None:
                 return
-            except Exception as exc:
-                error = classify_failure(exc)
+            normalized = normalize(
+                action=action,
+                binding=binding,
+                target=target,
+                stdout=execution.stdout,
+                observed_at=datetime.now(UTC),
+            )
+            result = await self.ingestion.ingest(normalized.batch)
+            if result.status.value == "rejected":
+                error = ErrorClass.ADAPTER_CONTRACT_MISMATCH
                 if not await self._record_attempt(
                     lease,
                     ActionAttempt(
@@ -1244,10 +1217,57 @@ class DatabricksWorker:
                     ),
                 ):
                     return
-                if ordinal < self.max_attempts and _retryable(error):
-                    continue
                 await self._complete(lease, action, ActionOutcome.FAILED, error, datetime.now(UTC))
                 return
+            incomplete = any(
+                declaration.completeness is not CollectionCoverage.COMPLETE
+                for declaration in normalized.batch.coverage
+            )
+            outcome = (
+                ActionOutcome.PARTIAL
+                if result.status.value == "partial" or incomplete
+                else ActionOutcome.SUCCEEDED
+            )
+            if not await self._record_attempt(
+                lease,
+                ActionAttempt(
+                    _id(action, f"attempt:{ordinal}"),
+                    action.action_id,
+                    ordinal,
+                    started,
+                    datetime.now(UTC),
+                    outcome,
+                ),
+            ):
+                return
+            await self._complete(lease, action, outcome, None, datetime.now(UTC))
+            return
+        except Exception as exc:
+            error = classify_failure(exc)
+            ended = datetime.now(UTC)
+            retry_at = (
+                ended + _retry_delay(error, ordinal)
+                if ordinal < self.max_attempts and _retryable(error)
+                else None
+            )
+            if not await self._record_attempt(
+                lease,
+                ActionAttempt(
+                    _id(action, f"attempt:{ordinal}"),
+                    action.action_id,
+                    ordinal,
+                    started,
+                    ended,
+                    ActionOutcome.FAILED,
+                    error,
+                    retry_at=retry_at,
+                    redacted_diagnostic=safe_diagnostic(error),
+                ),
+            ):
+                return
+            if retry_at is not None:
+                return
+            await self._complete(lease, action, ActionOutcome.FAILED, error, ended)
 
     async def _binding(self, action: AdapterAction) -> ConnectionBinding:
         binding = await self.bindings.get_connection_binding(action.connection_binding_id)

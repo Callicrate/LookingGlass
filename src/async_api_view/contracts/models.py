@@ -420,10 +420,17 @@ class ActionLease(JSONDTO):
     action: AdapterAction
     lease_id: str | UUID
     leased_until: datetime
+    attempt_ordinal: int = 1
 
     def __post_init__(self) -> None:
         _set_uuid(self, "lease_id")
         _set_utc(self, "leased_until")
+        if (
+            isinstance(self.attempt_ordinal, bool)
+            or not isinstance(self.attempt_ordinal, int)
+            or self.attempt_ordinal < 1
+        ):
+            raise ValueError("attempt ordinal must be at least one")
 
 
 @dataclass(frozen=True, slots=True)

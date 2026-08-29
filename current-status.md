@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 00:26 ET
+Updated: 2026-08-29 00:41 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 223 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 228 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 10 HTTP routes, verified from source.
-- Version control: local `main` contains the verified action-activity and process-unique browser-host slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: implement durable retry backoff, then prevent expired action deadlines from dispatching.
+- Version control: local `main` contains the verified action-activity, unique browser-host, and durable retry slices plus all prior correctness fixes; completed batches are committed with focused messages.
+- Active review round: terminalize expired action deadlines before dispatch, then expose bounded attempt detail.
 - Next progress report due: 2026-08-29 01:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -46,7 +46,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [ ] Tend Murmuration about hourly; the latest pass was read-only because the native project profile is not provisioned.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
-- [ ] Persist bounded retry delays instead of immediately repeating transient CLI failures.
+- [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
 - [ ] Terminalize expired action deadlines before any remote dispatch.
 
 ## Evidence and decisions
@@ -132,6 +132,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Cookie-jar regressions prove the session is absent from ordinary `127.0.0.1`, `localhost`, and unrelated `*.localhost` requests; actual Chrome resolved the generated host, activated successfully, and sent no Cookie header on the rejected direct-IP request.
 - Configuration now rejects alternate `127.x` bind addresses that cannot reliably match `.localhost` resolution; the full suite passes 223 tests at 86% branch coverage.
 - A fresh residual review also reproduced immediate retry of transient CLI failures with no `retry_at`, and dispatch after an action deadline has expired; both medium defects are next in the queue.
+- Retryable failures now write one durable attempt with a future `retry_at` and return; the worker performs at most one CLI call per lease instead of looping immediately.
+- Retry delays use bounded exponential policy: one second for timeout/transient failures, five seconds for rate limits, and a 30-second ceiling.
+- `ActionLease` now carries the transactionally elected next durable ordinal; reopen tests prove early leasing fails and ordinal two becomes eligible exactly at `retry_at`.
+- Independent review found no blocker; strict positive-integer ordinal validation was added, the suite passes 228 tests, and adapter/storage branch coverage increased to 78%/85%.
 
 ## Risks / watch list
 

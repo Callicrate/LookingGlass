@@ -9,6 +9,7 @@ import pytest
 from async_api_view.contracts import (
     CONTRACT_VERSION,
     V1_TYPE_DEFINITION_BY_KEY,
+    ActionLease,
     ActionLifecyclePort,
     ActionOutcome,
     AdapterAction,
@@ -166,6 +167,28 @@ def test_action_lifecycle_writes_require_keyword_only_lease_authority() -> None:
         assert "lease_id" in parameters
         assert parameters["lease_id"].kind is Parameter.KEYWORD_ONLY
         assert parameters["lease_id"].annotation == "str"
+
+
+@pytest.mark.parametrize("ordinal", [True, 1.5, 0])
+def test_action_lease_requires_a_positive_integer_attempt_ordinal(
+    ordinal: int | float | bool,
+) -> None:
+    refresh_scope = scope()
+    action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=refresh_scope.system_id,
+        connection_binding_id=uuid4(),
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.metadata.read",
+        capability_version="1",
+        target=refresh_scope.target,
+        requested_scopes=(refresh_scope,),
+    )
+
+    with pytest.raises(ValueError, match="attempt ordinal"):
+        ActionLease(action, uuid4(), NOW, attempt_ordinal=ordinal)
 
 
 def test_manual_and_automatic_requests_share_the_same_versioned_shape() -> None:
