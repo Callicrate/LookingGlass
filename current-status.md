@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 02:08 ET
+Updated: 2026-08-29 02:12 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 241 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 243 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: continue post-fix residual-risk review.
-- Next progress report due: 2026-08-29 02:12 ET.
+- Active review round: independently verify the green per-scope coalesced-expiry repair, then continue post-fix residual-risk review.
+- Next progress report due: 2026-08-29 03:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -55,6 +55,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Terminalize incompatible persisted intents once so valid coordinator work can progress.
 - [x] Let newer canonical-ID observations revive presence without allowing delayed resurrection.
 - [x] Keep dashboard system activity readable when the latest action contract is malformed.
+- [ ] Commit per-scope expiry pruning after the independent review clears the 243-test patch.
 
 ## Evidence and decisions
 
@@ -169,6 +170,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Dashboard system activity now reads one raw latest action summary per system through indexed correlated lookups, avoiding full contract reconstruction, malformed deadline/scope failures, and per-action scope reads.
 - The exact current Windows and Ubuntu/WSL CI sequences both pass 241 tests at 86% branch coverage; the ignored Windows environment was restored from the lockfile after WSL validation.
 - CI now validates `uv.lock` and builds the wheel/source distribution on both Windows and Ubuntu, extending the matrix to cover packaged migrations and templates rather than stopping after tests.
+- A lifecycle review reproduced that an expired request coalesced behind a non-expiring action could remain active and later inherit the shared action's successful display state.
+- The current green repair prunes each attached request's expiry before dispatch, keeps valid live authority intact, preserves the action audit link, and gives terminal scope dispositions precedence in intent views; two regressions pass within the 243-test, 86%-branch full gate.
 
 ## Risks / watch list
 
