@@ -11,7 +11,7 @@ FORBIDDEN_SDIST_PATHS = (
     "/current-status.md",
 )
 REQUIRED_WHEEL_PATHS = {
-    "async_api_view/storage/migrations/0013_capability_coverage_policy.sql",
+    "async_api_view/storage/migrations/0014_coverage_policy_initialization.sql",
     "async_api_view/web/static/favicon.svg",
     "async_api_view/web/templates/index.html",
 }

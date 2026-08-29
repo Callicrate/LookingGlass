@@ -249,6 +249,8 @@ def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:
     store.upsert_capability_binding(
         replace(
             metadata_capability,
+            capability_binding_id=uuid4(),
+            capability_version="2",
             coverage_policies=tuple(
                 replace(
                     policy,
@@ -258,6 +260,31 @@ def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:
             ),
         ),
         now=NOW,
+    )
+    ambiguous_scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.OBJECT, seeded.workspace_root_object_id),
+        object_type="folder",
+        facet="metadata",
+        capability_key="databricks.workspace.metadata.read",
+    )
+    ambiguous = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW,
+        coverage=(CoverageDeclaration(ambiguous_scope, CollectionCoverage.UNKNOWN),),
+    )
+    assert run(store.ingest(ambiguous)).status.value == "rejected"
+    store._connection.execute(
+        """
+        UPDATE capability_bindings SET enabled = 0
+        WHERE capability_binding_id = ?
+        """,
+        (metadata_capability.capability_binding_id,),
     )
     locator = ObjectLocator(
         object_type="file",

@@ -812,6 +812,16 @@ class SQLiteStore:
         self, capability: CapabilityBinding, *, now: datetime | None = None
     ) -> None:
         timestamp = _utc_text(now or _now())
+        target_kinds_json = _json_text(
+            [item.value for item in capability.target_kinds], field_name="target_kinds"
+        )
+        produced_facets_json = _json_text(
+            list(capability.produced_facets), field_name="produced_facets"
+        )
+        coverage_policies_json = _json_text(
+            [policy.to_dict() for policy in capability.coverage_policies],
+            field_name="coverage_policies",
+        )
         with self._immediate_transaction() as connection:
             if (
                 connection.execute(
@@ -821,15 +831,42 @@ class SQLiteStore:
                 is None
             ):
                 raise ValueError("capability binding references an unknown connection binding")
+            existing = connection.execute(
+                """
+                SELECT connection_binding_id, capability_key, capability_version,
+                       operation_class, target_kinds_json, produced_facets_json,
+                       coverage_policies_json, coverage_policy_initialized
+                FROM capability_bindings WHERE capability_binding_id = ?
+                """,
+                (capability.capability_binding_id,),
+            ).fetchone()
+            if existing is not None:
+                immutable_values = (
+                    (existing["connection_binding_id"], capability.connection_binding_id),
+                    (existing["capability_key"], capability.capability_key),
+                    (existing["capability_version"], capability.capability_version),
+                    (existing["operation_class"], capability.operation_class.value),
+                    (existing["target_kinds_json"], target_kinds_json),
+                    (existing["produced_facets_json"], produced_facets_json),
+                )
+                if any(stored != requested for stored, requested in immutable_values):
+                    raise ValueError("capability version contract is immutable")
+                stored_policy = existing["coverage_policies_json"]
+                if (
+                    existing["coverage_policy_initialized"]
+                    and stored_policy != coverage_policies_json
+                ):
+                    raise ValueError("capability coverage policy requires a version change")
             connection.execute(
                 """
                 INSERT INTO capability_bindings (
                     capability_binding_id, connection_binding_id, capability_key,
                     capability_version, operation_class, target_kinds_json,
-                    produced_facets_json, coverage_policies_json, enabled, selection_priority,
+                    produced_facets_json, coverage_policies_json,
+                    coverage_policy_initialized, enabled, selection_priority,
                     collateral_effects_json, mitigations_json, record_created_at,
                     record_updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(capability_binding_id) DO UPDATE SET
                     connection_binding_id = excluded.connection_binding_id,
                     capability_key = excluded.capability_key,
@@ -838,6 +875,7 @@ class SQLiteStore:
                     target_kinds_json = excluded.target_kinds_json,
                     produced_facets_json = excluded.produced_facets_json,
                     coverage_policies_json = excluded.coverage_policies_json,
+                    coverage_policy_initialized = 1,
                     enabled = excluded.enabled,
                     selection_priority = excluded.selection_priority,
                     collateral_effects_json = excluded.collateral_effects_json,
@@ -850,14 +888,9 @@ class SQLiteStore:
                     capability.capability_key,
                     capability.capability_version,
                     capability.operation_class.value,
-                    _json_text(
-                        [item.value for item in capability.target_kinds], field_name="target_kinds"
-                    ),
-                    _json_text(list(capability.produced_facets), field_name="produced_facets"),
-                    _json_text(
-                        [policy.to_dict() for policy in capability.coverage_policies],
-                        field_name="coverage_policies",
-                    ),
+                    target_kinds_json,
+                    produced_facets_json,
+                    coverage_policies_json,
                     int(capability.enabled),
                     capability.selection_priority,
                     _json_text(
@@ -3492,6 +3525,7 @@ class SQLiteStore:
                     FROM capability_bindings
                     WHERE connection_binding_id = ? AND capability_key = ?
                       AND capability_version = ? AND operation_class = 'observe'
+                      AND coverage_policy_initialized = 1
                     """,
                     (
                         batch.connection_binding_id,
@@ -3509,9 +3543,12 @@ class SQLiteStore:
                     FROM capability_bindings
                     WHERE connection_binding_id = ? AND capability_key = ?
                       AND operation_class = 'observe' AND enabled = 1
+                      AND coverage_policy_initialized = 1
                     """,
                     (batch.connection_binding_id, scope.capability_key),
                 ).fetchall()
+                if len(capability_rows) > 1:
+                    raise ValueError("incidental_coverage_ambiguous_capability_version")
             matching_rows = tuple(
                 row
                 for row in capability_rows

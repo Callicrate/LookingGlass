@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -14,6 +15,8 @@ from async_api_view.contracts import (
     ActionCompletion,
     ActionOutcome,
     AdapterAction,
+    CapabilityCoveragePolicy,
+    CollectionCoverage,
     ErrorClass,
     FacetObservation,
     FieldCoverage,
@@ -65,6 +68,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0011_refresh_override_identity",
             "0012_deferred_scope_policy_indexes",
             "0013_capability_coverage_policy",
+            "0014_coverage_policy_initialization",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -349,6 +353,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0011_refresh_override_identity",
         "0012_deferred_scope_policy_indexes",
         "0013_capability_coverage_policy",
+        "0014_coverage_policy_initialization",
     )
     assert versions == (expected,) * workers
 
@@ -483,6 +488,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0011_refresh_override_identity",
             "0012_deferred_scope_policy_indexes",
             "0013_capability_coverage_policy",
+            "0014_coverage_policy_initialization",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -600,6 +606,72 @@ def test_bootstrap_settings_cannot_override_profile_or_workspace_root(tmp_path) 
             workspace_root="/",
             non_secret_settings={"profile": "OTHER"},
         )
+
+
+def test_capability_version_contract_and_coverage_policy_are_immutable(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "state.sqlite3") as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        capability = store.list_capability_bindings(
+            connection_binding_id=seeded.connection_binding_id
+        )[0]
+
+        with pytest.raises(ValueError, match="coverage policy requires a version change"):
+            store.upsert_capability_binding(
+                replace(capability, coverage_policies=()),
+                now=NOW + timedelta(seconds=1),
+            )
+        with pytest.raises(ValueError, match="version contract is immutable"):
+            store.upsert_capability_binding(
+                replace(capability, capability_key="different.read"),
+                now=NOW + timedelta(seconds=1),
+            )
+        store._connection.execute(
+            """
+            UPDATE capability_bindings
+            SET coverage_policies_json = '[]', coverage_policy_initialized = 0
+            WHERE capability_binding_id = ?
+            """,
+            (capability.capability_binding_id,),
+        )
+        store.upsert_capability_binding(capability, now=NOW + timedelta(seconds=2))
+        hydrated = store._connection.execute(
+            """
+            SELECT coverage_policies_json, coverage_policy_initialized
+            FROM capability_bindings WHERE capability_binding_id = ?
+            """,
+            (capability.capability_binding_id,),
+        ).fetchone()
+        assert hydrated["coverage_policy_initialized"] == 1
+        assert hydrated["coverage_policies_json"] != "[]"
+
+        content_seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="content",
+            profile="CONTENT",
+            workspace_root="/Content",
+            enabled_capability_keys=("databricks.workspace.content.read",),
+            now=NOW,
+        )
+        content_capability = store.list_capability_bindings(
+            connection_binding_id=content_seeded.connection_binding_id
+        )[0]
+        assert content_capability.coverage_policies == ()
+        with pytest.raises(ValueError, match="coverage policy requires a version change"):
+            store.upsert_capability_binding(
+                replace(
+                    content_capability,
+                    coverage_policies=(
+                        CapabilityCoveragePolicy(
+                            TargetKind.OBJECT,
+                            "content",
+                            RefreshCoverage.FACET,
+                            CollectionCoverage.COMPLETE,
+                        ),
+                    ),
+                ),
+                now=NOW + timedelta(seconds=1),
+            )
 
 
 def test_failed_logical_action_anchors_cooldown_and_creates_one_event(tmp_path) -> None:
