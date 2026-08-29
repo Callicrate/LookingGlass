@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 13:29 ET
+Updated: 2026-08-29 13:43 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 364 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 365 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: a high collection-envelope contradiction is under dual architecture review; exact-expiry dispatch, Unity Catalog stable identity, queue selection, and latest-action projection are the four queued medium findings.
+- Active review round: a high collection-envelope contradiction remains under dual architecture review; exact-expiry dispatch is independently clear, leaving Unity Catalog stable identity, queue selection, and latest-action projection queued.
 - Next progress report due: 2026-08-29 14:23 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -114,7 +114,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Stream refresh-credit candidates instead of materializing unbounded scope history.
 - [x] Close review of the verified-backup versus deferred-restore operator boundary.
 - [ ] Ingest supported 10,000-item collections within byte-bounded writer transactions.
-- [ ] Fence exact-expiry final dispatch and renew the running lease atomically.
+- [x] Fence exact-expiry final dispatch and renew the running lease atomically.
 - [ ] Preserve Unity Catalog schema/relation/volume identity across rename and recreation.
 - [ ] Remove full-backlog temporary sorting from both durable lease selectors.
 - [ ] Read current cooldown/facet action state without replaying retained action history.
@@ -190,7 +190,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Independent documentation review confirmed the warning matches online-backup behavior, does not imply an unsupported manual restore, and keeps atomically validated restore explicitly deferred.
 - The 13:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - A 10,000-child Workspace result normalizes to about 15.3 MiB while storage rejects batches over 1 MiB; simply raising the cap would create multi-second writer locks, so deterministic linked-item chunking is under dual architecture review.
-- Final dispatch accepts `leased_until == now` even though another worker may reclaim at that exact boundary; atomic strict-expiry rejection plus running-lease renewal is queued immediately after the high.
+- Final dispatch accepted `leased_until == now` even though another worker could reclaim at that exact boundary.
+- Final dispatch now rejects exact expiry and atomically renews the running lease; independent two-connection races proved exact-expiry reclaim and just-before-expiry mutual exclusion with no remaining medium-or-higher finding.
 - Unity Catalog schema/table/view/volume normalization discards stable source UUIDs and keys mutable qualified names, causing rename forks and same-name recreation merges.
 - Both lease selectors require temporary global backlog sorts, and current cooldown/dashboard action reads scan retained history rather than a bounded latest-state projection.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.

@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from async_api_view.application import SystemBootstrapService
+from async_api_view.application import DurableCoordinator, SystemBootstrapService
 from async_api_view.contracts import (
     ActionAttempt,
     ActionCompletion,
@@ -24,7 +24,9 @@ from async_api_view.contracts import (
     ObservationBatch,
     PresenceState,
     RefreshCoverage,
+    RefreshIntent,
     RefreshIntervalOverride,
+    RefreshOrigin,
     RefreshScope,
     RemoteObject,
     TargetKind,
@@ -1099,6 +1101,105 @@ def test_expired_running_lease_reopens_with_new_authority_and_preserves_start(tm
             )
         )
         assert reopened.get_stored_action(action.action_id).started_at == NOW
+
+
+def test_final_start_strictly_fences_expiry_and_renews_running_lease(tmp_path) -> None:
+    def leased_action(path: Path):
+        store = SQLiteStore(path)
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local",
+            profile="DEFAULT",
+            workspace_root="/Shared",
+            now=NOW,
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+        )
+        action_now = datetime.now(UTC)
+        run(
+            store.submit_refresh(
+                RefreshIntent(
+                    intent_id=uuid4(),
+                    idempotency_key=str(uuid4()),
+                    origin=RefreshOrigin.MANUAL,
+                    actor_id="test",
+                    scopes=(scope,),
+                    requested_at=action_now,
+                )
+            )
+        )
+        admitted = run(DurableCoordinator(store).run_once(now=action_now))
+        assert admitted is not None and admitted.action_id is not None
+        stored = store.get_stored_action(admitted.action_id)
+        assert stored is not None
+        action = stored.action
+        lease = run(store.lease_next(adapter_key="databricks", worker_id="first", now=action_now))
+        binding = store.list_connection_bindings(system_id=seeded.system.system_id)[0]
+        assert lease is not None and binding.revision is not None
+        return store, action, lease, binding.revision
+
+    exact_store, exact_action, exact_lease, exact_revision = leased_action(
+        tmp_path / "exact-expiry.sqlite3"
+    )
+    exact_decision = run(
+        exact_store.authorize_start(
+            action_id=exact_action.action_id,
+            lease_id=exact_lease.lease_id,
+            binding_revision=exact_revision,
+            now=exact_lease.leased_until,
+        )
+    )
+    assert exact_decision.disposition.value == "fail"
+    assert exact_decision.reason == "expired_action_lease"
+    replacement = run(
+        exact_store.lease_next(
+            adapter_key="databricks",
+            worker_id="replacement",
+            now=exact_lease.leased_until,
+        )
+    )
+    assert replacement is not None and replacement.lease_id != exact_lease.lease_id
+    exact_store.close()
+
+    renewed_store, renewed_action, renewed_lease, renewed_revision = leased_action(
+        tmp_path / "renewed-running.sqlite3"
+    )
+    just_before_expiry = renewed_lease.leased_until - timedelta(microseconds=1)
+    dispatch = run(
+        renewed_store.authorize_start(
+            action_id=renewed_action.action_id,
+            lease_id=renewed_lease.lease_id,
+            binding_revision=renewed_revision,
+            now=just_before_expiry,
+        )
+    )
+    assert dispatch.disposition.value == "dispatch", dispatch
+    running = renewed_store.get_stored_action(renewed_action.action_id)
+    assert running is not None and running.state.value == "running"
+    assert running.leased_until == just_before_expiry + timedelta(seconds=60)
+    assert (
+        run(
+            renewed_store.lease_next(
+                adapter_key="databricks",
+                worker_id="too-early",
+                now=renewed_lease.leased_until,
+            )
+        )
+        is None
+    )
+    reclaimed = run(
+        renewed_store.lease_next(
+            adapter_key="databricks",
+            worker_id="after-renewal",
+            now=running.leased_until,
+        )
+    )
+    assert reclaimed is not None and reclaimed.lease_id != renewed_lease.lease_id
+    renewed_store.close()
 
 
 def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path) -> None:

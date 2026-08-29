@@ -3683,7 +3683,7 @@ class SQLiteStore:
                     action_id=action_id,
                     now=now,
                 )
-            if leased_until is None or leased_until < now:
+            if leased_until is None or leased_until <= now:
                 return GuardDecision(GuardDisposition.FAIL, "expired_action_lease")
             if deadline is not None and deadline <= now:
                 try:
@@ -3784,10 +3784,18 @@ class SQLiteStore:
                             """
                             UPDATE adapter_actions
                             SET state = 'running', started_at = COALESCE(started_at, ?),
-                                error_class = NULL, redacted_diagnostic = NULL, retry_at = NULL
+                                leased_until = ?, error_class = NULL,
+                                redacted_diagnostic = NULL, retry_at = NULL
                             WHERE action_id = ? AND state = 'leased' AND lease_id = ?
+                              AND leased_until > ?
                             """,
-                            (_utc_text(now), action_id, lease_id),
+                            (
+                                _utc_text(now),
+                                _utc_text(now + _DEFAULT_LEASE),
+                                action_id,
+                                lease_id,
+                                _utc_text(now),
+                            ),
                         )
                         if result.rowcount != 1:  # pragma: no cover - transaction invariant
                             return GuardDecision(GuardDisposition.FAIL, "invalid_action_lease")
