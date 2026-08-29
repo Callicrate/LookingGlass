@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 03:54 ET
+Updated: 2026-08-29 04:00 ET
 
 ## Goal
 
@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 269 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: broad post-fix residual audit against the clean 264-test cross-platform head.
+- Active review round: continue post-fix residual audit after the Unity Catalog identity repair.
 - Next progress report due: 2026-08-29 04:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -213,6 +213,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
 - Databricks target resolution now derives catalog/schema command arguments from immutable canonical external identity rather than mutable facet payload, and a corruption regression proves later dispatch remains on the intended scope.
+- A fresh audit of the locked runtime-only dependency export reports no known vulnerabilities; the local project package was excluded so the auditor did not substitute an incompatible helper interpreter.
 
 ## Risks / watch list
 
