@@ -5,11 +5,28 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol
+from unicodedata import category
 
 MAX_DISPLAY_LENGTH = 512
 DEFAULT_OBJECT_PAGE_SIZE = 50
 MAX_OBJECT_QUERY_LENGTH = 128
 MAX_OBJECT_PAGE = 1_000_000
+_BIDI_CONTROLS = frozenset(
+    {
+        "\u061c",
+        "\u200e",
+        "\u200f",
+        "\u202a",
+        "\u202b",
+        "\u202c",
+        "\u202d",
+        "\u202e",
+        "\u2066",
+        "\u2067",
+        "\u2068",
+        "\u2069",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +51,14 @@ def display_text(value: object | None, *, limit: int = MAX_DISPLAY_LENGTH) -> st
 
     if value is None:
         return ""
-    text = str(value).replace("\x00", "�").replace("\r", " ").replace("\n", " ")
+    text = "".join(
+        " "
+        if char in "\r\n\t"
+        else "�"
+        if category(char) == "Cc" or char in _BIDI_CONTROLS
+        else char
+        for char in str(value)
+    )
     if len(text) <= limit:
         return text
     return f"{text[: limit - 1]}…"

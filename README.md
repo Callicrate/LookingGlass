@@ -52,7 +52,7 @@ Legacy entries without `id` remain supported; add the ID before changing the nam
 Removing an entry disables its refresh authority but preserves cached facts; changing `workspace_root` creates a new authority boundary and pauses the predecessor.
 
 ```powershell
-uv sync --group dev
+uv sync --locked --group dev
 uv run async-api-view --config config.local.toml init
 uv run async-api-view --config config.local.toml doctor
 ```

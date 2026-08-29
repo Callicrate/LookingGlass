@@ -21,6 +21,7 @@ from async_api_view.web import (
     SystemView,
     create_app,
 )
+from async_api_view.web.models import display_text
 
 NOW = datetime(2026, 8, 24, 14, 35, 9, tzinfo=UTC)
 OPTION = RefreshOption(
@@ -171,6 +172,11 @@ def test_empty_dashboard_explains_unknown_state() -> None:
     assert "No systems configured" in response.text
     assert "No cached objects" in response.text
     assert "Refresh unsupported" in response.text
+
+
+def test_display_text_replaces_terminal_and_bidi_controls() -> None:
+    assert display_text("safe\tname\x1b[31m\u202eevil\nnext") == ("safe name�[31m�evil next")
+    assert display_text("👩\u200d💻") == "👩\u200d💻"
 
 
 def test_ready_dashboard_keeps_stale_cached_facts_and_activity_visible() -> None:
