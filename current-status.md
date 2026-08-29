@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 13:23 ET
+Updated: 2026-08-29 13:24 ET
 
 ## Goal
 
@@ -13,7 +13,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: the backup/restore operator boundary is independently clear; adapter correctness and SQLite long-run boundedness audits continue with no known medium-or-higher finding open.
-- Next progress report due: 2026-08-29 13:26 ET.
+- Next progress report due: 2026-08-29 14:23 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
