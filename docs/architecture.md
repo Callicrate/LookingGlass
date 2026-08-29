@@ -316,7 +316,7 @@ An implementation MAY use relational tables, documents, or another durable repre
 | `RelationshipState` | relationship ID, system ID, subject ID, predicate, object ID, observation provenance, presence state | Represents containment and other observed relationships. |
 | `FacetState` | object ID, facet key/version, knowledge state, canonical payload, field provenance, qualifying observation time, source revision | Current best-known values for one independently fresh facet. |
 | `ObservationBatch` | batch ID, contract version, system and binding IDs, optional action ID, adapter version, observed/received times, coverage declarations | One provenance envelope of normalized adapter evidence. |
-| `Observation` | observation ID, batch ID, target locator, facet, update mode, field coverage/mask, payload, ordering metadata, satisfaction scopes | Append-only normalized evidence for an object, system, or relationship. |
+| `Observation` | observation ID, batch ID, target locator, facet, update mode, field coverage/mask, payload, ordering metadata, item-authority scopes, satisfaction scopes | Append-only normalized evidence for an object, system, or relationship. |
 | `ProjectionCheckpoint` | checkpoint ID, contract version, through-observation watermark, facet/relationship baseline, provenance summary, digest, local timestamp | Preserves a rebuildable canonical baseline when supporting observations are compacted. |
 | `RefreshPolicyOverride` | scope level, scope ID, optional facet, interval, local timestamps | Stores object or system overrides. Type defaults remain in type definitions. |
 | `RetentionPolicyOverride` | scope level, scope ID, optional facet/artifact kind, retention duration, local timestamps | Stores object or system artifact-retention overrides. Type defaults remain in type definitions. |
@@ -989,7 +989,7 @@ They MUST NOT emit duplicate state changes when an observation batch is redelive
 For each batch, the ingester:
 
 1. validates batch, adapter, connection, and contract versions;
-2. verifies that every item belongs to the declared system and coverage;
+2. verifies that every item belongs to an exact action or enabled incidental capability/scope;
 3. validates canonical type and facet schemas;
 4. resolves or creates object identities through adapter-owned external keys;
 5. orders each item against current evidence;
@@ -998,6 +998,13 @@ For each batch, the ingester:
 8. applies absence reconciliation only across fully valid complete boundaries;
 9. grants refresh credit only to declared supported scopes;
 10. records item-level issues and the final action outcome.
+
+Every facet and relationship item MUST identify the scope that authorized the downstream read.
+This `authorized_by` scope is distinct from any `satisfies` claim: authority permits an item to enter canonical evidence, while satisfaction grants freshness credit.
+Action-linked authority MUST match the action's pinned capability/version and stored requested scope.
+Incidental authority MUST resolve to one unambiguous enabled capability and one supported scope.
+A non-root collection fact MUST be linked by an authorized same-batch `contains` edge from the exact collection subject; direct facet evidence MUST target the exact authorized object.
+Identity, journal, and projection writes occur only after this check.
 
 ### Merge rules
 

@@ -338,6 +338,7 @@ class FacetObservation(JSONDTO):
     satisfies: tuple[RefreshScope, ...] = ()
     remote_as_of: datetime | None = None
     source_revision: str | None = None
+    authorized_by: tuple[RefreshScope, ...] = ()
 
     def __post_init__(self) -> None:
         _set_uuid(self, "observation_id")
@@ -367,6 +368,11 @@ class FacetObservation(JSONDTO):
         _set_optional_utc(self, "remote_as_of")
         if self.source_revision is not None:
             require_text(self.source_revision, "source_revision", max_length=512)
+        object.__setattr__(
+            self,
+            "authorized_by",
+            normalize_instance_tuple(self.authorized_by, RefreshScope, "authorized_by"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +382,7 @@ class RelationshipObservation(JSONDTO):
     predicate: str
     object: ObjectLocator
     presence: PresenceState
+    authorized_by: tuple[RefreshScope, ...] = ()
 
     def __post_init__(self) -> None:
         _set_uuid(self, "observation_id")
@@ -385,6 +392,11 @@ class RelationshipObservation(JSONDTO):
         require_enum(self.presence, PresenceState, "presence")
         if self.presence is PresenceState.UNKNOWN:
             raise ValueError("a relationship observation must assert present or absent")
+        object.__setattr__(
+            self,
+            "authorized_by",
+            normalize_instance_tuple(self.authorized_by, RefreshScope, "authorized_by"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,6 +451,12 @@ class ObservationBatch(JSONDTO):
         for declaration in self.coverage:
             if declaration.scope.system_id != self.system_id:
                 raise ValueError("coverage scopes must belong to the batch system")
+        if any(
+            scope.system_id != self.system_id
+            for item in (*self.facet_observations, *self.relationship_observations)
+            for scope in item.authorized_by
+        ):
+            raise ValueError("item authority scopes must belong to the batch system")
 
 
 @dataclass(frozen=True, slots=True)

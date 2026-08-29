@@ -335,7 +335,12 @@ def _json_value(value: str) -> object:
 
 def _batch_digest(batch: ObservationBatch) -> str:
     """Bind batch identity to its complete canonical envelope without storing raw input."""
-    material = _json_text(batch.to_dict(), field_name="observation batch")
+    batch_value = batch.to_dict()
+    for collection_name in ("facet_observations", "relationship_observations"):
+        for item in batch_value[collection_name]:
+            if not item.get("authorized_by"):
+                item.pop("authorized_by", None)
+    material = _json_text(batch_value, field_name="observation batch")
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
@@ -3777,6 +3782,347 @@ class SQLiteStore:
                     at=_now(),
                 )
 
+    def _authority_capability_rows(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        batch: ObservationBatch,
+        scope: RefreshScope,
+    ) -> tuple[sqlite3.Row, ...]:
+        if batch.action_id is not None:
+            action = connection.execute(
+                """
+                SELECT capability_key, capability_version
+                FROM adapter_actions WHERE action_id = ?
+                """,
+                (batch.action_id,),
+            ).fetchone()
+            if action is None or scope.capability_key != action["capability_key"]:
+                return ()
+            action_scope = connection.execute(
+                """
+                SELECT 1 FROM adapter_action_scopes
+                WHERE action_id = ? AND system_id = ? AND target_kind = ?
+                  AND target_id = ? AND object_type = ? AND facet = ?
+                  AND capability_key IS ? AND coverage = ? AND field_mask_json = ?
+                """,
+                (batch.action_id, *_scope_columns(scope)),
+            ).fetchone()
+            if action_scope is None:
+                return ()
+            return tuple(
+                connection.execute(
+                    """
+                    SELECT target_kinds_json, produced_facets_json, coverage_policies_json
+                    FROM capability_bindings
+                    WHERE connection_binding_id = ? AND capability_key = ?
+                      AND capability_version = ? AND operation_class = 'observe'
+                      AND coverage_policy_initialized = 1
+                    """,
+                    (
+                        batch.connection_binding_id,
+                        action["capability_key"],
+                        action["capability_version"],
+                    ),
+                ).fetchall()
+            )
+        if scope.capability_key is None:
+            return ()
+        rows = tuple(
+            connection.execute(
+                """
+                SELECT target_kinds_json, produced_facets_json, coverage_policies_json
+                FROM capability_bindings
+                WHERE connection_binding_id = ? AND capability_key = ?
+                  AND operation_class = 'observe' AND enabled = 1
+                  AND coverage_policy_initialized = 1
+                """,
+                (batch.connection_binding_id, scope.capability_key),
+            ).fetchall()
+        )
+        return rows if len(rows) == 1 else ()
+
+    @staticmethod
+    def _capability_authorizes_scope(
+        capability: sqlite3.Row,
+        scope: RefreshScope,
+        *,
+        relationship: bool,
+    ) -> bool:
+        if scope.target.kind.value not in _json_value(capability["target_kinds_json"]):
+            return False
+        return any(
+            policy.target_kind is scope.target.kind
+            and policy.facet == scope.facet
+            and policy.coverage is scope.coverage
+            and (not relationship or AbsenceAuthority.RELATIONSHIP in policy.absence_authority)
+            for policy in (
+                _coverage_policy_from_value(value)
+                for value in _json_value(capability["coverage_policies_json"])
+            )
+        )
+
+    @staticmethod
+    def _authority_target_object_id(
+        connection: sqlite3.Connection,
+        scope: RefreshScope,
+    ) -> str | None:
+        if scope.target.kind is TargetKind.OBJECT:
+            row = connection.execute(
+                """
+                SELECT object_id FROM remote_objects
+                WHERE object_id = ? AND system_id = ? AND object_type = ?
+                """,
+                (scope.target.target_id, scope.system_id, scope.object_type),
+            ).fetchone()
+            return row["object_id"] if row is not None else None
+        row = connection.execute(
+            """
+            SELECT configured.object_id
+            FROM configured_scopes AS configured
+            JOIN remote_objects AS object ON object.object_id = configured.object_id
+            WHERE configured.scope_id = ? AND configured.system_id = ?
+              AND configured.object_type = ? AND object.system_id = configured.system_id
+              AND object.object_type = configured.object_type
+            """,
+            (scope.target.target_id, scope.system_id, scope.object_type),
+        ).fetchone()
+        return row["object_id"] if row is not None else None
+
+    def _facet_item_is_authorized(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        batch: ObservationBatch,
+        declarations: tuple[CoverageDeclaration, ...],
+        observation: FacetObservation,
+        object_id: str,
+    ) -> bool:
+        if not self._adapter_owns_object(
+            connection,
+            object_id=object_id,
+            adapter_key=batch.adapter_key,
+        ):
+            return False
+        for scope in self._item_authority_scopes(
+            connection,
+            batch=batch,
+            explicit=observation.authorized_by,
+            declarations=declarations,
+        ):
+            for capability in self._authority_capability_rows(
+                connection,
+                batch=batch,
+                scope=scope,
+            ):
+                if (
+                    self._capability_authorizes_scope(
+                        capability,
+                        scope,
+                        relationship=False,
+                    )
+                    and observation.facet in _json_value(capability["produced_facets_json"])
+                    and (
+                        self._authority_target_object_id(connection, scope) == object_id
+                        or self._collection_item_is_linked(
+                            connection,
+                            batch=batch,
+                            declarations=declarations,
+                            scope=scope,
+                            target=observation.target,
+                        )
+                    )
+                ):
+                    return True
+        return False
+
+    def _collection_item_is_linked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        batch: ObservationBatch,
+        declarations: tuple[CoverageDeclaration, ...],
+        scope: RefreshScope,
+        target: ObjectLocator,
+    ) -> bool:
+        expected_subject = self._authority_target_object_id(connection, scope)
+        if expected_subject is None:
+            return False
+        for relationship_observation in batch.relationship_observations:
+            if (
+                relationship_observation.predicate != "contains"
+                or relationship_observation.presence is not PresenceState.PRESENT
+                or not self._locators_match_existing_identity(
+                    connection,
+                    system_id=batch.system_id,
+                    left=relationship_observation.object,
+                    right=target,
+                )
+                or self._existing_locator_object_id(
+                    connection,
+                    system_id=batch.system_id,
+                    locator=relationship_observation.subject,
+                )
+                != expected_subject
+                or scope
+                not in self._item_authority_scopes(
+                    connection,
+                    batch=batch,
+                    explicit=relationship_observation.authorized_by,
+                    declarations=declarations,
+                )
+            ):
+                continue
+            if any(
+                self._capability_authorizes_scope(
+                    capability,
+                    scope,
+                    relationship=True,
+                )
+                for capability in self._authority_capability_rows(
+                    connection,
+                    batch=batch,
+                    scope=scope,
+                )
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _existing_locator_object_id(
+        connection: sqlite3.Connection,
+        *,
+        system_id: str,
+        locator: ObjectLocator,
+    ) -> str | None:
+        if locator.object_id is not None:
+            row = connection.execute(
+                """
+                SELECT object_id FROM remote_objects
+                WHERE object_id = ? AND system_id = ? AND object_type = ?
+                """,
+                (locator.object_id, system_id, locator.object_type),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                """
+                SELECT object_id FROM remote_objects
+                WHERE system_id = ? AND source_kind = ? AND external_key = ?
+                  AND object_type = ?
+                """,
+                (
+                    system_id,
+                    locator.source_kind,
+                    locator.external_key,
+                    locator.object_type,
+                ),
+            ).fetchone()
+        return row["object_id"] if row is not None else None
+
+    @classmethod
+    def _locators_match_existing_identity(
+        cls,
+        connection: sqlite3.Connection,
+        *,
+        system_id: str,
+        left: ObjectLocator,
+        right: ObjectLocator,
+    ) -> bool:
+        if left == right:
+            return True
+        left_id = cls._existing_locator_object_id(
+            connection,
+            system_id=system_id,
+            locator=left,
+        )
+        return left_id is not None and left_id == cls._existing_locator_object_id(
+            connection,
+            system_id=system_id,
+            locator=right,
+        )
+
+    def _relationship_item_is_authorized(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        batch: ObservationBatch,
+        declarations: tuple[CoverageDeclaration, ...],
+        observation: RelationshipObservation,
+        subject_id: str,
+        object_id: str,
+    ) -> bool:
+        if observation.predicate != "contains" or not all(
+            self._adapter_owns_object(
+                connection,
+                object_id=candidate,
+                adapter_key=batch.adapter_key,
+            )
+            for candidate in (subject_id, object_id)
+        ):
+            return False
+        for scope in self._item_authority_scopes(
+            connection,
+            batch=batch,
+            explicit=observation.authorized_by,
+            declarations=declarations,
+        ):
+            if self._authority_target_object_id(connection, scope) != subject_id:
+                continue
+            if observation.presence is PresenceState.ABSENT and not any(
+                declaration.scope == scope
+                and declaration.completeness is CollectionCoverage.COMPLETE
+                and AbsenceAuthority.RELATIONSHIP in declaration.absence_authority
+                for declaration in declarations
+            ):
+                continue
+            if any(
+                self._capability_authorizes_scope(
+                    capability,
+                    scope,
+                    relationship=True,
+                )
+                for capability in self._authority_capability_rows(
+                    connection,
+                    batch=batch,
+                    scope=scope,
+                )
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _adapter_owns_object(
+        connection: sqlite3.Connection,
+        *,
+        object_id: str,
+        adapter_key: str,
+    ) -> bool:
+        row = connection.execute(
+            "SELECT source_kind FROM remote_objects WHERE object_id = ?",
+            (object_id,),
+        ).fetchone()
+        return row is not None and row["source_kind"].startswith(f"{adapter_key}.")
+
+    @staticmethod
+    def _item_authority_scopes(
+        connection: sqlite3.Connection,
+        *,
+        batch: ObservationBatch,
+        explicit: tuple[RefreshScope, ...],
+        declarations: tuple[CoverageDeclaration, ...],
+    ) -> tuple[RefreshScope, ...]:
+        if explicit:
+            return explicit
+        if batch.action_id is not None:
+            return tuple(
+                _scope_from_row(row)
+                for row in connection.execute(
+                    "SELECT * FROM adapter_action_scopes WHERE action_id = ?",
+                    (batch.action_id,),
+                ).fetchall()
+            )
+        return tuple(declaration.scope for declaration in declarations)
+
     def _validate_coverage(
         self, connection: sqlite3.Connection, batch: ObservationBatch
     ) -> tuple[CoverageDeclaration, ...]:
@@ -4021,6 +4367,8 @@ class SQLiteStore:
     @staticmethod
     def _journal_item_json(item: object) -> str:
         item_value = item.to_dict() if hasattr(item, "to_dict") else item  # type: ignore[union-attr]
+        if isinstance(item_value, dict) and not item_value.get("authorized_by"):
+            item_value.pop("authorized_by", None)
         return _json_text(item_value, field_name="observation journal item")
 
     def _journal_item_status(
@@ -4578,6 +4926,14 @@ class SQLiteStore:
                             observed_at=batch.observed_at,
                             mark_present=observation.update_mode is not UpdateMode.ABSENCE,
                         )
+                        if not self._facet_item_is_authorized(
+                            connection,
+                            batch=batch,
+                            declarations=declarations,
+                            observation=observation,
+                            object_id=target.object_id,
+                        ):
+                            raise ValueError("facet_observation_not_authorized")
                         recorded_status = self._record_journal_item(
                             connection,
                             observation_id=observation.observation_id,
@@ -4651,6 +5007,15 @@ class SQLiteStore:
                             system_id=batch.system_id,
                             observed_at=batch.observed_at,
                         )
+                        if not self._relationship_item_is_authorized(
+                            connection,
+                            batch=batch,
+                            declarations=declarations,
+                            observation=observation,
+                            subject_id=subject.object_id,
+                            object_id=object_value.object_id,
+                        ):
+                            raise ValueError("relationship_observation_not_authorized")
                         recorded_status = self._record_journal_item(
                             connection,
                             observation_id=observation.observation_id,

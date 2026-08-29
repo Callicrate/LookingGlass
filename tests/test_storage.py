@@ -1506,6 +1506,14 @@ def test_workspace_root_uses_normalized_external_identity(tmp_path) -> None:
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
     )
+    authority = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+        coverage=RefreshCoverage.COLLECTION_MEMBERS,
+    )
     batch = ObservationBatch(
         batch_id=uuid4(),
         system_id=seeded.system.system_id,
@@ -1528,6 +1536,7 @@ def test_workspace_root_uses_normalized_external_identity(tmp_path) -> None:
                 update_mode=UpdateMode.SNAPSHOT,
                 field_coverage=FieldCoverage.COMPLETE,
                 payload={"path": "/Shared"},
+                authorized_by=(authority,),
             ),
         ),
     )
@@ -1547,6 +1556,7 @@ def test_legacy_pre_digest_batch_redelivery_backfills_only_exact_match(tmp_path)
             target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
             object_type="folder",
             facet="membership",
+            capability_key="databricks.workspace.children.read",
         )
         action = AdapterAction(
             action_id=uuid4(),

@@ -137,7 +137,11 @@ class SQLiteDatabricksTargetResolver:
                     ),
                 )
             if action.capability_key == "databricks.uc.catalogs.read":
-                return ResolvedTarget(display_name=scope.display_name)
+                return ResolvedTarget(
+                    display_name=scope.display_name,
+                    canonical_object_id=scope.object_id,
+                    canonical_object_type=scope.object_type,
+                )
             raise CommandRejected("capability does not support this configured target")
 
         if action.target.kind is not TargetKind.OBJECT:

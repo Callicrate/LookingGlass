@@ -15,7 +15,7 @@ import re
 import shutil
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any, Protocol
@@ -953,6 +953,12 @@ def normalize(
             delivery_id=delivery_id,
         )
     elif capability == "databricks.uc.catalogs.read":
+        if target.canonical_object_id is None or target.canonical_object_type != "generic_object":
+            raise InvalidDownstreamResponse("catalog collection lacks canonical target identity")
+        parent = ObjectLocator(
+            object_type="generic_object",
+            object_id=target.canonical_object_id,
+        )
         for item in _items(payload, "catalogs"):
             name = _name(item.get("name"), label="catalog name")
             locator = _generic_locator("databricks.uc.catalog", f"catalog:{name}", name)
@@ -968,6 +974,15 @@ def normalize(
                     body,
                     tuple(body),
                     _scopes(action, "attributes"),
+                )
+            )
+            relationships.append(
+                RelationshipObservation(
+                    evidence_id(f"contains:{locator.external_key}"),
+                    parent,
+                    "contains",
+                    locator,
+                    PresenceState.PRESENT,
                 )
             )
         coverage.extend(
@@ -1072,8 +1087,12 @@ def normalize(
     return NormalizedResult(
         ObservationBatch(
             **base,
-            facet_observations=tuple(facets),
-            relationship_observations=tuple(relationships),
+            facet_observations=tuple(
+                replace(item, authorized_by=action.requested_scopes) for item in facets
+            ),
+            relationship_observations=tuple(
+                replace(item, authorized_by=action.requested_scopes) for item in relationships
+            ),
             coverage=tuple(coverage),
         ),
         artifacts,

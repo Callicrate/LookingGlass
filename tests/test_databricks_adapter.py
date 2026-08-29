@@ -64,6 +64,13 @@ def _binding() -> ConnectionBinding:
     )
 
 
+def _catalog_root_target() -> ResolvedTarget:
+    return ResolvedTarget(
+        canonical_object_id=uuid4(),
+        canonical_object_type="generic_object",
+    )
+
+
 def _action(capability: str, facet: str = "attributes") -> AdapterAction:
     system_id = uuid4()
     return AdapterAction(
@@ -360,7 +367,7 @@ def test_compatibility_check_failures_reap_process_and_readers(
         (
             "databricks.uc.catalogs.read",
             "attributes",
-            ResolvedTarget(),
+            _catalog_root_target(),
             {"catalogs": [{"name": "main", "storage_location": "s3://secret"}]},
         ),
         (
@@ -507,7 +514,7 @@ def test_uc_normalization_derives_leaf_name_from_valid_full_name() -> None:
         (
             "databricks.uc.catalogs.read",
             "attributes",
-            ResolvedTarget(),
+            _catalog_root_target(),
             "catalogs",
             "catalogs_array",
         ),
@@ -571,7 +578,7 @@ def test_list_normalization_rejects_incomplete_pagination_envelope() -> None:
         normalize(
             action=_action("databricks.uc.catalogs.read"),
             binding=_binding(),
-            target=ResolvedTarget(),
+            target=_catalog_root_target(),
             stdout=b'{"catalogs":[{"name":"first"}],"next_page_token":"next"}',
             observed_at=datetime.now(UTC),
         )
@@ -611,7 +618,7 @@ def test_list_normalization_rejects_scalars_and_mixed_arrays(stdout: bytes) -> N
         normalize(
             action=_action("databricks.uc.catalogs.read"),
             binding=_binding(),
-            target=ResolvedTarget(),
+            target=_catalog_root_target(),
             stdout=stdout,
             observed_at=datetime.now(UTC),
         )
@@ -807,7 +814,7 @@ def test_normalization_rejects_collection_and_column_cap_plus_one() -> None:
         normalize(
             action=action,
             binding=_binding(),
-            target=ResolvedTarget(),
+            target=_catalog_root_target(),
             stdout=json.dumps(
                 {"catalogs": [{"name": str(index)} for index in range(MAX_COLLECTION_ITEMS + 1)]}
             ).encode(),
@@ -935,7 +942,7 @@ class _Bindings:
 
 class _Targets:
     async def resolve(self, **_: object) -> ResolvedTarget:
-        return ResolvedTarget(catalog_name="main")
+        return _catalog_root_target()
 
 
 class _MetadataTargets:
