@@ -71,7 +71,11 @@ def test_serve_closes_runtime_store_when_server_start_fails(
     assert result == 2
     assert store.closed
     captured = capsys.readouterr()
-    assert f"/bootstrap#{bootstrap_token}" in captured.out
+    expected_url = (
+        f"http://{runtime.local_authorizer.browser_host}:{settings.app.port}"
+        f"/bootstrap#{bootstrap_token}"
+    )
+    assert expected_url in captured.out
     assert "valid once for 10 minutes" in captured.out
     assert bootstrap_token not in captured.err
 

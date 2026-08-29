@@ -37,7 +37,7 @@ workspace_root = "/Shared"
     assert settings.databricks_systems[0].workspace_root == "/Shared"
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.25", "::1", "example.com"])
+@pytest.mark.parametrize("host", ["0.0.0.0", "127.0.0.2", "192.168.1.25", "::1", "example.com"])
 def test_rejects_non_loopback_host(tmp_path: Path, host: str) -> None:
     path = write_config(tmp_path, f'[app]\nhost = "{host}"\n')
 

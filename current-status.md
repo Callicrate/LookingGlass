@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 00:17 ET
+Updated: 2026-08-29 00:26 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 221 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 223 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 10 HTTP routes, verified from source.
-- Version control: local `main` contains the verified bounded action-activity slice and all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: isolate browser sessions on a process-unique `*.localhost` host, then expose bounded action-attempt detail.
+- Version control: local `main` contains the verified action-activity and process-unique browser-host slices plus all prior correctness fixes; completed batches are committed with focused messages.
+- Active review round: implement durable retry backoff, then prevent expired action deadlines from dispatching.
 - Next progress report due: 2026-08-29 01:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -45,7 +45,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
 - [ ] Tend Murmuration about hourly; the latest pass was read-only because the native project profile is not provisioned.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
-- [ ] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
+- [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
+- [ ] Persist bounded retry delays instead of immediately repeating transient CLI failures.
+- [ ] Terminalize expired action deadlines before any remote dispatch.
 
 ## Evidence and decisions
 
@@ -126,6 +128,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The action slice passes 221 tests at 86% branch coverage; migration `0008` is applied locally with SQLite integrity `ok` and zero foreign-key violations, and both migration and template are packaged.
 - Desktop and 390px mobile action-page QA passed with real failed/retry rows, functional state filtering, no console or network errors, and Lighthouse 100 in every audited category.
 - A fresh review demonstrated that the host-only `rookery_session` cookie is shared across ports for `127.0.0.1`; a local service receiving it can replay the bearer to Rookery. A process-unique `*.localhost` browser host is the selected repair.
+- Every runtime now generates a 128-bit `rookery-….localhost` browser host, places it in the activation URL, and accepts only that production Host while Uvicorn remains bound to `127.0.0.1` or `localhost`.
+- Cookie-jar regressions prove the session is absent from ordinary `127.0.0.1`, `localhost`, and unrelated `*.localhost` requests; actual Chrome resolved the generated host, activated successfully, and sent no Cookie header on the rejected direct-IP request.
+- Configuration now rejects alternate `127.x` bind addresses that cannot reliably match `.localhost` resolution; the full suite passes 223 tests at 86% branch coverage.
+- A fresh residual review also reproduced immediate retry of transient CLI failures with no `retry_at`, and dispatch after an action deadline has expired; both medium defects are next in the queue.
 
 ## Risks / watch list
 

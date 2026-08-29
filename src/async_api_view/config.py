@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import math
 import tomllib
 from dataclasses import dataclass
@@ -74,15 +73,9 @@ def _positive_int(value: object, field_name: str, *, maximum: int) -> int:
 
 def _loopback_host(value: object) -> str:
     host = _bounded_text(value, "app.host", max_length=64)
-    if host == "localhost":
+    if host in {"localhost", "127.0.0.1"}:
         return host
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError as exc:
-        raise ConfigError("app.host must be localhost or an IPv4 loopback address") from exc
-    if address.version != 4 or not address.is_loopback:
-        raise ConfigError("app.host must be an IPv4 loopback address")
-    return host
+    raise ConfigError("app.host must be localhost or the 127.0.0.1 IPv4 loopback address")
 
 
 def _workspace_root(value: object, field_name: str) -> str:

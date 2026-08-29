@@ -258,7 +258,7 @@ def _intent_payload(view: IntentView) -> dict[str, object]:
 def create_app(
     backend: WebBackend | None = None,
     *,
-    allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost"),
+    allowed_hosts: tuple[str, ...] | None = None,
     authorizer: LocalCallerAuthorizer | None = None,
 ) -> FastAPI:
     """Create a loopback-oriented app around an injected application facade."""
@@ -266,6 +266,7 @@ def create_app(
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.backend = backend or UnavailableBackend()
     app.state.local_authorizer = authorizer or LocalCallerAuthorizer()
+    effective_allowed_hosts = allowed_hosts or (app.state.local_authorizer.browser_host,)
 
     root = Path(__file__).parent
     templates = Environment(
@@ -303,7 +304,7 @@ def create_app(
     # Starlette runs the latest-added middleware first. Keep headers outermost,
     # then reject untrusted hosts before evaluating local session credentials.
     app.add_middleware(BaseHTTPMiddleware, dispatch=authorize_local)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(allowed_hosts))
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(effective_allowed_hosts))
     app.add_middleware(BaseHTTPMiddleware, dispatch=secure_responses)
 
     @app.get("/bootstrap", response_class=HTMLResponse, include_in_schema=False)

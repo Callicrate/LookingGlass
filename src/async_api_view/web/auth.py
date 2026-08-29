@@ -15,6 +15,7 @@ from uuid import uuid4
 BOOTSTRAP_TTL_SECONDS = 10 * 60
 SESSION_COOKIE = "rookery_session"
 _TOKEN = re.compile(r"\A[A-Za-z0-9_-]{32,128}\Z")
+_BROWSER_HOST = re.compile(r"\Arookery-[a-f0-9]{32}\.localhost\Z")
 
 
 def _digest(token: str) -> bytes:
@@ -41,6 +42,7 @@ class LocalCallerAuthorizer:
         *,
         clock: Callable[[], float] = time.monotonic,
         bootstrap_token: str | None = None,
+        browser_host: str | None = None,
         bootstrap_ttl_seconds: float = BOOTSTRAP_TTL_SECONDS,
     ) -> None:
         if bootstrap_ttl_seconds <= 0:
@@ -48,6 +50,10 @@ class LocalCallerAuthorizer:
         token = bootstrap_token or secrets.token_urlsafe(32)
         if _TOKEN.fullmatch(token) is None:
             raise ValueError("bootstrap token is invalid")
+        resolved_browser_host = browser_host or f"rookery-{secrets.token_hex(16)}.localhost"
+        if _BROWSER_HOST.fullmatch(resolved_browser_host) is None:
+            raise ValueError("browser host is invalid")
+        self.browser_host = resolved_browser_host
         self._clock = clock
         self._bootstrap_token: str | None = token
         self._bootstrap_digest: bytes | None = _digest(token)

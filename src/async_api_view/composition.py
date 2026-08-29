@@ -1179,18 +1179,10 @@ def _compose_runtime(
         targets=resolver,
         runner=actual_runner,
     )
-    allowed_hosts = tuple(
-        dict.fromkeys(
-            (
-                settings.app.host,
-                "localhost",
-            )
-        )
-    )
     local_authorizer = LocalCallerAuthorizer()
     app = create_app(
         backend,
-        allowed_hosts=allowed_hosts,
+        allowed_hosts=(local_authorizer.browser_host,),
         authorizer=local_authorizer,
     )
     runtime = ApplicationRuntime(

@@ -111,7 +111,7 @@ def _show_browser_activation(
             "use an interactive terminal or pass --allow-redirected-activation"
         )
     token = runtime.local_authorizer.take_bootstrap_token()
-    url = f"http://{settings.app.host}:{settings.app.port}/bootstrap#{token}"
+    url = f"http://{runtime.local_authorizer.browser_host}:{settings.app.port}/bootstrap#{token}"
     # The one-time capability must reach the controlling terminal without entering
     # application or access logs. It is consumed by the first successful exchange.
     sys.stdout.write(

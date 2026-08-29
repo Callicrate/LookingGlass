@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -253,6 +254,40 @@ def test_bootstrap_is_public_single_use_and_rotates_a_fixation_cookie() -> None:
     assert "set-cookie" not in replay.headers
 
 
+def test_process_unique_browser_host_isolates_cookie_from_other_loopback_services() -> None:
+    authorizer = LocalCallerAuthorizer()
+    app = create_app(
+        FakeBackend(dashboard_view=ready_dashboard()),
+        allowed_hosts=(authorizer.browser_host,),
+        authorizer=authorizer,
+    )
+    origin = f"http://{authorizer.browser_host}"
+    client = TestClient(app, base_url=origin)
+    token = authorizer.take_bootstrap_token()
+
+    response = client.post(
+        "/bootstrap",
+        data={"bootstrap_token": token},
+        headers={"Origin": origin},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert client.get("/").status_code == 200
+    assert client.get("http://127.0.0.1:8765/").status_code == 400
+    assert client.get("http://localhost:8765/").status_code == 400
+
+    def cookie_header(url: str) -> str:
+        request = urllib.request.Request(url)
+        client.cookies.jar.add_cookie_header(request)
+        return request.get_header("Cookie", "")
+
+    assert "rookery_session=" in cookie_header(f"http://{authorizer.browser_host}:9999/")
+    assert cookie_header("http://127.0.0.1:9999/") == ""
+    assert cookie_header("http://localhost:9999/") == ""
+    assert cookie_header("http://unrelated.localhost:9999/") == ""
+
+
 def test_bootstrap_redemption_is_atomic() -> None:
     authorizer = LocalCallerAuthorizer()
     token = authorizer.take_bootstrap_token()
@@ -276,6 +311,9 @@ def test_bootstrap_expires_and_restart_rejects_the_prior_session() -> None:
     assert grant is not None
     restarted = LocalCallerAuthorizer()
     assert restarted.authenticate(grant.cookie_token) is None
+    assert first.browser_host != restarted.browser_host
+    with pytest.raises(ValueError, match="browser host"):
+        LocalCallerAuthorizer(browser_host="localhost")
 
 
 def test_bootstrap_rejects_cross_origin_and_malformed_requests() -> None:
@@ -872,10 +910,13 @@ def test_untrusted_host_is_rejected() -> None:
 
 
 def test_default_host_allowlist_rejects_test_host() -> None:
-    client = TestClient(create_app(FakeBackend()))
+    app = create_app(FakeBackend())
+    client = TestClient(app, base_url=f"http://{app.state.local_authorizer.browser_host}")
 
+    accepted_host = client.get("/")
     response = client.get("/", headers={"Host": "testserver"})
 
+    assert accepted_host.status_code == 403
     assert response.status_code == 400
 
 

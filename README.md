@@ -72,12 +72,13 @@ uv run async-api-view --config config.local.toml serve
 `serve` prints a one-time browser activation link to its controlling terminal.
 Open that complete link, including its `#` fragment, within ten minutes.
 The browser removes the fragment before exchanging it, so the capability does not enter HTTP request targets, redirects, or access logs.
-The resulting host-only session cookie is process-local, `HttpOnly`, and `SameSite=Strict`.
+The link uses a process-unique, high-entropy `rookery-….localhost` hostname while the server still binds only to the configured loopback address.
+The configured bind host must be `127.0.0.1` or `localhost` so that generated `.localhost` names reach the listener consistently.
+The resulting session cookie is scoped to that unique host, process-local, `HttpOnly`, and `SameSite=Strict`, so ordinary `127.0.0.1` and `localhost` services do not receive it.
 If the link expires, was already used by another browser profile, or the browser session is lost, restart `serve` to rotate it.
 When stdout is redirected, `serve` refuses to disclose the capability unless the operator explicitly passes `--allow-redirected-activation` and protects the destination.
 
-After activation, the dashboard is available at [http://127.0.0.1:8765](http://127.0.0.1:8765).
-The dashboard accepts `localhost` or an IPv4 loopback address only.
+Keep using the generated hostname after activation; direct `127.0.0.1` and `localhost` Host headers are rejected.
 Stop it with `Ctrl+C`; an in-flight local CLI process is cancelled and its durable lease remains recoverable.
 
 ## Databricks scope
