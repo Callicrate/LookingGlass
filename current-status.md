@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 17:35 ET
+Updated: 2026-08-29 18:20 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 407 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 417 tests passed with one platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 88% on Windows and 87% on Ubuntu/WSL.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: effective capability-neutral scope identity is independently clear after the full gate; controlled Databricks subprocess environment/cwd isolation is the active medium.
-- Next progress report due: 2026-08-29 18:21 ET.
+- Active review round: controlled Databricks subprocess environment/cwd/owner/ACL isolation is independently clear after the exact gate; the disabled-refresh accessibility invariant is next.
+- Next progress report due: 2026-08-29 19:20 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 17:20 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 18:21 ET.
+- [ ] Tend Murmuration about hourly; the 18:20 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 19:20 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -119,7 +119,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Remove full-backlog sorting and unbounded due promotion from both lease selectors.
 - [x] Read current cooldown/facet action state without replaying retained action history.
 - [x] Unify generic/explicit capability identity without crossing legacy producer provenance.
-- [ ] Isolate Databricks subprocesses from ambient auth/bundle precedence.
+- [x] Isolate Databricks subprocesses from ambient auth/bundle precedence.
+- [ ] Require an accessible reason for every disabled refresh option.
 
 ## Evidence and decisions
 
@@ -218,7 +219,14 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The exact committed-head Ubuntu/WSL gate now matches Windows at 399 tests, 88% branch coverage, clean locked audit/lint, and 82/61/30 package verification.
 - A post-migration audit reproduced generic/explicit duplicate actions and cooldown bypass; the local repair uses one effective selected scope while retaining the original nullable intent receipt and capability-filtering legacy evidence/cooldown provenance.
 - Independent rollout review cleared same-capability reuse, cross-capability and cross-binding exclusion, explicit action identity, atomic coalescing, and pre-fix active action ingestion with 407 tests green.
-- A security audit found that inherited `DATABRICKS_*` variables and the checkout working directory can override the configured profile through CLI precedence; controlled environment/cwd isolation is queued next.
+- Databricks mapped and doctor subprocesses now share one bounded runner that strips inherited Databricks/bundle overrides, sanitizes implicit/relative PATH lookup, and executes only an absolute CLI from an empty private per-user work directory.
+- The work-root ancestor audit covers all four bundle filenames recognized by the supported CLI contract; filesystem redirects fail closed, POSIX roots are mode `0700`, and Windows replaces both owners and DACLs with the verified current-user SID plus one protected inheritable grant on every use.
+- An independent security review reproduced permissive pre-created Windows ACLs and standalone-only documentation ambiguity; both are repaired, the `Everyone:F` regression is green, and the shared prerequisites now state standard-profile and `doctor` authentication limits.
+- The exact Windows and Ubuntu/WSL gates match at 417 passed and one platform-specific skip, with 88%/87% branch coverage respectively; the real local hardened runner passed version/help doctor with empty cleanup, and package verification remains 82/61/30.
+- Final focused security re-review cleared current-user ownership establishment/verification, protected DACL replacement, shared setup guidance, mapped/doctor process parity, redirects, cleanup, and realistic ambient precedence with no medium-or-higher finding.
+- The independently cleared subprocess-authority repair is committed as `ad968ec`.
+- A fresh independent browser/security/product review found no medium-or-higher defect across session/origin/host controls, escaping, bounded reads, mobile CSS, or packaged assets; its strongest low polish is a possible dangling disabled-control description when no reason is supplied.
+- The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 15:18 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
