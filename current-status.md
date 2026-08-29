@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 04:52 ET
+Updated: 2026-08-29 04:59 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 281 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
+- Latest checks: 287 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: no medium-or-higher defect open; continue fresh post-fix residual audits against the clean 270-test head.
@@ -76,6 +76,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Preserve typed Workspace object/resource identity without unsafe legacy merging.
 - [x] Cover coordinator authority rejection across disabled, unknown, absent, and mismatched targets.
 - [x] Fail closed if a future Databricks CLI emits an incomplete continuation-token envelope.
+- [x] Reject raw nested DTOs, scalar mapping payloads, and boolean/integer coercion at contract construction.
 
 ## Evidence and decisions
 
@@ -228,6 +229,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Historical untyped Workspace identities are never auto-merged because their witness type cannot be proven; symmetric collision regressions preserve legacy UUID/cache and fail closed as separate typed objects.
 - Seven coordinator authority regressions raised coordinator branch coverage from 73% to 86% while proving invalid local authority never admits an action.
 - Official Databricks CLI v0.298 source confirms list commands use `RenderIterator` to exhaust pages into one JSON array; Rookery now rejects any non-empty continuation-token envelope instead of silently ingesting page one.
+- Nested contract validators now cover scopes, targets, observations, coverage declarations, actions, leases, type facets, and policy evidence; malformed JSON dictionaries can no longer crash ingestion after construction.
+- Facet payloads and connection settings now require JSON objects rather than arbitrary JSON arrays/scalars, and authority/count/priority fields reject Python's bool-as-int coercion.
 
 ## Risks / watch list
 
