@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 06:45 ET
+Updated: 2026-08-29 07:00 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 318 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
+- Latest checks: 319 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: no medium-or-higher defect open; continue fresh post-fix residual audits against the clean 316-test head.
+- Active review round: the blocking compatibility-probe finding and its bounded regression harness passed independent post-fix review; no medium-or-higher defect is open.
 - Next progress report due: 2026-08-29 07:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -85,10 +85,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Persist and enforce least-privilege capability coverage/completeness/absence policy.
 - [x] Distinguish legacy policy hydration from intentional deny-all and freeze policy by version.
 - [x] Apply complete desired configuration atomically and bind dispatch to settings revision.
+- [x] Close independent review of the non-blocking runtime-startup repair.
 
 ## Evidence and decisions
 
 - Existing implementation is intentionally observation-only and loopback-bound; preserve those constraints.
+- Runtime lifespan now starts its supervisor before probing external CLI compatibility, so an indefinitely blocked probe leaves authenticated cached state available and is cancelled during shutdown.
+- The post-fix reviewer cleared the runtime repair after requiring the lifespan regression itself to fail within a bounded timeout instead of risking a wedged CI run.
 - Stale cached state must remain visible and must not be represented as live truth.
 - A live Databricks smoke test remains out of scope because selecting a profile would require credentials or user input.
 - The production composition now passes an explicit host allowlist, so the test-only `testserver` host is not accepted by the real runtime.

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import httpx2
 import pytest
 
 from async_api_view.adapters.databricks import CliExecution, CliInvocation, CliRunner
@@ -117,6 +118,22 @@ class FlakyStartupCliRunner(FakeCliRunner):
         if self.doctor_calls <= self.failures:
             raise RuntimeError("temporary startup failure")
         self.ready.set()
+
+
+class BlockingStartupCliRunner(FakeCliRunner):
+    def __init__(self) -> None:
+        super().__init__(b"[]")
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def doctor(self) -> None:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        raise AssertionError("blocking compatibility check unexpectedly resumed")
 
 
 def settings(
@@ -1233,6 +1250,49 @@ async def test_worker_startup_retries_with_one_event_and_clears_dashboard_error(
     assert len(worker_events) == 1
 
     await runtime.stop()
+
+
+@pytest.mark.anyio
+async def test_blocked_worker_startup_does_not_hold_cached_authenticated_dashboard(
+    tmp_path: Path,
+) -> None:
+    runner = BlockingStartupCliRunner()
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    origin = f"https://{runtime.local_authorizer.browser_host}"
+    lifespan = runtime.app.router.lifespan_context(runtime.app)
+    entered_lifespan = False
+
+    try:
+        await asyncio.wait_for(lifespan.__aenter__(), timeout=1)
+        entered_lifespan = True
+        await asyncio.wait_for(runner.started.wait(), timeout=1)
+        token = runtime.local_authorizer.take_bootstrap_token()
+        transport = httpx2.ASGITransport(app=runtime.app)
+        async with httpx2.AsyncClient(transport=transport, base_url=origin) as client:
+            bootstrap = await client.post(
+                "/bootstrap",
+                data={"bootstrap_token": token},
+                headers={"Origin": origin},
+                follow_redirects=False,
+            )
+            response = await client.get("/")
+
+        assert bootstrap.status_code == 303
+        assert response.status_code == 200
+        assert "test-workspace" in response.text
+        assert "Disconnected" in response.text
+        assert "Worker compatibility check is in progress." in response.text
+        assert runtime.status() == (
+            False,
+            "Worker compatibility check is in progress.",
+        )
+    finally:
+        if entered_lifespan:
+            await asyncio.wait_for(lifespan.__aexit__(None, None, None), timeout=1)
+        else:
+            await asyncio.wait_for(runtime.stop(), timeout=1)
+
+    assert runner.cancelled
 
 
 @pytest.mark.anyio

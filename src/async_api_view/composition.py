@@ -1001,18 +1001,16 @@ class ApplicationRuntime:
         self._wake_event = asyncio.Event()
         self._component_errors.clear()
         self._failure_counts.clear()
-        try:
-            await self.worker.startup()
-        except Exception as exc:
-            self._worker_started = False
-            self._record_background_failure("worker", exc)
-        else:
-            self._worker_started = True
-            self._record_component_recovery("worker")
+        self._worker_started = False
+        self.worker_available = False
+        self.worker_error = "Worker compatibility check is in progress."
         self._background_task = asyncio.create_task(
             self._run_background(),
             name="async-api-view-runtime",
         )
+        # Let fast compatibility checks settle without making web readiness depend on
+        # an external CLI process that may take minutes or never return.
+        await asyncio.sleep(0)
 
     async def stop(self) -> None:
         if self._stop_event is not None:
