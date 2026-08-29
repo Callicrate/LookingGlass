@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
-import venv
 from pathlib import Path
 from tarfile import open as open_tar
 from tempfile import TemporaryDirectory
@@ -98,6 +98,13 @@ def _venv_cli(environment: Path) -> Path:
     )
 
 
+def _uv_executable() -> Path:
+    executable = shutil.which("uv")
+    if executable is None:
+        raise RuntimeError("uv is required for isolated wheel verification")
+    return Path(executable).absolute()
+
+
 def smoke_installed_wheel(
     wheel_archive: Path,
     expected_assets: frozenset[str],
@@ -107,22 +114,36 @@ def smoke_installed_wheel(
     )
     with TemporaryDirectory(prefix="rookery-wheel-smoke-") as temporary:
         environment = Path(temporary) / "venv"
-        venv.EnvBuilder(with_pip=True, clear=True).create(environment)
-        python = _venv_python(environment)
         process_environment = {
             key: value
             for key, value in os.environ.items()
             if key.upper() not in {"PYTHONHOME", "PYTHONPATH"}
         }
         process_environment["PYTHONNOUSERSITE"] = "1"
-        subprocess.run(  # noqa: S603 - absolute interpreter in the private test venv
+        uv = _uv_executable()
+        subprocess.run(  # noqa: S603 - absolute uv from the verified build environment
             [
-                str(python),
-                "-m",
+                str(uv),
+                "venv",
+                "--quiet",
+                "--python",
+                sys.executable,
+                str(environment),
+            ],
+            check=True,
+            cwd=temporary,
+            env=process_environment,
+            timeout=30,
+        )
+        python = _venv_python(environment)
+        subprocess.run(  # noqa: S603 - verified absolute uv and private venv interpreter
+            [
+                str(uv),
                 "pip",
                 "install",
                 "--quiet",
-                "--disable-pip-version-check",
+                "--python",
+                str(python),
                 str(wheel_archive.resolve()),
             ],
             check=True,

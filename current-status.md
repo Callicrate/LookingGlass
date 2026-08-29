@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 335 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: checkout-free standalone wheel installation is independently clear; no known medium-or-higher finding is open, so fresh residual audits continue.
+- Active review round: checkout-free standalone installation and direct Ubuntu/Snap portability are independently clear; no known medium-or-higher finding is open, so fresh residual audits continue.
 - Next progress report due: 2026-08-29 10:04 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -126,6 +126,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Independent build review regenerated identical constraints, proved corrupted hashes fail immediately, confirmed both build stages resolve the same six pinned packages on Windows/Linux, and cleared lock/project metadata coherence.
 - Installed users can now create a loadable no-overwrite starter TOML with `init-config`; the isolated wheel verifier executes `init-config` and `init` from an empty checkout-free directory.
 - Independent standalone review cleared exclusive/racing writer behavior, exact template parity, path semantics, parent/hardlink/symlink refusal, installed upgrade/uninstall, preserved operator files, six-command help, and secret absence.
+- Windows and Ubuntu/WSL installed-wheel smoke now use pinned uv to create/install into the temporary venv, avoiding any system `ensurepip` package dependency while retaining checkout provenance checks.
+- Follow-up review reproduced and fixed Snap-shim dereferencing; direct Ubuntu Python 3.12 with `/snap/bin/uv` and Windows now pass the same 78/57/26 installed-distribution verification.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
