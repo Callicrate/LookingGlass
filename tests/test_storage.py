@@ -71,6 +71,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0013_capability_coverage_policy",
             "0014_coverage_policy_initialization",
             "0015_relationship_coverage_watermarks",
+            "0016_projection_received_order",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -233,7 +234,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 15
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 16
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -271,7 +272,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 15
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 16
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -555,6 +556,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0013_capability_coverage_policy",
         "0014_coverage_policy_initialization",
         "0015_relationship_coverage_watermarks",
+        "0016_projection_received_order",
     )
     assert versions == (expected,) * workers
 
@@ -693,6 +695,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0013_capability_coverage_policy",
             "0014_coverage_policy_initialization",
             "0015_relationship_coverage_watermarks",
+            "0016_projection_received_order",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":

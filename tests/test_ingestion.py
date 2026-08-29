@@ -13,6 +13,7 @@ from async_api_view.contracts import (
     CoverageDeclaration,
     FacetObservation,
     FieldCoverage,
+    KnowledgeState,
     ObjectLocator,
     ObservationBatch,
     PresenceState,
@@ -58,6 +59,17 @@ def _membership_relationship(
         presence=PresenceState.PRESENT,
         authorized_by=(authority,),
     )
+
+
+def _rewind_projection_order_migration(store: SQLiteStore) -> None:
+    for table_name, column_name in (
+        ("remote_objects", "last_seen_received_at"),
+        ("facets", "received_at"),
+        ("relationships", "received_at"),
+        ("relationship_coverage_watermarks", "received_at"),
+        ("refresh_credit", "received_at"),
+    ):
+        store._connection.execute(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
 
 
 def test_partial_listing_preserves_members_and_observation_replay_is_idempotent(tmp_path) -> None:
@@ -238,10 +250,14 @@ def test_newer_complete_membership_suppresses_delayed_unknown_edge(tmp_path) -> 
             ),
         )
         assert run(store.ingest(empty_boundary)).status.value == "accepted"
+        _rewind_projection_order_migration(store)
         store._connection.execute("DROP TABLE relationship_coverage_watermarks")
         store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = ?",
-            ("0015_relationship_coverage_watermarks",),
+            "DELETE FROM schema_migrations WHERE version IN (?, ?)",
+            (
+                "0015_relationship_coverage_watermarks",
+                "0016_projection_received_order",
+            ),
         )
 
     child = ObjectLocator(
@@ -410,10 +426,14 @@ def test_migration_reconciles_preexisting_stale_edge_and_skips_unknown_credit(
                 seeded.workspace_root_scope.scope_id,
             ),
         )
+        _rewind_projection_order_migration(store)
         store._connection.execute("DROP TABLE relationship_coverage_watermarks")
         store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = ?",
-            ("0015_relationship_coverage_watermarks",),
+            "DELETE FROM schema_migrations WHERE version IN (?, ?)",
+            (
+                "0015_relationship_coverage_watermarks",
+                "0016_projection_received_order",
+            ),
         )
 
     with SQLiteStore(path) as migrated:
@@ -832,6 +852,500 @@ def test_partial_facet_patch_never_clears_unobserved_fields(tmp_path) -> None:
         "name": "renamed.py",
         "digest": "abc",
     }
+
+
+def test_lower_numeric_source_revision_cannot_overwrite_higher_revision(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "source-revision.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    authority = _membership_authority(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    locator = ObjectLocator(
+        object_type="file",
+        source_kind="databricks.workspace.file",
+        external_key="workspace:/Shared/revisioned.py",
+        display_name="revisioned.py",
+    )
+
+    def revision_batch(revision: str, at: datetime, value: str) -> tuple[ObservationBatch, str]:
+        observation = FacetObservation(
+            observation_id=uuid4(),
+            target=locator,
+            facet="metadata",
+            facet_version="1",
+            update_mode=UpdateMode.SNAPSHOT,
+            field_coverage=FieldCoverage.COMPLETE,
+            payload={"name": value},
+            source_revision=revision,
+            authorized_by=(authority,),
+        )
+        return (
+            ObservationBatch(
+                batch_id=uuid4(),
+                system_id=seeded.system.system_id,
+                connection_binding_id=seeded.connection_binding_id,
+                adapter_key="databricks",
+                adapter_version="1",
+                observed_at=at,
+                received_at=at,
+                facet_observations=(observation,),
+                relationship_observations=(
+                    _membership_relationship(
+                        authority,
+                        seeded.workspace_root_object_id,
+                        locator,
+                    ),
+                ),
+            ),
+            observation.observation_id,
+        )
+
+    higher, higher_observation_id = revision_batch("2", NOW, "higher")
+    lower, _ = revision_batch("1", NOW + timedelta(minutes=10), "lower")
+    assert run(store.ingest(higher)).status.value == "accepted"
+    assert run(store.ingest(lower)).status.value == "accepted"
+
+    remote_object = next(
+        item for item in store.list_objects() if item.external_key == locator.external_key
+    )
+    facet = store.get_facet_sync(remote_object.object_id, "metadata")
+    assert facet is not None
+    assert facet.payload == {"name": "higher"}
+    assert facet.source_revision == "2"
+    assert facet.supporting_observation_id == higher_observation_id
+
+
+def test_equal_observed_time_uses_received_order_across_projections(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "received-order.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    authority = _membership_authority(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    declaration = CoverageDeclaration(
+        scope=authority,
+        completeness=CollectionCoverage.COMPLETE,
+        absence_authority=(AbsenceAuthority.RELATIONSHIP,),
+    )
+
+    def ordered_batch(label: str, received_at: datetime) -> tuple[ObservationBatch, str, str]:
+        locator = ObjectLocator(
+            object_type="file",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:/Shared/ordered.py",
+            display_name=label,
+        )
+        facet = FacetObservation(
+            observation_id=uuid4(),
+            target=locator,
+            facet="metadata",
+            facet_version="1",
+            update_mode=UpdateMode.SNAPSHOT,
+            field_coverage=FieldCoverage.COMPLETE,
+            payload={"name": label},
+            authorized_by=(authority,),
+        )
+        relationship = _membership_relationship(
+            authority,
+            seeded.workspace_root_object_id,
+            locator,
+        )
+        return (
+            ObservationBatch(
+                batch_id=uuid4(),
+                system_id=seeded.system.system_id,
+                connection_binding_id=seeded.connection_binding_id,
+                adapter_key="databricks",
+                adapter_version="1",
+                observed_at=NOW,
+                received_at=received_at,
+                facet_observations=(facet,),
+                relationship_observations=(relationship,),
+                coverage=(declaration,),
+            ),
+            facet.observation_id,
+            relationship.observation_id,
+        )
+
+    newer, newer_facet_id, newer_relationship_id = ordered_batch(
+        "newer", NOW + timedelta(minutes=2)
+    )
+    older, _, _ = ordered_batch("older", NOW + timedelta(minutes=1))
+    exact_tie, _, _ = ordered_batch("exact-tie-loses", NOW + timedelta(minutes=2))
+    assert run(store.ingest(newer)).status.value == "accepted"
+    assert run(store.ingest(older)).status.value == "accepted"
+    assert run(store.ingest(exact_tie)).status.value == "accepted"
+
+    remote_object = next(
+        item for item in store.list_objects() if item.external_key == "workspace:/Shared/ordered.py"
+    )
+    facet = store.get_facet_sync(remote_object.object_id, "metadata")
+    relationship = store.list_relationships_sync(seeded.workspace_root_object_id)[0]
+    latest_credit = store.latest_qualifying_observation(authority)
+    expected_coverage_id = store._coverage_observation_id(newer.batch_id, authority)
+    watermark = store._connection.execute(
+        """
+        SELECT supporting_observation_id FROM relationship_coverage_watermarks
+        WHERE system_id = ? AND subject_id = ? AND predicate = 'contains'
+        """,
+        (seeded.system.system_id, seeded.workspace_root_object_id),
+    ).fetchone()
+
+    assert remote_object.display_name == "newer"
+    assert facet is not None and facet.payload == {"name": "newer"}
+    assert facet.supporting_observation_id == newer_facet_id
+    assert relationship.presence is PresenceState.PRESENT
+    assert relationship.supporting_observation_id == newer_relationship_id, (
+        relationship,
+        expected_coverage_id,
+    )
+    assert latest_credit is not None and latest_credit.observation_id == expected_coverage_id
+    assert watermark is not None and watermark["supporting_observation_id"] == expected_coverage_id
+
+
+def test_migration_invalidates_ambiguous_legacy_equal_time_projection(tmp_path) -> None:
+    path = tmp_path / "legacy-equal-time.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        authority = _membership_authority(
+            seeded.system.system_id, seeded.workspace_root_scope.scope_id
+        )
+        declaration = CoverageDeclaration(
+            scope=authority,
+            completeness=CollectionCoverage.COMPLETE,
+            absence_authority=(AbsenceAuthority.RELATIONSHIP,),
+        )
+
+        def legacy_batch(label: str, received_at: datetime) -> tuple[ObservationBatch, str, str]:
+            locator = ObjectLocator(
+                object_type="file",
+                source_kind="databricks.workspace.file",
+                external_key="workspace:/Shared/legacy-ordered.py",
+                display_name=label,
+            )
+            facet = FacetObservation(
+                observation_id=uuid4(),
+                target=locator,
+                facet="metadata",
+                facet_version="1",
+                update_mode=UpdateMode.SNAPSHOT,
+                field_coverage=FieldCoverage.COMPLETE,
+                payload={"name": label},
+                authorized_by=(authority,),
+            )
+            relationship = _membership_relationship(
+                authority, seeded.workspace_root_object_id, locator
+            )
+            return (
+                ObservationBatch(
+                    batch_id=uuid4(),
+                    system_id=seeded.system.system_id,
+                    connection_binding_id=seeded.connection_binding_id,
+                    adapter_key="databricks",
+                    adapter_version="1",
+                    observed_at=NOW,
+                    received_at=received_at,
+                    facet_observations=(facet,),
+                    relationship_observations=(relationship,),
+                    coverage=(declaration,),
+                ),
+                facet.observation_id,
+                relationship.observation_id,
+            )
+
+        newer, _, _ = legacy_batch("newer", NOW + timedelta(minutes=2))
+        older, older_facet_id, older_relationship_id = legacy_batch(
+            "legacy-wrong-winner", NOW + timedelta(minutes=1)
+        )
+        assert run(store.ingest(newer)).status.value == "accepted"
+        assert run(store.ingest(older)).status.value == "accepted"
+        remote_object = next(
+            item
+            for item in store.list_objects()
+            if item.external_key == "workspace:/Shared/legacy-ordered.py"
+        )
+        store._connection.execute(
+            """
+            UPDATE facets SET payload_json = ?, supporting_observation_id = ?
+            WHERE object_id = ? AND facet = 'metadata'
+            """,
+            ('{"name":"legacy-wrong-winner"}', older_facet_id, remote_object.object_id),
+        )
+        store._connection.execute(
+            """
+            UPDATE relationships SET presence = 'present', supporting_observation_id = ?
+            WHERE subject_id = ? AND object_id = ? AND predicate = 'contains'
+            """,
+            (
+                older_relationship_id,
+                seeded.workspace_root_object_id,
+                remote_object.object_id,
+            ),
+        )
+        store._connection.execute(
+            """
+            UPDATE relationship_coverage_watermarks SET supporting_observation_id = ?
+            WHERE system_id = ? AND subject_id = ? AND predicate = 'contains'
+            """,
+            (
+                store._coverage_observation_id(older.batch_id, authority),
+                seeded.system.system_id,
+                seeded.workspace_root_object_id,
+            ),
+        )
+        _rewind_projection_order_migration(store)
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            ("0016_projection_received_order",),
+        )
+
+    with SQLiteStore(path) as migrated:
+        facet = migrated.get_facet_sync(remote_object.object_id, "metadata")
+        relationship = migrated.list_relationships_sync(seeded.workspace_root_object_id)[0]
+        assert facet is not None
+        assert facet.knowledge is KnowledgeState.UNKNOWN
+        assert facet.payload == {}
+        assert relationship.presence is PresenceState.UNKNOWN
+        assert migrated.latest_qualifying_observation(authority) is None
+        assert (
+            migrated._connection.execute(
+                "SELECT COUNT(*) FROM relationship_coverage_watermarks"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_migration_unknown_object_receipt_rejects_equal_observed_stale_delivery(
+    tmp_path,
+) -> None:
+    path = tmp_path / "legacy-object-receipt.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        authority = _membership_authority(
+            seeded.system.system_id, seeded.workspace_root_scope.scope_id
+        )
+
+        def object_batch(label: str, received_at: datetime) -> ObservationBatch:
+            locator = ObjectLocator(
+                object_type="file",
+                source_kind="databricks.workspace.file",
+                external_key="workspace:/Shared/legacy-receipt.py",
+                display_name=label,
+            )
+            return ObservationBatch(
+                batch_id=uuid4(),
+                system_id=seeded.system.system_id,
+                connection_binding_id=seeded.connection_binding_id,
+                adapter_key="databricks",
+                adapter_version="1",
+                observed_at=NOW,
+                received_at=received_at,
+                facet_observations=(
+                    FacetObservation(
+                        observation_id=uuid4(),
+                        target=locator,
+                        facet="metadata",
+                        facet_version="1",
+                        update_mode=UpdateMode.SNAPSHOT,
+                        field_coverage=FieldCoverage.COMPLETE,
+                        payload={"name": label},
+                        authorized_by=(authority,),
+                    ),
+                ),
+                relationship_observations=(
+                    _membership_relationship(authority, seeded.workspace_root_object_id, locator),
+                ),
+            )
+
+        original = object_batch("original", NOW + timedelta(minutes=10))
+        assert run(store.ingest(original)).status.value == "accepted"
+        remote_object = next(
+            item
+            for item in store.list_objects()
+            if item.external_key == "workspace:/Shared/legacy-receipt.py"
+        )
+        _rewind_projection_order_migration(store)
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            ("0016_projection_received_order",),
+        )
+
+    with SQLiteStore(path) as migrated:
+        stale = object_batch("stale", NOW + timedelta(minutes=5))
+        assert run(migrated.ingest(stale)).status.value == "accepted"
+        unchanged = migrated.get_object_sync(remote_object.object_id)
+        facet = migrated.get_facet_sync(remote_object.object_id, "metadata")
+        assert unchanged is not None and unchanged.display_name == "original"
+        assert facet is not None and facet.payload == {"name": "original"}
+
+
+def test_migration_does_not_mix_same_external_identity_across_systems(tmp_path) -> None:
+    path = tmp_path / "legacy-cross-system.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded_systems = tuple(
+            SystemBootstrapService(store).configure_databricks_workspace(
+                display_name=name,
+                profile=profile,
+                workspace_root="/Shared",
+                now=NOW,
+            )
+            for name, profile in (("one", "ONE"), ("two", "TWO"))
+        )
+        object_ids: list[str] = []
+        for seeded in seeded_systems:
+            authority = _membership_authority(
+                seeded.system.system_id, seeded.workspace_root_scope.scope_id
+            )
+            locator = ObjectLocator(
+                object_type="file",
+                source_kind="databricks.workspace.file",
+                external_key="workspace:/Shared/same.py",
+                display_name=seeded.system.display_name,
+            )
+            facet = FacetObservation(
+                observation_id=uuid4(),
+                target=locator,
+                facet="metadata",
+                facet_version="1",
+                update_mode=UpdateMode.SNAPSHOT,
+                field_coverage=FieldCoverage.COMPLETE,
+                payload={"name": seeded.system.display_name},
+                authorized_by=(authority,),
+            )
+            batch = ObservationBatch(
+                batch_id=uuid4(),
+                system_id=seeded.system.system_id,
+                connection_binding_id=seeded.connection_binding_id,
+                adapter_key="databricks",
+                adapter_version="1",
+                observed_at=NOW,
+                received_at=NOW,
+                facet_observations=(facet,),
+                relationship_observations=(
+                    _membership_relationship(authority, seeded.workspace_root_object_id, locator),
+                ),
+            )
+            assert run(store.ingest(batch)).status.value == "accepted"
+            object_ids.append(
+                next(
+                    item.object_id
+                    for item in store.list_objects(system_id=seeded.system.system_id)
+                    if item.external_key == locator.external_key
+                )
+            )
+        _rewind_projection_order_migration(store)
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            ("0016_projection_received_order",),
+        )
+
+    with SQLiteStore(path) as migrated:
+        for object_id, expected in zip(object_ids, ("one", "two"), strict=True):
+            facet = migrated.get_facet_sync(object_id, "metadata")
+            assert facet is not None
+            assert facet.knowledge is KnowledgeState.KNOWN
+            assert facet.payload == {"name": expected}
+
+
+def test_migration_detects_decimal_revisions_beyond_sqlite_integer_range(tmp_path) -> None:
+    path = tmp_path / "legacy-large-revision.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        authority = _membership_authority(
+            seeded.system.system_id, seeded.workspace_root_scope.scope_id
+        )
+        locator = ObjectLocator(
+            object_type="file",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:/Shared/large-revision.py",
+            display_name="large-revision.py",
+        )
+        revisions = ("9" * 100, "1" + "0" * 100)
+        for offset, revision in enumerate(revisions):
+            facet = FacetObservation(
+                observation_id=uuid4(),
+                target=locator,
+                facet="metadata",
+                facet_version="1",
+                update_mode=UpdateMode.SNAPSHOT,
+                field_coverage=FieldCoverage.COMPLETE,
+                payload={"revision": revision},
+                source_revision=revision,
+                authorized_by=(authority,),
+            )
+            batch = ObservationBatch(
+                batch_id=uuid4(),
+                system_id=seeded.system.system_id,
+                connection_binding_id=seeded.connection_binding_id,
+                adapter_key="databricks",
+                adapter_version="1",
+                observed_at=NOW + timedelta(minutes=offset),
+                received_at=NOW + timedelta(minutes=offset),
+                facet_observations=(facet,),
+                relationship_observations=(
+                    _membership_relationship(authority, seeded.workspace_root_object_id, locator),
+                ),
+            )
+            assert run(store.ingest(batch)).status.value == "accepted"
+        remote_object = next(
+            item for item in store.list_objects() if item.external_key == locator.external_key
+        )
+        equal_locator = replace(
+            locator,
+            external_key="workspace:/Shared/equal-revision.py",
+            display_name="equal-revision.py",
+        )
+        for offset, revision in enumerate(("1", "01"), start=5):
+            facet = FacetObservation(
+                observation_id=uuid4(),
+                target=equal_locator,
+                facet="metadata",
+                facet_version="1",
+                update_mode=UpdateMode.SNAPSHOT,
+                field_coverage=FieldCoverage.COMPLETE,
+                payload={"revision": revision},
+                source_revision=revision,
+                authorized_by=(authority,),
+            )
+            batch = ObservationBatch(
+                batch_id=uuid4(),
+                system_id=seeded.system.system_id,
+                connection_binding_id=seeded.connection_binding_id,
+                adapter_key="databricks",
+                adapter_version="1",
+                observed_at=NOW + timedelta(minutes=offset),
+                received_at=NOW + timedelta(minutes=offset),
+                facet_observations=(facet,),
+                relationship_observations=(
+                    _membership_relationship(
+                        authority, seeded.workspace_root_object_id, equal_locator
+                    ),
+                ),
+            )
+            assert run(store.ingest(batch)).status.value == "accepted"
+        equal_object = next(
+            item for item in store.list_objects() if item.external_key == equal_locator.external_key
+        )
+        _rewind_projection_order_migration(store)
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            ("0016_projection_received_order",),
+        )
+
+    with SQLiteStore(path) as migrated:
+        facet = migrated.get_facet_sync(remote_object.object_id, "metadata")
+        assert facet is not None
+        assert facet.knowledge is KnowledgeState.UNKNOWN
+        assert facet.payload == {}
+        equal_facet = migrated.get_facet_sync(equal_object.object_id, "metadata")
+        assert equal_facet is not None
+        assert equal_facet.knowledge is KnowledgeState.KNOWN
+        assert equal_facet.payload == {"revision": "01"}
 
 
 def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:

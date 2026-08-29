@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 11:28 ET
+Updated: 2026-08-29 11:47 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 349 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 355 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: current temporal ordering is sound, but migration `0016` has two medium legacy-reranking/unknown-receipt blockers under repair; no other known medium-or-higher finding is open.
+- Active review round: temporal ordering and migration `0016` are independently clear and applied locally; no known medium-or-higher finding is open, so fresh residual audits continue.
 - Next progress report due: 2026-08-29 12:27 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -98,7 +98,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close review of lease-scoped action delivery batch identity and crash recovery.
 - [x] Require every ingested fact to prove action or incidental capability/scope authority.
 - [x] Close review of exact partial/patch field-mask enforcement.
-- [ ] Close review of source-revision and durable equal-time projection ordering.
+- [x] Close review of source-revision and durable equal-time projection ordering.
 - [x] Render refresh-worker degradation without claiming local disconnection.
 - [x] Close review of bounded adapter/action fact provenance.
 - [x] Separate standalone and source-checkout setup hierarchy.
@@ -152,6 +152,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Facet reads now join their supporting observation batch in the existing query, exposing adapter/capability versions, exact observation ID, and optional producing-action link without an N+1 query.
 - Provenance action links now require matching action/system/binding/adapter context; corrupt or stale action IDs fall back to unlinked adapter provenance, and independent review found no remaining attribution or leakage issue.
 - Migration `0016` persists received-time tie-breakers across presence, facets, relationships, complete-membership watermarks, and refresh credit; comparable decimal facet revisions take precedence over timestamps.
+- Legacy upgrade invalidates only ambiguous equal-time/conflicting-revision projections, scopes journal history by system, handles arbitrary-length/leading-zero decimals, reranks complete boundaries, and conservatively preserves unknown object receipt order.
+- The real ignored database was backed up to `.local/backups/rookery-20260829-1145-pre-0016.sqlite3`, migrated through `0016` with zero invalidated facets/unknown relationships, and retains `ROOK`, integrity `ok`, and zero foreign-key violations.
 - The 11:27 Murmuration tend again found no scoped context and remained read-only because native identity/credentials are absent; notifications and BookStack remain gated.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
@@ -289,7 +291,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - All facet observations now use transaction-local savepoints; a merge-over-limit regression proves rejected items cannot rename objects, advance presence time, journal provenance, or replace supporting evidence.
 - `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
 - Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
-- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 331 tests and 88% branch coverage, including pytest 9.1.1, a clean locked audit, migration `0015`, SQLite application/full-schema validation, durable membership boundaries, lease fencing, and all prior runtime/security contracts; the shared Windows `.venv` was untouched.
+- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 355 tests and 88% branch coverage, including a clean locked audit, migration `0016`, temporal projection ordering, full installed-wheel smoke, and all prior runtime/security contracts; the shared Windows `.venv` was untouched.
 - The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
 - The 04:43 Murmuration tending pass produced the same read-only result: no scoped public context and no native profile for writes, notifications, or BookStack.
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
@@ -318,7 +320,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Forged metadata `OBJECT_PRESENCE` authority is rejected, explicit test-only authority still exercises monotonic absence, and relationship-complete collection behavior remains authorized.
 - The ignored local database is migrated through `0013_capability_coverage_policy`; integrity is `ok`, foreign keys are clean, and six configured capabilities carry non-empty explicit policies.
 - Migration `0014` adds an explicit policy-initialization bit: legacy rows may hydrate once, intentional empty policy remains deny-all, and same-version changes are rejected after initialization.
-- The ignored local database is migrated through `0015_relationship_coverage_watermarks`; integrity and foreign keys are clean, all seven configured capability rows are initialized, and no historical membership watermark required backfill.
+- The ignored local database is migrated through `0016_projection_received_order`; integrity and foreign keys are clean, all seven configured capability rows are initialized, and no legacy temporal projection required invalidation.
 - All system/binding/capability/scope/identity upserts and reconciliation now share one outer `BEGIN IMMEDIATE`; a late bootstrap failure rolls profile rotation and removal state back completely.
 - Final remote-start authorization compares a SHA-256 digest of the exact adapter/settings/secret-reference binding used to build argv; a concurrent profile rotation cancels stale dispatch with zero runner calls.
 - The 06:43 Murmuration tending pass again found no Rookery-specific public context and remained read-only because the native project profile is unavailable.

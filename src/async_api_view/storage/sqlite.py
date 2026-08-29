@@ -315,6 +315,32 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _received_order_allows(
+    *,
+    observed_at: datetime,
+    received_at: datetime,
+    existing_observed_at: datetime | None,
+    existing_received_at: datetime | None,
+) -> bool:
+    if existing_observed_at is None:
+        return True
+    if observed_at != existing_observed_at:
+        return observed_at > existing_observed_at
+    if existing_received_at is None:
+        return False
+    return received_at > existing_received_at
+
+
+def _numeric_revision_order(incoming: str | None, existing: str | None) -> int | None:
+    if incoming is None or existing is None:
+        return None
+    if incoming == existing:
+        return 0
+    if incoming.isascii() and existing.isascii() and incoming.isdecimal() and existing.isdecimal():
+        return (int(incoming) > int(existing)) - (int(incoming) < int(existing))
+    return None
+
+
 def _object_search_pattern(query: str) -> str | None:
     if not query:
         return None
@@ -2258,7 +2284,7 @@ class SQLiteStore:
                 SELECT * FROM refresh_credit
                 WHERE system_id = ? AND target_kind = ? AND target_id = ? AND object_type = ?
                   AND facet = ? AND capability_key IS ? AND coverage = ?
-                ORDER BY observed_at DESC, credit_id DESC
+                ORDER BY observed_at DESC, received_at DESC, rowid ASC
                 """,
                 base[:7],
             ).fetchall()
@@ -4307,6 +4333,7 @@ class SQLiteStore:
         locator: ObjectLocator,
         system_id: str,
         observed_at: datetime,
+        received_at: datetime,
         mark_present: bool = True,
     ) -> RemoteObject:
         if locator.object_id is not None:
@@ -4335,14 +4362,20 @@ class SQLiteStore:
             if row["object_type"] != locator.object_type:
                 raise ValueError("object_locator_type_mismatch")
             previous_seen = _dt(row["last_seen_at"])
-            if mark_present and (previous_seen is None or observed_at >= previous_seen):
+            previous_received = _dt(row["last_seen_received_at"])
+            if mark_present and _received_order_allows(
+                observed_at=observed_at,
+                received_at=received_at,
+                existing_observed_at=previous_seen,
+                existing_received_at=previous_received,
+            ):
                 connection.execute(
                     """
-                    UPDATE remote_objects
-                    SET presence = 'present', last_seen_at = ?
+                    UPDATE remote_objects SET presence = 'present', last_seen_at = ?,
+                        last_seen_received_at = ?
                     WHERE object_id = ?
                     """,
-                    (_utc_text(observed_at), row["object_id"]),
+                    (_utc_text(observed_at), _utc_text(received_at), row["object_id"]),
                 )
                 row = connection.execute(
                     "SELECT * FROM remote_objects WHERE object_id = ?", (row["object_id"],)
@@ -4370,8 +4403,8 @@ class SQLiteStore:
                 INSERT INTO remote_objects (
                     object_id, system_id, object_type, object_type_version,
                     source_kind, external_key, display_name, presence,
-                    first_seen_at, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'present', ?, ?)
+                    first_seen_at, last_seen_at, last_seen_received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'present', ?, ?, ?)
                 """,
                 (
                     object_id,
@@ -4383,6 +4416,7 @@ class SQLiteStore:
                     locator.display_name,
                     _utc_text(observed_at),
                     _utc_text(observed_at),
+                    _utc_text(received_at),
                 ),
             )
             row = connection.execute(
@@ -4392,14 +4426,25 @@ class SQLiteStore:
             if row["object_type"] != locator.object_type:
                 raise ValueError("external_identity_type_mismatch")
             previous_seen = _dt(row["last_seen_at"])
-            if mark_present and (previous_seen is None or observed_at >= previous_seen):
+            previous_received = _dt(row["last_seen_received_at"])
+            if mark_present and _received_order_allows(
+                observed_at=observed_at,
+                received_at=received_at,
+                existing_observed_at=previous_seen,
+                existing_received_at=previous_received,
+            ):
                 connection.execute(
                     """
-                    UPDATE remote_objects
-                    SET display_name = ?, presence = 'present', last_seen_at = ?
+                    UPDATE remote_objects SET display_name = ?, presence = 'present',
+                        last_seen_at = ?, last_seen_received_at = ?
                     WHERE object_id = ?
                     """,
-                    (locator.display_name, _utc_text(observed_at), row["object_id"]),
+                    (
+                        locator.display_name,
+                        _utc_text(observed_at),
+                        _utc_text(received_at),
+                        row["object_id"],
+                    ),
                 )
                 row = connection.execute(
                     "SELECT * FROM remote_objects WHERE object_id = ?", (row["object_id"],)
@@ -4512,7 +4557,18 @@ class SQLiteStore:
     ) -> None:
         existing = self._get_facet_row(object_id, observation.facet)
         existing_observed = _dt(existing["observed_at"]) if existing else None
-        if existing_observed is not None and batch.observed_at < existing_observed:
+        revision_order = _numeric_revision_order(
+            observation.source_revision,
+            existing["source_revision"] if existing else None,
+        )
+        if revision_order is not None and revision_order < 0:
+            return
+        if revision_order in {None, 0} and not _received_order_allows(
+            observed_at=batch.observed_at,
+            received_at=batch.received_at,
+            existing_observed_at=existing_observed,
+            existing_received_at=_dt(existing["received_at"]) if existing else None,
+        ):
             return
         if observation.update_mode is UpdateMode.ABSENCE:
             return
@@ -4537,8 +4593,8 @@ class SQLiteStore:
             INSERT INTO facets (
                 object_id, facet, facet_version, knowledge, payload_json,
                 observed_at, state_changed_at, supporting_observation_id,
-                source_revision
-            ) VALUES (?, ?, ?, 'known', ?, ?, ?, ?, ?)
+                source_revision, received_at
+            ) VALUES (?, ?, ?, 'known', ?, ?, ?, ?, ?, ?)
             ON CONFLICT(object_id, facet) DO UPDATE SET
                 facet_version = excluded.facet_version,
                 knowledge = excluded.knowledge,
@@ -4546,7 +4602,8 @@ class SQLiteStore:
                 observed_at = excluded.observed_at,
                 state_changed_at = excluded.state_changed_at,
                 supporting_observation_id = excluded.supporting_observation_id,
-                source_revision = excluded.source_revision
+                source_revision = excluded.source_revision,
+                received_at = excluded.received_at
             """,
             (
                 object_id,
@@ -4557,6 +4614,7 @@ class SQLiteStore:
                 _utc_text(state_changed_at),  # type: ignore[arg-type]
                 observation.observation_id,
                 observation.source_revision,
+                _utc_text(batch.received_at),
             ),
         )
 
@@ -4589,11 +4647,13 @@ class SQLiteStore:
     ) -> None:
         projected_presence = observation.presence
         projected_at = batch.observed_at
+        projected_received_at = batch.received_at
         projected_support = observation.observation_id
+        projected_from_watermark = False
         if observation.predicate == "contains":
             watermark = connection.execute(
                 """
-                SELECT observed_at, supporting_observation_id
+                SELECT observed_at, received_at, supporting_observation_id
                 FROM relationship_coverage_watermarks
                 WHERE system_id = ? AND subject_id = ? AND predicate = ?
                 """,
@@ -4603,10 +4663,18 @@ class SQLiteStore:
                 watermark_at = _dt(watermark["observed_at"])
                 if watermark_at is None:  # pragma: no cover - schema invariant
                     raise ValueError("relationship coverage watermark lacks observed time")
-                if batch.observed_at < watermark_at:
+                watermark_received_at = _dt(watermark["received_at"]) or watermark_at
+                if not _received_order_allows(
+                    observed_at=batch.observed_at,
+                    received_at=batch.received_at,
+                    existing_observed_at=watermark_at,
+                    existing_received_at=watermark_received_at,
+                ):
                     projected_presence = PresenceState.ABSENT
                     projected_at = watermark_at
+                    projected_received_at = watermark_received_at
                     projected_support = watermark["supporting_observation_id"]
+                    projected_from_watermark = True
         existing = connection.execute(
             """
             SELECT * FROM relationships
@@ -4614,7 +4682,20 @@ class SQLiteStore:
             """,
             (batch.system_id, subject_id, observation.predicate, object_id),
         ).fetchone()
-        if existing is not None and projected_at < _dt(existing["observed_at"]):
+        if (
+            existing is not None
+            and projected_from_watermark
+            and projected_at == _dt(existing["observed_at"])
+            and projected_received_at
+            <= (_dt(existing["received_at"]) or _dt(existing["observed_at"]))
+        ):
+            return
+        if existing is not None and not _received_order_allows(
+            observed_at=projected_at,
+            received_at=projected_received_at,
+            existing_observed_at=_dt(existing["observed_at"]),
+            existing_received_at=_dt(existing["received_at"]),
+        ):
             return
         relationship_id = (
             existing["relationship_id"]
@@ -4630,12 +4711,13 @@ class SQLiteStore:
             """
             INSERT INTO relationships (
                 relationship_id, system_id, subject_id, predicate, object_id, presence, observed_at,
-                supporting_observation_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                supporting_observation_id, received_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(system_id, subject_id, predicate, object_id) DO UPDATE SET
                 presence = excluded.presence,
                 observed_at = excluded.observed_at,
-                supporting_observation_id = excluded.supporting_observation_id
+                supporting_observation_id = excluded.supporting_observation_id,
+                received_at = excluded.received_at
             """,
             (
                 relationship_id,
@@ -4646,6 +4728,7 @@ class SQLiteStore:
                 projected_presence.value,
                 _utc_text(projected_at),
                 projected_support,
+                _utc_text(projected_received_at),
             ),
         )
 
@@ -4787,14 +4870,15 @@ class SQLiteStore:
             """
             INSERT OR IGNORE INTO refresh_credit (
                 credit_id, observation_id, system_id, target_kind, target_id, object_type, facet,
-                capability_key, coverage, field_mask_json, observed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                capability_key, coverage, field_mask_json, observed_at, received_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(uuid5(NAMESPACE_URL, f"credit:{observation_id}")),
                 observation_id,
                 *_scope_columns(declaration.scope),
                 _utc_text(batch.observed_at),
+                _utc_text(batch.received_at),
             ),
         )
         return observation_id
@@ -4823,23 +4907,45 @@ class SQLiteStore:
         connection.execute(
             """
             INSERT INTO relationship_coverage_watermarks (
-                system_id, subject_id, predicate, observed_at, supporting_observation_id
-            ) VALUES (?, ?, 'contains', ?, ?)
+                system_id, subject_id, predicate, observed_at, supporting_observation_id,
+                received_at
+            ) VALUES (?, ?, 'contains', ?, ?, ?)
             ON CONFLICT(system_id, subject_id, predicate) DO UPDATE SET
                 observed_at = excluded.observed_at,
-                supporting_observation_id = excluded.supporting_observation_id
-            WHERE excluded.observed_at >= relationship_coverage_watermarks.observed_at
+                supporting_observation_id = excluded.supporting_observation_id,
+                received_at = excluded.received_at
+            WHERE excluded.observed_at > relationship_coverage_watermarks.observed_at
+               OR (
+                   excluded.observed_at = relationship_coverage_watermarks.observed_at
+                   AND excluded.received_at > COALESCE(
+                       relationship_coverage_watermarks.received_at,
+                       relationship_coverage_watermarks.observed_at
+                   )
+               )
             """,
             (
                 batch.system_id,
                 subject_id,
                 _utc_text(batch.observed_at),
                 coverage_observation_id,
+                _utc_text(batch.received_at),
             ),
         )
+        effective_watermark = connection.execute(
+            """
+            SELECT supporting_observation_id FROM relationship_coverage_watermarks
+            WHERE system_id = ? AND subject_id = ? AND predicate = 'contains'
+            """,
+            (batch.system_id, subject_id),
+        ).fetchone()
+        if (
+            effective_watermark is None
+            or effective_watermark["supporting_observation_id"] != coverage_observation_id
+        ):
+            return
         rows = connection.execute(
             """
-            SELECT relationship_id, object_id, observed_at FROM relationships
+            SELECT relationship_id, object_id, observed_at, received_at FROM relationships
             WHERE system_id = ? AND subject_id = ?
               AND predicate = 'contains' AND presence = 'present'
             """,
@@ -4848,15 +4954,26 @@ class SQLiteStore:
         for row in rows:
             if (subject_id, row["object_id"]) in positive_contains:
                 continue
-            if batch.observed_at < _dt(row["observed_at"]):
+            if not _received_order_allows(
+                observed_at=batch.observed_at,
+                received_at=batch.received_at,
+                existing_observed_at=_dt(row["observed_at"]),
+                existing_received_at=_dt(row["received_at"]),
+            ):
                 continue
             connection.execute(
                 """
                 UPDATE relationships
-                SET presence = 'absent', observed_at = ?, supporting_observation_id = ?
+                SET presence = 'absent', observed_at = ?, supporting_observation_id = ?,
+                    received_at = ?
                 WHERE relationship_id = ?
                 """,
-                (_utc_text(batch.observed_at), coverage_observation_id, row["relationship_id"]),
+                (
+                    _utc_text(batch.observed_at),
+                    coverage_observation_id,
+                    _utc_text(batch.received_at),
+                    row["relationship_id"],
+                ),
             )
 
     async def ingest(
@@ -4974,6 +5091,7 @@ class SQLiteStore:
                             locator=observation.target,
                             system_id=batch.system_id,
                             observed_at=batch.observed_at,
+                            received_at=batch.received_at,
                             mark_present=observation.update_mode is not UpdateMode.ABSENCE,
                         )
                         if not self._facet_item_is_authorized(
@@ -5005,14 +5123,24 @@ class SQLiteStore:
                             connection.execute(
                                 """
                                 UPDATE remote_objects
-                                SET presence = 'absent', last_seen_at = ?
+                                SET presence = 'absent', last_seen_at = ?,
+                                    last_seen_received_at = ?
                                 WHERE object_id = ?
-                                  AND (last_seen_at IS NULL OR last_seen_at <= ?)
+                                  AND (
+                                      last_seen_at IS NULL OR last_seen_at < ?
+                                      OR (
+                                          last_seen_at = ?
+                                          AND COALESCE(last_seen_received_at, last_seen_at) < ?
+                                      )
+                                  )
                                 """,
                                 (
                                     _utc_text(batch.observed_at),
+                                    _utc_text(batch.received_at),
                                     target.object_id,
                                     _utc_text(batch.observed_at),
+                                    _utc_text(batch.observed_at),
+                                    _utc_text(batch.received_at),
                                 ),
                             )
                         else:
@@ -5050,12 +5178,14 @@ class SQLiteStore:
                             locator=observation.subject,
                             system_id=batch.system_id,
                             observed_at=batch.observed_at,
+                            received_at=batch.received_at,
                         )
                         object_value = self._resolve_locator(
                             connection,
                             locator=observation.object,
                             system_id=batch.system_id,
                             observed_at=batch.observed_at,
+                            received_at=batch.received_at,
                         )
                         if not self._relationship_item_is_authorized(
                             connection,

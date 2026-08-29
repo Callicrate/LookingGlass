@@ -1014,8 +1014,9 @@ Identity, journal, and projection writes occur only after this check.
 - A missing field in a patch or partial snapshot never clears a known value.
 - Explicit null, unknown, unsupported, and absent remain distinct.
 - Remote modification time is data and does not by itself order receipt of two observations.
-- A comparable adapter-declared source revision SHOULD decide ordering when available.
-- Otherwise, trusted local observation order decides between comparable observations.
+- Comparable decimal adapter source revisions decide facet ordering before timestamps.
+- Otherwise, trusted `observed_at` and then `received_at` order comparable evidence.
+- If revision and both timestamps tie exactly, the first accepted projection remains current.
 - When observations cannot be safely ordered, the system SHOULD preserve evidence and surface uncertainty rather than invent stronger consistency.
 - A late older observation MUST NOT overwrite a newer comparable current value.
 
