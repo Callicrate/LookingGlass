@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 07:40 ET
+Updated: 2026-08-29 08:03 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 321 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 324 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: coordinator claim-expiry fencing is independently clear; membership-boundary and migration-identity fixes plus five release-hardening findings remain queued.
-- Next progress report due: 2026-08-29 08:05 ET.
+- Active review round: two high upgrade blockers in membership migration `0015` are repaired and under post-fix review; migration identity plus five release-hardening findings remain queued.
+- Next progress report due: 2026-08-29 09:03 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -88,7 +88,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close independent review of the non-blocking runtime-startup repair.
 - [x] Distinguish current manual refresh from planned Phase 4 automation throughout operator and architecture documentation.
 - [x] Close independent review of action-linked ingestion lease fencing.
-- [ ] Persist authoritative complete-membership boundaries against delayed older positive edges.
+- [ ] Close independent review of authoritative complete-membership watermarks.
 - [x] Close independent review of coordinator claim expiry fencing.
 - [ ] Reject incompatible non-Rookery schemas before mutating the migration ledger.
 - [ ] Verify every packaged runtime asset and smoke-test the installed wheel.
@@ -109,6 +109,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - A fresh protected-web audit cleared Host-before-bootstrap ordering, strict Origin checks, static confinement, and scoped security lint with 115 exact-HEAD tests.
 - Coordinator dispositions and action attachment now compare `leased_until` to fresh store time inside their immediate transaction; exact-expiry regression covers all terminal/deferred outcomes and action admission rollback.
 - The post-fix coordinator review cleared new/existing/racing action attachment, all dispositions, recovery, strict expiry, rollback, and deterministic clock isolation with no remaining finding.
+- Migration `0015` persists the latest relationship-authoritative complete-membership boundary per collection, backfills legacy coverage journals, and projects later-received older unknown edges as absent at that newer boundary.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
