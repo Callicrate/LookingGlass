@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 21:25 ET
+Updated: 2026-08-28 21:34 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 168 tests passed warning-free; Ruff format, lint, lock validation, and the 80% branch-coverage gate passed.
+- Latest checks: 170 tests passed warning-free; Ruff format, lint, lock validation, and the 80% branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
 - Version control: local `main` is clean; every completed implementation batch is committed with focused messages.
 - Active review round: fresh residual-risk audit, package smoke validation, and low-coverage boundary triage.
@@ -65,6 +65,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The latest locked runtime dependency audit reports no known vulnerabilities; the unpublished local package is the only expected skip.
 - A fresh isolated Python 3.12 environment installs the built wheel, runs the CLI entry point, and loads the packaged FastAPI routes successfully.
 - The fresh current-HEAD review found no remaining medium-or-higher local defect; demonstrated residual work is low severity or intentionally deferred.
+- CLI doctor, bounded run-once draining, and store cleanup now have direct command-level tests; CLI branch coverage increased from 72% to 93%.
 
 ## Risks / watch list
 
