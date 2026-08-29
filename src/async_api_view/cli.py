@@ -112,12 +112,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 runtime.store.close()
         elif args.command == "serve":
             runtime = build_runtime(settings)
-            uvicorn.run(
-                runtime.app,
-                host=settings.app.host,
-                port=settings.app.port,
-                log_level=args.log_level.lower(),
-            )
+            try:
+                uvicorn.run(
+                    runtime.app,
+                    host=settings.app.host,
+                    port=settings.app.port,
+                    log_level=args.log_level.lower(),
+                )
+            finally:
+                runtime.store.close()
         else:  # pragma: no cover - argparse owns the command vocabulary
             raise RuntimeError(f"unsupported command {args.command}")
     except (ConfigError, RuntimeError, ValueError, OSError) as exc:

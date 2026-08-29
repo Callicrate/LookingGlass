@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 21:19 ET
+Updated: 2026-08-28 21:27 ET
 
 ## Goal
 
@@ -9,9 +9,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 167 tests passed warning-free; Ruff format, lint, and lock validation passed; package build remains green.
+- Latest checks: 168 tests passed warning-free; Ruff format, lint, lock validation, and the 80% branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
-- Version control: local `main` history has nine coherent commits ending at `45c4642`; the next reviewed quality-gate commit is ready.
+- Version control: local `main` history has ten coherent commits ending at `75fc457`; the next reviewed CLI cleanup commit is ready.
 - Active review round: configuration desired-state reconciliation, runtime supervision, bounded dashboard reads, and migration concurrency.
 - Next progress report due: 2026-08-28 22:07 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -61,6 +61,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Alert recency uses a dedicated SQLite index verified by `EXPLAIN QUERY PLAN`; the exact full-history count was removed to preserve bounded dashboard work.
 - Aggregate branch coverage is 82% with an enforced 80% CI floor; statement coverage remains about 90%.
 - Composition failures now close their opened SQLite store before propagating the original startup error.
+- `serve` now closes its runtime store even when Uvicorn fails before lifespan startup; the independent review found no blocker.
+- The latest locked runtime dependency audit reports no known vulnerabilities; the unpublished local package is the only expected skip.
 
 ## Risks / watch list
 
