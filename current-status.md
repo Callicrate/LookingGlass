@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 18:58 ET
+Updated: 2026-08-29 19:15 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 438 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
+- Latest checks: 439 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: lifespan-start cleanup and programmatic config validation are independently clear after exact cross-platform gates; the storage residual audit is medium+ clear with one lease-linearization documentation ambiguity next.
+- Active review round: fresh storage, CLI/runtime, and end-to-end coordinator/lifecycle audits are medium+ clear; all reproduced low findings are repaired and independently closed.
 - Next progress report due: 2026-08-29 19:20 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -125,6 +125,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Apply the TOML safety contract to direct programmatic settings.
 - [x] Define the action-linked ingestion lease linearization point.
 - [x] Lock the Databricks doctor version and command-surface contract.
+- [x] Align legacy and production exact-expiry start semantics.
 
 ## Evidence and decisions
 
@@ -240,6 +241,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The architecture now defines new-batch lease authority at that transaction-entry check, distinguishes expiry during the bounded transaction from later lifecycle writes, and preserves lease-free exact replay idempotency.
 - A forward-compatibility review found no evidence for an invented CLI upper bound; deterministic doctor tests now lock the 0.298 floor, malformed/old rejection, newer acceptance, and all five required help surfaces.
 - Those six compatibility paths lift the exact Windows/Ubuntu gates to 438 passed plus one complementary platform skip and 89%/88% branch coverage.
+- The end-to-end lifecycle review found no medium-or-higher defect and reproduced only an unused legacy `mark_running()` equality gap at exact lease expiry.
+- Legacy start now rejects `leased_until == started_at`, matching the production final guard; independent re-review closed the low and exact cross-platform parity is 439 passed plus one complementary platform skip.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.

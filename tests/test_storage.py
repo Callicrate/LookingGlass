@@ -1237,6 +1237,45 @@ def test_failed_logical_action_anchors_cooldown_and_creates_one_event(tmp_path) 
     assert "do-not-persist" not in events[0].redacted_summary
 
 
+def test_legacy_mark_running_rejects_exact_lease_expiry(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "state.sqlite3") as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+        )
+        action = AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="databricks.workspace.children.read",
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+        run(store.enqueue(action))
+        lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+        assert lease is not None
+
+        with pytest.raises(ValueError, match="lease is not valid"):
+            run(
+                store.mark_running(
+                    action_id=action.action_id,
+                    lease_id=lease.lease_id,
+                    started_at=lease.leased_until,
+                )
+            )
+
+        assert store.get_stored_action(action.action_id).state.value == "leased"
+
+
 def test_expired_running_lease_reopens_with_new_authority_and_preserves_start(tmp_path) -> None:
     path = tmp_path / "state.sqlite3"
     with SQLiteStore(path) as store:

@@ -3290,7 +3290,7 @@ class SQLiteStore:
                 row["state"] != ActionState.LEASED.value
                 or row["lease_id"] != lease_id
                 or _dt(row["leased_until"]) is None
-                or _dt(row["leased_until"]) < started_at
+                or _dt(row["leased_until"]) <= started_at
             ):
                 raise ValueError("adapter action lease is not valid for logical start")
             connection.execute(
