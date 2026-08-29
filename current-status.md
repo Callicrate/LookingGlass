@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 02:49 ET
+Updated: 2026-08-29 02:58 ET
 
 ## Goal
 
@@ -9,8 +9,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 253 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
-- Runtime surface: 4 CLI commands and 11 HTTP routes, verified from source.
+- Latest checks: 257 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: continue post-fix residual-risk review after the independently cleared session and schema-invariant repairs.
 - Next progress report due: 2026-08-29 03:12 ET.
@@ -62,6 +62,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Preserve configured-system identity across case-only ID edits and legacy mixed-case rows.
 - [x] Fail closed on Workspace content until retention-aware artifact persistence exists.
 - [x] Prove interrupted CLI work remains reclaimable after shutdown and lease expiry.
+- [x] Add consistent, integrity-checked, no-overwrite online SQLite backups.
 
 ## Evidence and decisions
 
@@ -187,6 +188,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Workspace content actions now fail locally before target resolution or CLI execution because the current worker has no artifact sink; normalized content metadata carries neither coverage nor a freshness satisfaction claim.
 - The shutdown regression now reopens the database after cancelling a blocked CLI, proves no attempt or terminal outcome was fabricated, and reclaims the action after its durable lease expires.
 - The 02:43 Murmuration tending pass found no Rookery-specific public discussion; the native identity profile, writes, notifications, and BookStack remain unavailable, so the pass stayed read-only.
+- `backup --output <path>` now snapshots committed SQLite/WAL state without opening the application store, validates the standalone copy, and atomically refuses existing files, symlinks, hardlinks, and publication races.
+- Backup regressions cover a live uncheckpointed WAL, source availability after snapshot, malformed source cleanup, no overwrite, and competing-file preservation; restore and broader operator tooling remain explicitly deferred.
 
 ## Risks / watch list
 
