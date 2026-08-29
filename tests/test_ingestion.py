@@ -15,6 +15,7 @@ from async_api_view.contracts import (
     RefreshCoverage,
     RefreshScope,
     RelationshipObservation,
+    RemoteObject,
     TargetKind,
     TargetRef,
     UpdateMode,
@@ -538,6 +539,122 @@ def test_merge_time_facet_rejection_rolls_back_identity_journal_and_projection(
         is None
     )
     assert run(store.ingest(rejected_batch)).status.value == "duplicate"
+
+
+def test_typed_external_identity_does_not_rewrite_untyped_legacy_object(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    legacy = store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=seeded.system.system_id,
+            object_type="file",
+            object_type_version="1",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:101",
+            display_name="legacy.py",
+            presence=PresenceState.PRESENT,
+            first_seen_at=NOW,
+        )
+    )
+    observation = FacetObservation(
+        observation_id=uuid4(),
+        target=ObjectLocator(
+            object_type="file",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:object_id:101",
+            display_name="current.py",
+        ),
+        facet="metadata",
+        facet_version="1",
+        update_mode=UpdateMode.PATCH,
+        field_coverage=FieldCoverage.PARTIAL,
+        payload={"path": "/Shared/current.py"},
+        field_mask=("path",),
+    )
+    batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW + timedelta(seconds=1),
+        received_at=NOW + timedelta(seconds=1),
+        facet_observations=(observation,),
+    )
+
+    assert run(store.ingest(batch)).status.value == "accepted"
+    unchanged = store.get_object_sync(legacy.object_id)
+    assert unchanged is not None
+    assert unchanged.external_key == "workspace:101"
+    assert unchanged.display_name == "legacy.py"
+    workspace_files = [
+        item for item in store.list_objects() if item.source_kind == "databricks.workspace.file"
+    ]
+    assert {item.external_key for item in workspace_files} == {
+        "workspace:101",
+        "workspace:object_id:101",
+    }
+
+
+def test_alternate_typed_witness_cannot_hijack_untyped_legacy_identity(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    legacy = store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=seeded.system.system_id,
+            object_type="file",
+            object_type_version="1",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:101",
+            display_name="original.py",
+            presence=PresenceState.PRESENT,
+            first_seen_at=NOW,
+        )
+    )
+    incoming = FacetObservation(
+        observation_id=uuid4(),
+        target=ObjectLocator(
+            object_type="file",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:object_id:202",
+            display_name="different.py",
+        ),
+        facet="metadata",
+        facet_version="1",
+        update_mode=UpdateMode.PATCH,
+        field_coverage=FieldCoverage.PARTIAL,
+        payload={"path": "/Shared/different.py"},
+        field_mask=("path",),
+    )
+    batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW + timedelta(seconds=1),
+        received_at=NOW + timedelta(seconds=1),
+        facet_observations=(incoming,),
+    )
+
+    assert run(store.ingest(batch)).status.value == "accepted"
+    unchanged = store.get_object_sync(legacy.object_id)
+    assert unchanged is not None
+    assert unchanged.external_key == "workspace:101"
+    assert unchanged.display_name == "original.py"
+    workspace_files = [
+        item for item in store.list_objects() if item.source_kind == "databricks.workspace.file"
+    ]
+    assert {item.external_key for item in workspace_files} == {
+        "workspace:101",
+        "workspace:object_id:202",
+    }
 
 
 def test_conflicting_observation_id_target_or_payload_is_not_accepted(tmp_path) -> None:

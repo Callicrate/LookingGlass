@@ -581,6 +581,21 @@ def _scopes(action: AdapterAction, facet: str) -> tuple:
     return tuple(scope for scope in action.requested_scopes if scope.facet == facet)
 
 
+def _workspace_identity_witnesses(item: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    witnesses: list[tuple[str, str]] = []
+    for key in ("object_id", "resource_id"):
+        value = item.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise InvalidDownstreamResponse(f"Workspace {key} has an invalid identity value")
+        witness = str(value)
+        if not witness or len(witness) > 1024 or _BLOCKED_VALUE.search(witness):
+            raise InvalidDownstreamResponse(f"Workspace {key} has an unsafe identity value")
+        witnesses.append((key, witness))
+    return tuple(witnesses)
+
+
 def _workspace_locator(item: Mapping[str, Any]) -> ObjectLocator:
     path = item.get("path")
     if not isinstance(path, str) or not path.startswith("/"):
@@ -592,12 +607,17 @@ def _workspace_locator(item: Mapping[str, Any]) -> ObjectLocator:
         object_type, source_kind = "file", "databricks.workspace.file"
     else:
         object_type, source_kind = "generic_object", "databricks.workspace.object"
-    stable = item.get("object_id") or item.get("resource_id") or path
+    identity_witnesses = _workspace_identity_witnesses(item)
+    if identity_witnesses:
+        canonical_kind, canonical_value = identity_witnesses[0]
+        external_key = f"workspace:{canonical_kind}:{canonical_value}"
+    else:
+        external_key = f"workspace:{path}"
     return ObjectLocator(
         object_type=object_type,
         object_id=None,
         source_kind=source_kind,
-        external_key=f"workspace:{stable}",
+        external_key=external_key,
         display_name=path.rsplit("/", 1)[-1] or "/",
     )
 
@@ -626,6 +646,31 @@ def _validate_workspace_target_response(
         raise InvalidDownstreamResponse(
             "Workspace response type does not match the requested target"
         )
+    expected_external_key = target.canonical_parent_external_key
+    if expected_external_key is not None:
+        if not expected_external_key.startswith("workspace:"):
+            raise InvalidDownstreamResponse(
+                "Workspace target has an incompatible external identity"
+            )
+        expected_witness = expected_external_key.removeprefix("workspace:")
+        identity_witnesses = _workspace_identity_witnesses(item)
+        if expected_witness.startswith("/"):
+            if response_path != expected_witness:
+                raise InvalidDownstreamResponse(
+                    "Workspace response path contradicts canonical identity"
+                )
+        elif expected_witness.startswith(("object_id:", "resource_id:")):
+            expected_kind, expected_value = expected_witness.split(":", 1)
+            if (expected_kind, expected_value) not in identity_witnesses:
+                raise InvalidDownstreamResponse(
+                    "Workspace response identity does not match the canonical target"
+                )
+        elif not identity_witnesses or expected_witness not in {
+            value for _kind, value in identity_witnesses
+        }:
+            raise InvalidDownstreamResponse(
+                "Workspace response identity does not match the canonical target"
+            )
     return _canonical_workspace_locator(target, expected_type=expected_type)
 
 
@@ -796,18 +841,40 @@ def normalize(
         )
         child_paths: set[str] = set()
         child_keys: set[str] = set()
+        child_identity_witnesses: set[tuple[str, str]] = set()
         for item in children:
             _direct_workspace_child(root_path, item)
             child = _workspace_locator(item)
             child_path = _workspace_path(item["path"], root_path)
+            identity_witnesses = set(_workspace_identity_witnesses(item))
+            parent_witness = (
+                target.canonical_parent_external_key.removeprefix("workspace:")
+                if target.canonical_parent_external_key
+                and target.canonical_parent_external_key.startswith("workspace:")
+                else None
+            )
+            parent_typed_witness = (
+                tuple(parent_witness.split(":", 1))
+                if parent_witness is not None
+                and parent_witness.startswith(("object_id:", "resource_id:"))
+                else None
+            )
             if (
                 child_path in child_paths
                 or child.external_key in child_keys
+                or not child_identity_witnesses.isdisjoint(identity_witnesses)
+                or (
+                    parent_witness is not None
+                    and parent_typed_witness is None
+                    and parent_witness in {value for _kind, value in identity_witnesses}
+                )
+                or (parent_typed_witness is not None and parent_typed_witness in identity_witnesses)
                 or child.external_key == target.canonical_parent_external_key
             ):
                 raise InvalidDownstreamResponse("Workspace list contains duplicate child identity")
             child_paths.add(child_path)
             child_keys.add(child.external_key or "")
+            child_identity_witnesses.update(identity_witnesses)
             facets.append(
                 FacetObservation(
                     _id(action, f"metadata:{child.external_key}"),

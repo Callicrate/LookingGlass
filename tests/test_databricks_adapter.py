@@ -667,6 +667,99 @@ def test_workspace_listing_rejects_duplicate_identity_with_different_paths() -> 
         )
 
 
+def test_workspace_listing_accepts_distinct_object_and_resource_ids() -> None:
+    target = ResolvedTarget(
+        workspace_path="/Shared",
+        workspace_root="/Shared",
+        canonical_object_id=uuid4(),
+        canonical_object_type="folder",
+    )
+    result = normalize(
+        action=_action("databricks.workspace.children.read", "membership"),
+        binding=_binding(),
+        target=target,
+        stdout=json.dumps(
+            {
+                "objects": [
+                    {
+                        "path": "/Shared/one",
+                        "object_type": "FILE",
+                        "object_id": 202,
+                        "resource_id": 101,
+                    }
+                ]
+            }
+        ).encode(),
+        observed_at=datetime.now(UTC),
+    )
+    child = result.batch.facet_observations[1].target
+    assert child.external_key == "workspace:object_id:202"
+
+
+def test_workspace_metadata_requires_canonical_identity_witness() -> None:
+    target = ResolvedTarget(
+        workspace_path="/Shared/b.py",
+        workspace_root="/Shared",
+        canonical_object_id=uuid4(),
+        canonical_object_type="file",
+        canonical_parent_external_key="workspace:101",
+    )
+    action = _action("databricks.workspace.metadata.read", "metadata")
+    binding = _binding()
+    with pytest.raises(InvalidDownstreamResponse, match="canonical target"):
+        normalize(
+            action=action,
+            binding=binding,
+            target=target,
+            stdout=b'{"path":"/Shared/b.py","object_type":"FILE","object_id":202}',
+            observed_at=datetime.now(UTC),
+        )
+
+    accepted = normalize(
+        action=action,
+        binding=binding,
+        target=target,
+        stdout=b'{"path":"/Shared/b.py","object_type":"FILE","object_id":101}',
+        observed_at=datetime.now(UTC),
+    )
+    assert accepted.batch.facet_observations[0].target.object_id == str(target.canonical_object_id)
+    resource_match = normalize(
+        action=action,
+        binding=binding,
+        target=target,
+        stdout=(b'{"path":"/Shared/b.py","object_type":"FILE","object_id":202,"resource_id":101}'),
+        observed_at=datetime.now(UTC),
+    )
+    assert resource_match.batch.facet_observations[0].target.object_id == str(
+        target.canonical_object_id
+    )
+    typed_target = ResolvedTarget(
+        workspace_path="/Shared/b.py",
+        workspace_root="/Shared",
+        canonical_object_id=target.canonical_object_id,
+        canonical_object_type="file",
+        canonical_parent_external_key="workspace:object_id:101",
+    )
+    with pytest.raises(InvalidDownstreamResponse, match="canonical target"):
+        normalize(
+            action=action,
+            binding=binding,
+            target=typed_target,
+            stdout=b'{"path":"/Shared/b.py","object_type":"FILE","resource_id":101}',
+            observed_at=datetime.now(UTC),
+        )
+    typed_match = normalize(
+        action=action,
+        binding=binding,
+        target=typed_target,
+        stdout=(b'{"path":"/Shared/b.py","object_type":"FILE","object_id":101,"resource_id":202}'),
+        observed_at=datetime.now(UTC),
+    )
+    assert typed_match.batch.facet_observations[0].target.object_id == str(
+        target.canonical_object_id
+    )
+
+
 def test_workspace_listing_rejects_child_with_parent_external_identity() -> None:
     target = ResolvedTarget(
         workspace_path="/Shared",
