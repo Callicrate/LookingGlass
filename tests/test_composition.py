@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1565,6 +1566,25 @@ async def test_blocked_worker_startup_does_not_hold_cached_authenticated_dashboa
             await asyncio.wait_for(runtime.stop(), timeout=1)
 
     assert runner.cancelled
+
+
+@pytest.mark.anyio
+async def test_cancelled_lifespan_startup_reaps_runtime_and_closes_store(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=BlockingStartupCliRunner())
+    lifespan = runtime.app.router.lifespan_context(runtime.app)
+    enter_task = asyncio.create_task(lifespan.__aenter__())
+
+    await asyncio.sleep(0)
+    background_task = runtime._background_task
+    assert background_task is not None and not background_task.done()
+    enter_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await enter_task
+
+    assert background_task.done()
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        runtime.store._connection.execute("SELECT 1")
 
 
 @pytest.mark.anyio

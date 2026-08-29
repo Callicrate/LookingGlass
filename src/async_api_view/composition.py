@@ -1296,8 +1296,8 @@ def _compose_runtime(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        await runtime.start()
         try:
+            await runtime.start()
             yield
         finally:
             await runtime.stop()
