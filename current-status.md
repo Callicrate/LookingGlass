@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 01:13 ET
+Updated: 2026-08-29 01:21 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 235 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 236 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` contains the verified action/activity, browser-host, retry, deadline, and poison-action slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: run the next residual-risk review across lifecycle, storage, and product truth.
+- Version control: local `main` contains the verified action/activity, browser-host, retry, deadline, poison-action, and monotonic object-presence slices plus all prior correctness fixes; completed batches are committed with focused messages.
+- Active review round: finish the parallel lifecycle/product reviews and select the next demonstrated defect.
 - Next progress report due: 2026-08-29 02:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -50,6 +50,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Terminalize expired action deadlines before any remote dispatch.
 - [x] Expose bounded, redacted per-action attempt detail from alerts, activity, and intent receipts.
 - [x] Terminalize malformed persisted action timestamps once instead of repeatedly faulting the worker.
+- [x] Keep object presence monotonic across delayed present and absence observations.
 
 ## Evidence and decisions
 
@@ -149,6 +150,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Malformed queued action contracts now terminalize once as `adapter_contract_mismatch`, reject active attached scopes, emit one redacted idempotent failure event, and release dedupe authority before lease mutation.
 - `lease_next` continues selecting inside the same immediate transaction after poison terminalization, so the first call returns the next healthy lease instead of making `run-once` falsely report a drained queue.
 - Storage and composition regressions prove queue progress and that only the healthy capability reaches the runner; independent follow-up cleared the blocker at 235 tests.
+- Authorized object absence now updates only when it is at least as new as `last_seen_at`, and records its observation time as the presence watermark.
+- Regressions prove delayed absence cannot hide newer presence, delayed presence cannot resurrect newer absence, and genuinely newer presence restores the object; independent review found no blocker at 236 tests.
 
 ## Risks / watch list
 

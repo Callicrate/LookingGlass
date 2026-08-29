@@ -223,6 +223,123 @@ def test_partial_facet_patch_never_clears_unobserved_fields(tmp_path) -> None:
     }
 
 
+def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        enabled_capability_keys=(
+            "databricks.workspace.children.read",
+            "databricks.workspace.metadata.read",
+        ),
+        now=NOW,
+    )
+    locator = ObjectLocator(
+        object_type="file",
+        source_kind="databricks.workspace.file",
+        external_key="workspace:/Shared/report.py",
+        display_name="report.py",
+    )
+
+    def present_batch(*, observed_at: datetime) -> ObservationBatch:
+        return ObservationBatch(
+            batch_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=observed_at,
+            received_at=max(observed_at, NOW + timedelta(minutes=30)),
+            facet_observations=(
+                FacetObservation(
+                    observation_id=uuid4(),
+                    target=locator,
+                    facet="metadata",
+                    facet_version="1",
+                    update_mode=UpdateMode.SNAPSHOT,
+                    field_coverage=FieldCoverage.COMPLETE,
+                    payload={"name": "report.py"},
+                ),
+            ),
+        )
+
+    newer_present_at = NOW + timedelta(minutes=10)
+    assert run(store.ingest(present_batch(observed_at=newer_present_at))).status.value == (
+        "accepted"
+    )
+    remote_object = next(
+        item for item in store.list_objects() if item.external_key == locator.external_key
+    )
+    presence_scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.OBJECT, remote_object.object_id),
+        object_type="file",
+        facet="metadata",
+        capability_key="databricks.workspace.metadata.read",
+        coverage=RefreshCoverage.FACET,
+    )
+
+    def absence_batch(*, observed_at: datetime) -> ObservationBatch:
+        return ObservationBatch(
+            batch_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=observed_at,
+            received_at=NOW + timedelta(minutes=30),
+            facet_observations=(
+                FacetObservation(
+                    observation_id=uuid4(),
+                    target=locator,
+                    facet="metadata",
+                    facet_version="1",
+                    update_mode=UpdateMode.ABSENCE,
+                    field_coverage=FieldCoverage.COMPLETE,
+                ),
+            ),
+            coverage=(
+                CoverageDeclaration(
+                    scope=presence_scope,
+                    completeness=CollectionCoverage.COMPLETE,
+                    absence_authority=(AbsenceAuthority.OBJECT_PRESENCE,),
+                ),
+            ),
+        )
+
+    assert run(store.ingest(absence_batch(observed_at=NOW))).status.value == "accepted"
+    remote_object = store.get_object_sync(remote_object.object_id)
+    assert remote_object is not None
+    assert remote_object.presence is PresenceState.PRESENT
+    assert remote_object.last_seen_at == newer_present_at
+
+    newer_absence_at = NOW + timedelta(minutes=20)
+    assert run(store.ingest(absence_batch(observed_at=newer_absence_at))).status.value == "accepted"
+    remote_object = store.get_object_sync(remote_object.object_id)
+    assert remote_object is not None
+    assert remote_object.presence is PresenceState.ABSENT
+    assert remote_object.last_seen_at == newer_absence_at
+
+    assert (
+        run(store.ingest(present_batch(observed_at=NOW + timedelta(minutes=15)))).status.value
+        == "accepted"
+    )
+    remote_object = store.get_object_sync(remote_object.object_id)
+    assert remote_object is not None
+    assert remote_object.presence is PresenceState.ABSENT
+    assert remote_object.last_seen_at == newer_absence_at
+
+    latest_present_at = NOW + timedelta(minutes=40)
+    assert (
+        run(store.ingest(present_batch(observed_at=latest_present_at))).status.value == "accepted"
+    )
+    remote_object = store.get_object_sync(remote_object.object_id)
+    assert remote_object is not None
+    assert remote_object.presence is PresenceState.PRESENT
+    assert remote_object.last_seen_at == latest_present_at
+
+
 def test_rejected_items_roll_back_identity_and_journal_but_keep_valid_sibling(
     tmp_path,
 ) -> None:

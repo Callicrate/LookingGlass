@@ -3578,8 +3578,17 @@ class SQLiteStore:
                             ):
                                 raise ValueError("unauthorized_object_absence")
                             connection.execute(
-                                "UPDATE remote_objects SET presence = 'absent' WHERE object_id = ?",
-                                (target.object_id,),
+                                """
+                                UPDATE remote_objects
+                                SET presence = 'absent', last_seen_at = ?
+                                WHERE object_id = ?
+                                  AND (last_seen_at IS NULL OR last_seen_at <= ?)
+                                """,
+                                (
+                                    _utc_text(batch.observed_at),
+                                    target.object_id,
+                                    _utc_text(batch.observed_at),
+                                ),
                             )
                         else:
                             self._merge_facet_observation(
