@@ -21,6 +21,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Remove or ignore generated artifacts and tighten repository hygiene.
 - [x] Improve dashboard wording, status hierarchy, and refresh interaction without weakening the trust boundary.
 - [x] Add regression tests for the first lifecycle, error, and security fixes.
+- [x] Add reproducible CI, editor, and line-ending conventions.
 - [ ] Re-run format, lint, tests, lock validation, and a rendered UI smoke check.
 - [ ] Review the final diff critically and commit coherent changes.
 
@@ -30,6 +31,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Stale cached state must remain visible and must not be represented as live truth.
 - A live Databricks smoke test remains out of scope because selecting a profile would require credentials or user input.
 - The production composition now passes an explicit host allowlist, so the test-only `testserver` host is not accepted by the real runtime.
+- The public web-app default also rejects `testserver`; tests opt into that host explicitly for their in-process client.
 - Invalid bootstrap capabilities are validated before any database write, and reserved profile/root settings cannot be overridden by extension settings.
 
 ## Risks / watch list

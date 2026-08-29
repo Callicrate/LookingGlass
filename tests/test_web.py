@@ -66,7 +66,12 @@ class FakeBackend:
 
 
 def client_for(backend: FakeBackend) -> TestClient:
-    return TestClient(create_app(backend))
+    return TestClient(
+        create_app(
+            backend,
+            allowed_hosts=("127.0.0.1", "localhost", "[::1]", "testserver"),
+        )
+    )
 
 
 def csrf_from(response_text: str) -> str:
@@ -313,8 +318,8 @@ def test_untrusted_host_is_rejected() -> None:
     assert "Invalid host header" in response.text
 
 
-def test_explicit_production_host_allowlist_rejects_test_host() -> None:
-    client = TestClient(create_app(FakeBackend(), allowed_hosts=("127.0.0.1",)))
+def test_default_host_allowlist_rejects_test_host() -> None:
+    client = TestClient(create_app(FakeBackend()))
 
     response = client.get("/", headers={"Host": "testserver"})
 

@@ -3,6 +3,15 @@
 Async API View keeps a local, inspectable cache of remote-system state and refreshes it through controlled API-specific workers.
 The first adapter uses the existing Databricks CLI.
 
+## Contents
+
+- [First usable workflow](#first-usable-workflow)
+- [Databricks scope](#databricks-scope)
+- [Commands](#commands)
+- [Verify](#verify)
+- [Project structure](#project-structure)
+- [Documentation](#documentation)
+
 ## First usable workflow
 
 The current runnable slice can:
@@ -95,6 +104,7 @@ uv lock --check
 
 The default test suite uses fake CLI results and does not contact Databricks.
 A live smoke test requires an explicit named profile and Workspace root.
+The same formatting, lint, test, and locked-dependency checks run in CI for pushes and pull requests.
 
 ## Project structure
 
@@ -110,4 +120,3 @@ A live smoke test requires an explicit named profile and Workspace root.
 ## Documentation
 
 See the [architecture specification](docs/architecture.md) for schema, freshness, queue, worker, failure, security, and phased-delivery contracts.
-
