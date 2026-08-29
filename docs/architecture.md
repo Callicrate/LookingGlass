@@ -1084,6 +1084,7 @@ Configuration cannot convert an observing capability into a remote state-change 
 Capability versions are immutable contracts.
 An additive adapter upgrade MAY register a new version alongside the old one.
 Actions pin the binding and capability version used at admission.
+Changing permitted target/facet coverage, maximum completeness, or absence authority MUST register a new capability version rather than mutating the existing version's policy.
 An adapter worker MUST fail explicitly rather than reinterpret an action created for an incompatible version.
 
 ## UI and TUI requirements
