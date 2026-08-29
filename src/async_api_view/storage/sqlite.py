@@ -4083,6 +4083,7 @@ class SQLiteStore:
         fallback_scopes: tuple[RefreshScope, ...],
         capability_cache: dict[tuple[object, ...], tuple[sqlite3.Row, ...]],
         target_cache: dict[tuple[object, ...], str | None],
+        conflicting_observation_ids: frozenset[str],
     ) -> tuple[
         set[tuple[RefreshScope, tuple[object, ...]]],
         set[tuple[RefreshScope, str]],
@@ -4101,21 +4102,11 @@ class SQLiteStore:
                 )
             return locator_object_cache[key]
 
-        item_digest_by_id: dict[str, set[bytes]] = {}
-        for observation in batch.relationship_observations:
-            item_digest_by_id.setdefault(observation.observation_id, set()).add(
-                hashlib.sha256(self._journal_item_json(observation).encode()).digest()
-            )
-        conflicting_input_ids = {
-            observation_id
-            for observation_id, item_digests in item_digest_by_id.items()
-            if len(item_digests) > 1
-        }
         for observation in batch.relationship_observations:
             if (
                 observation.predicate != "contains"
                 or observation.presence is not PresenceState.PRESENT
-                or observation.observation_id in conflicting_input_ids
+                or observation.observation_id in conflicting_observation_ids
                 or self._journal_item_status(
                     connection,
                     observation_id=observation.observation_id,
@@ -4539,6 +4530,26 @@ class SQLiteStore:
         ):
             return "duplicate"
         return "conflict"
+
+    def _conflicting_batch_observation_ids(
+        self,
+        batch: ObservationBatch,
+    ) -> frozenset[str]:
+        identities_by_id: dict[str, set[tuple[str, bytes]]] = {}
+        for item_kind, observations in (
+            ("facet", batch.facet_observations),
+            ("relationship", batch.relationship_observations),
+        ):
+            for observation in observations:
+                digest = hashlib.sha256(self._journal_item_json(observation).encode()).digest()
+                identities_by_id.setdefault(observation.observation_id, set()).add(
+                    (item_kind, digest)
+                )
+        return frozenset(
+            observation_id
+            for observation_id, identities in identities_by_id.items()
+            if len(identities) > 1
+        )
 
     def _record_journal_item(
         self,
@@ -5123,6 +5134,7 @@ class SQLiteStore:
             )
             authority_capability_cache: dict[tuple[object, ...], tuple[sqlite3.Row, ...]] = {}
             authority_target_cache: dict[tuple[object, ...], str | None] = {}
+            conflicting_observation_ids = self._conflicting_batch_observation_ids(batch)
             authorized_contains_locators, authorized_contains_objects = (
                 self._collection_authority_index(
                     connection,
@@ -5130,11 +5142,14 @@ class SQLiteStore:
                     fallback_scopes=fallback_authority_scopes,
                     capability_cache=authority_capability_cache,
                     target_cache=authority_target_cache,
+                    conflicting_observation_ids=conflicting_observation_ids,
                 )
             )
             for observation in batch.facet_observations:
                 try:
                     with self._ingestion_item_savepoint(connection):
+                        if observation.observation_id in conflicting_observation_ids:
+                            raise ValueError("observation_id_collision")
                         definition = V1_TYPE_DEFINITION_BY_KEY.get(observation.target.object_type)
                         if definition is None or observation.facet not in {
                             item.facet for item in definition.facets
@@ -5237,6 +5252,8 @@ class SQLiteStore:
             for observation in batch.relationship_observations:
                 try:
                     with self._ingestion_item_savepoint(connection):
+                        if observation.observation_id in conflicting_observation_ids:
+                            raise ValueError("observation_id_collision")
                         journal_status = self._journal_item_status(
                             connection,
                             observation_id=observation.observation_id,

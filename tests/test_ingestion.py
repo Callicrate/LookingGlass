@@ -1041,14 +1041,82 @@ def test_conflicting_relationship_ids_cannot_lend_collection_authority(tmp_path)
     result = run(store.ingest(batch))
 
     assert result.status.value == "partial"
-    assert result.accepted_observation_ids == (first_relationship.observation_id,)
-    assert result.issue_count == 2
-    projected = next(
-        item
-        for item in store.list_objects()
-        if item.external_key == "workspace:/Shared/colliding.py"
+    assert result.accepted_observation_ids == ()
+    assert result.issue_count == 3
+    assert {item.external_key for item in store.list_objects()} == {"workspace:/Shared"}
+    assert (
+        store._connection.execute(
+            "SELECT COUNT(*) FROM observation_journal WHERE batch_id = ?",
+            (batch.batch_id,),
+        ).fetchone()[0]
+        == 0
     )
-    assert store.get_facet_sync(projected.object_id, "metadata") is None
+
+
+def test_cross_kind_observation_id_collision_cannot_lend_collection_authority(
+    tmp_path,
+) -> None:
+    store = SQLiteStore(tmp_path / "cross-kind-link-authority.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        now=NOW,
+    )
+    authority = _membership_authority(
+        seeded.system.system_id,
+        seeded.workspace_root_scope.scope_id,
+    )
+    target = ObjectLocator(
+        object_type="file",
+        source_kind="databricks.workspace.file",
+        external_key="workspace:/Shared/cross-kind.py",
+        display_name="cross-kind.py",
+    )
+    collision_id = uuid4()
+    facet = FacetObservation(
+        observation_id=collision_id,
+        target=target,
+        facet="metadata",
+        facet_version="1",
+        update_mode=UpdateMode.SNAPSHOT,
+        field_coverage=FieldCoverage.COMPLETE,
+        payload={"name": "cross-kind.py"},
+        authorized_by=(authority,),
+    )
+    relationship = replace(
+        _membership_relationship(
+            authority,
+            seeded.workspace_root_object_id,
+            target,
+        ),
+        observation_id=collision_id,
+    )
+    batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW,
+        facet_observations=(facet,),
+        relationship_observations=(relationship,),
+    )
+
+    result = run(store.ingest(batch))
+
+    assert result.status.value == "partial"
+    assert result.accepted_observation_ids == ()
+    assert result.issue_count == 2
+    assert {item.external_key for item in store.list_objects()} == {"workspace:/Shared"}
+    assert (
+        store._connection.execute(
+            "SELECT COUNT(*) FROM observation_journal WHERE batch_id = ?",
+            (batch.batch_id,),
+        ).fetchone()[0]
+        == 0
+    )
 
 
 def test_partial_facet_patch_never_clears_unobserved_fields(tmp_path) -> None:
