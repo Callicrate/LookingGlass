@@ -49,6 +49,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             display_name="local", system_kind="databricks.workspace", now=NOW
         )
         assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert store.get_system(system.system_id) is not None
 
     with SQLiteStore(path) as reopened:
@@ -89,6 +90,204 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
         ).fetchall()
         assert any("ix_relationships_subject_predicate" in row[3] for row in child_plan)
         assert not any("TEMP B-TREE" in row[3] for row in child_plan)
+
+
+def test_unrelated_sqlite_schema_is_rejected_before_ledger_mutation(tmp_path) -> None:
+    path = tmp_path / "unrelated.sqlite3"
+    unrelated = sqlite3.connect(path)
+    unrelated.execute("CREATE TABLE systems (unrelated TEXT)")
+    unrelated.commit()
+    unrelated.close()
+
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        assert [row[1] for row in check.execute("PRAGMA table_info(systems)")] == ["unrelated"]
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = ?",
+                ("schema_migrations",),
+            ).fetchone()[0]
+            == 0
+        )
+        assert check.execute("PRAGMA application_id").fetchone()[0] == 0
+    finally:
+        check.close()
+
+
+def test_unrelated_view_only_schema_is_not_treated_as_empty(tmp_path) -> None:
+    path = tmp_path / "unrelated-view.sqlite3"
+    unrelated = sqlite3.connect(path)
+    unrelated.execute("CREATE VIEW unrelated_view AS SELECT 1 AS value")
+    unrelated.commit()
+    unrelated.close()
+
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        assert (
+            check.execute(
+                "SELECT type FROM sqlite_schema WHERE name = 'unrelated_view'"
+            ).fetchone()[0]
+            == "view"
+        )
+        assert (
+            check.execute("SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table'").fetchone()[0]
+            == 0
+        )
+    finally:
+        check.close()
+
+
+def test_foreign_application_id_is_rejected_before_schema_creation(tmp_path) -> None:
+    path = tmp_path / "foreign.sqlite3"
+    foreign = sqlite3.connect(path)
+    foreign.execute("PRAGMA application_id = 12345")
+    foreign.close()
+
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        assert (
+            check.execute("SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table'").fetchone()[0]
+            == 0
+        )
+        assert check.execute("PRAGMA application_id").fetchone()[0] == 12345
+    finally:
+        check.close()
+
+
+def test_markerless_incomplete_rookery_schema_is_rejected_before_migration(tmp_path) -> None:
+    path = tmp_path / "incomplete-rookery.sqlite3"
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL);"
+    )
+    legacy.executescript(
+        Path("src/async_api_view/storage/migrations/0001_initial.sql").read_text(encoding="utf-8")
+    )
+    legacy.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+        ("0001_initial", "2026-08-24T12:00:00Z"),
+    )
+    legacy.execute("ALTER TABLE relationships RENAME TO legacy_relationships")
+    legacy.execute("CREATE TABLE relationships (unrelated TEXT)")
+    legacy.commit()
+    legacy.close()
+
+    with pytest.raises(sqlite3.DatabaseError, match="relationships schema is incompatible"):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        assert [row[0] for row in check.execute("SELECT version FROM schema_migrations")] == [
+            "0001_initial"
+        ]
+        assert check.execute("PRAGMA application_id").fetchone()[0] == 0
+    finally:
+        check.close()
+
+
+def test_unknown_future_migration_is_rejected_without_ledger_mutation(tmp_path) -> None:
+    path = tmp_path / "future.sqlite3"
+    with SQLiteStore(path) as store:
+        store._connection.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            ("9999_future", "2026-08-29T12:00:00Z"),
+        )
+
+    with pytest.raises(sqlite3.DatabaseError, match="contains an unknown version"):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
+                ("9999_future",),
+            ).fetchone()[0]
+            == 1
+        )
+        assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
+    finally:
+        check.close()
+
+
+def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> None:
+    path = tmp_path / "missing-current-table.sqlite3"
+    with SQLiteStore(path) as store:
+        system = SystemBootstrapService(store).create_system(
+            display_name="sentinel", system_kind="databricks.workspace", now=NOW
+        )
+        store._connection.execute("DROP TABLE relationship_coverage_watermarks")
+
+    with pytest.raises(sqlite3.DatabaseError, match="current database schema is incomplete"):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 15
+        assert (
+            check.execute(
+                "SELECT display_name FROM systems WHERE system_id = ?",
+                (system.system_id,),
+            ).fetchone()[0]
+            == "sentinel"
+        )
+        assert (
+            check.execute(
+                """
+                SELECT COUNT(*) FROM sqlite_schema
+                WHERE type = 'table' AND name = 'relationship_coverage_watermarks'
+                """
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        check.close()
+
+
+def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) -> None:
+    path = tmp_path / "missing-current-index.sqlite3"
+    with SQLiteStore(path) as store:
+        system = SystemBootstrapService(store).create_system(
+            display_name="sentinel", system_kind="databricks.workspace", now=NOW
+        )
+        store._connection.execute("DROP INDEX ux_refresh_overrides_identity")
+
+    with pytest.raises(
+        sqlite3.DatabaseError,
+        match="schema object ux_refresh_overrides_identity is incompatible",
+    ):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 15
+        assert (
+            check.execute(
+                "SELECT display_name FROM systems WHERE system_id = ?",
+                (system.system_id,),
+            ).fetchone()[0]
+            == "sentinel"
+        )
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = ?",
+                ("ux_refresh_overrides_identity",),
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        check.close()
 
 
 def test_online_backup_captures_live_wal_and_never_overwrites(tmp_path) -> None:
@@ -448,10 +647,12 @@ def test_migration_failure_rolls_back_schema_and_ledger(tmp_path, monkeypatch) -
     assert "capability_key" not in {
         row[1] for row in check.execute("PRAGMA table_info(refresh_credit)")
     }
+    assert check.execute("PRAGMA application_id").fetchone()[0] == 0
     check.close()
 
     monkeypatch.setattr(SQLiteStore, "_execute_migration_statement", original)
     with SQLiteStore(path) as recovered:
+        assert recovered._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert "capability_key" in {
             row[1] for row in recovered._connection.execute("PRAGMA table_info(refresh_credit)")
         }

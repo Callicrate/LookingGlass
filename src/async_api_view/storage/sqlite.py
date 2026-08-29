@@ -19,6 +19,7 @@ import time
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
+from functools import cache
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -87,6 +88,7 @@ from .models import (
 )
 
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")
+_APPLICATION_ID = 0x524F4F4B  # ASCII "ROOK"
 _DEFAULT_LEASE = timedelta(seconds=60)
 _MAX_JSON_BYTES = 1_048_576
 _MAX_DIAGNOSTIC_LENGTH = 1_024
@@ -152,6 +154,84 @@ _REQUIRED_RUNTIME_INDEXES = {
         "CREATE INDEX ix_configured_scopes_object ON configured_scopes (object_id, scope_id)",
     ),
 }
+
+
+@cache
+def _schema_signature_through(
+    final_version: str,
+) -> tuple[tuple[str, frozenset[tuple[str, str, int, int]]], ...]:
+    """Derive a table signature by applying authoritative migrations in memory."""
+
+    with closing(sqlite3.connect(":memory:")) as reference:
+        for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
+            reference.executescript(migration.read_text(encoding="utf-8"))
+            if migration.stem == final_version:
+                break
+        else:  # pragma: no cover - source packaging invariant
+            raise RuntimeError(f"unknown schema signature version {final_version}")
+        table_names = tuple(
+            row[0]
+            for row in reference.execute(
+                """
+                SELECT name FROM sqlite_schema
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+                """
+            ).fetchall()
+        )
+        return tuple(
+            (
+                table_name,
+                frozenset(
+                    (row[1], row[2].upper(), int(row[3]), int(row[5]))
+                    for row in reference.execute(
+                        "SELECT * FROM pragma_table_info(?)",
+                        (table_name,),
+                    ).fetchall()
+                ),
+            )
+            for table_name in table_names
+        )
+
+
+def _normalized_schema_sql(value: str) -> str:
+    return " ".join(value.rstrip(";").split())
+
+
+@cache
+def _schema_ddl_through(final_version: str) -> tuple[tuple[str, str, str, str], ...]:
+    """Derive authoritative table/index DDL, including constraints and predicates."""
+
+    with closing(sqlite3.connect(":memory:")) as reference:
+        for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
+            reference.executescript(migration.read_text(encoding="utf-8"))
+            if migration.stem == final_version:
+                break
+        else:  # pragma: no cover - source packaging invariant
+            raise RuntimeError(f"unknown schema DDL version {final_version}")
+        return tuple(
+            (row[0], row[1], row[2], _normalized_schema_sql(row[3]))
+            for row in reference.execute(
+                """
+                SELECT type, name, tbl_name, sql FROM sqlite_schema
+                WHERE type IN ('table', 'index')
+                  AND name NOT LIKE 'sqlite_%'
+                  AND sql IS NOT NULL
+                ORDER BY type, name
+                """
+            ).fetchall()
+        )
+
+
+def _initial_schema_signature() -> tuple[tuple[str, frozenset[tuple[str, str, int, int]]], ...]:
+    return _schema_signature_through("0001_initial")
+
+
+def _current_schema_signature() -> tuple[tuple[str, frozenset[tuple[str, str, int, int]]], ...]:
+    migrations = sorted(_MIGRATIONS_DIR.glob("*.sql"))
+    if not migrations:  # pragma: no cover - source packaging invariant
+        raise RuntimeError("Rookery migrations are unavailable")
+    return _schema_signature_through(migrations[-1].stem)
 
 
 def _canonical_config_id(value: str) -> str:
@@ -366,6 +446,9 @@ class SQLiteStore:
                 self._connection.execute("PRAGMA synchronous = FULL")
             self._migrate()
             self._repair_required_runtime_indexes()
+            self._validate_current_schema()
+            with self._lock:
+                self._connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
         except BaseException:
             self._connection.close()
             raise
@@ -438,6 +521,7 @@ class SQLiteStore:
 
     def _migrate(self) -> None:
         with self._lock:
+            self._validate_database_identity()
             self._connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -466,6 +550,127 @@ class SQLiteStore:
                     raise
                 else:
                     self._connection.commit()
+
+    def _validate_database_identity(self) -> None:
+        application_id = int(self._connection.execute("PRAGMA application_id").fetchone()[0])
+        if application_id not in {0, _APPLICATION_ID}:
+            raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
+        schema_objects = tuple(
+            (row["name"], row["type"])
+            for row in self._connection.execute(
+                """
+                SELECT name, type FROM sqlite_schema
+                WHERE name NOT LIKE 'sqlite_%'
+                """
+            ).fetchall()
+        )
+        if not schema_objects:
+            if application_id == _APPLICATION_ID:
+                raise sqlite3.DatabaseError("Rookery database schema is missing")
+            return
+        tables = {name for name, object_type in schema_objects if object_type == "table"}
+        if not tables:
+            raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
+        if "schema_migrations" not in tables:
+            raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
+        ledger_columns = tuple(
+            row["name"]
+            for row in self._connection.execute(
+                "SELECT name FROM pragma_table_info('schema_migrations') ORDER BY cid"
+            ).fetchall()
+        )
+        if ledger_columns != ("version", "applied_at"):
+            raise sqlite3.DatabaseError("Rookery migration ledger is incompatible")
+        versions = tuple(
+            row["version"]
+            for row in self._connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        )
+        known_versions = tuple(
+            migration.stem for migration in sorted(_MIGRATIONS_DIR.glob("*.sql"))
+        )
+        if any(version not in known_versions for version in versions):
+            raise sqlite3.DatabaseError("Rookery migration ledger contains an unknown version")
+        if not versions:
+            if tables != {"schema_migrations"}:
+                raise sqlite3.DatabaseError("Rookery database schema is incomplete")
+            return
+        if versions[0] != "0001_initial":
+            raise sqlite3.DatabaseError("Rookery initial migration is not recorded")
+        initial_schema = dict(_initial_schema_signature())
+        if not set(initial_schema).issubset(tables):
+            raise sqlite3.DatabaseError("Rookery initial database schema is incomplete")
+        for table_name, expected_signature in initial_schema.items():
+            actual_signature = {
+                (
+                    row["name"],
+                    row["type"].upper(),
+                    int(row["notnull"]),
+                    int(row["pk"]),
+                )
+                for row in self._connection.execute(
+                    "SELECT * FROM pragma_table_info(?)",
+                    (table_name,),
+                )
+            }
+            if not expected_signature.issubset(actual_signature):
+                raise sqlite3.DatabaseError(f"Rookery {table_name} schema is incompatible")
+
+    def _validate_current_schema(self) -> None:
+        current_schema = dict(_current_schema_signature())
+        tables = {
+            row["name"]
+            for row in self._connection.execute(
+                """
+                SELECT name FROM sqlite_schema
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                """
+            )
+        }
+        if not set(current_schema).issubset(tables):
+            raise sqlite3.DatabaseError("Rookery current database schema is incomplete")
+        for table_name, expected_signature in current_schema.items():
+            actual_signature = {
+                (
+                    row["name"],
+                    row["type"].upper(),
+                    int(row["notnull"]),
+                    int(row["pk"]),
+                )
+                for row in self._connection.execute(
+                    "SELECT * FROM pragma_table_info(?)",
+                    (table_name,),
+                )
+            }
+            if not expected_signature.issubset(actual_signature):
+                raise sqlite3.DatabaseError(f"Rookery current {table_name} schema is incompatible")
+        migrations = sorted(_MIGRATIONS_DIR.glob("*.sql"))
+        if not migrations:  # pragma: no cover - source packaging invariant
+            raise RuntimeError("Rookery migrations are unavailable")
+        expected_ddl = {
+            (object_type, name): (table_name, sql)
+            for object_type, name, table_name, sql in _schema_ddl_through(migrations[-1].stem)
+        }
+        actual_ddl = {
+            (row["type"], row["name"]): (
+                row["tbl_name"],
+                _normalized_schema_sql(row["sql"]),
+            )
+            for row in self._connection.execute(
+                """
+                SELECT type, name, tbl_name, sql FROM sqlite_schema
+                WHERE type IN ('table', 'index')
+                  AND name NOT LIKE 'sqlite_%'
+                  AND sql IS NOT NULL
+                """
+            )
+        }
+        for identity, expected in expected_ddl.items():
+            if actual_ddl.get(identity) != expected:
+                raise sqlite3.DatabaseError(
+                    f"Rookery current schema object {identity[1]} is incompatible"
+                )
 
     def _repair_required_runtime_indexes(self) -> None:
         """Reassert indexes required by forced runtime query plans after restore."""

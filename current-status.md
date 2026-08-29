@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 08:13 ET
+Updated: 2026-08-29 08:36 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 324 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 331 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: membership migration `0015` is independently clear and applied locally; migration identity plus five release-hardening findings remain queued.
+- Active review round: SQLite application identity and complete schema validation are independently clear and applied locally; five release-hardening findings remain queued.
 - Next progress report due: 2026-08-29 09:03 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -90,7 +90,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close independent review of action-linked ingestion lease fencing.
 - [x] Close independent review of authoritative complete-membership watermarks.
 - [x] Close independent review of coordinator claim expiry fencing.
-- [ ] Reject incompatible non-Rookery schemas before mutating the migration ledger.
+- [x] Close independent review of SQLite application identity and complete schema validation.
 - [ ] Verify every packaged runtime asset and smoke-test the installed wheel.
 - [ ] Constrain isolated build dependencies for reproducible release archives.
 - [ ] Upgrade pytest past its reported moderate advisory and audit dependencies in CI.
@@ -112,6 +112,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Migration `0015` persists the latest relationship-authoritative complete-membership boundary per collection, backfills legacy coverage journals, and projects later-received older unknown edges as absent at that newer boundary.
 - The final migration review cleared stale legacy projection reconciliation, unknown/cross-system/wrong-type target skipping, runtime target validation, restart/concurrency behavior, and foreign-key integrity with no remaining finding.
 - The real ignored database was backed up to `.local/backups/rookery-20260829-0812-pre-0015.sqlite3`, migrated through `0015`, and reports integrity `ok`, zero foreign-key violations, and zero historical membership watermarks to backfill.
+- SQLite startup now rejects foreign application IDs and unrecognized schemas before ledger mutation, adopts only recognized markerless Rookery stores, and writes the `ROOK` application ID after successful migrations.
+- Migration-derived initial/current fingerprints cover table columns, types, nullability, primary keys, table constraints, expression/partial indexes, and explicit index DDL; required runtime indexes repair before final validation.
+- The real ignored database now carries application ID `1380929355` (`ROOK`), all 15 migrations, integrity `ok`, and zero foreign-key violations.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
