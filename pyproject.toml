@@ -28,6 +28,14 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/async_api_view"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.github",
+    "/.murmuration",
+    "/current-status.md",
+    "/progress",
+]
+
 [tool.pytest.ini_options]
 addopts = "-ra"
 pythonpath = ["src"]
