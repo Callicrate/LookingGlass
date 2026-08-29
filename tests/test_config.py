@@ -21,7 +21,7 @@ host = "127.0.0.1"
 port = 9000
 
 [[databricks]]
-id = "workspace"
+id = "WorkSpace"
 name = "workspace"
 profile = "TEST_PROFILE"
 workspace_root = "/Shared"

@@ -23,7 +23,7 @@ from async_api_view.adapters.databricks import (
     ResolvedTarget,
 )
 from async_api_view.application import DurableCoordinator, SystemBootstrapService
-from async_api_view.config import ProjectSettings
+from async_api_view.config import ConfigError, ProjectSettings, canonical_config_id
 from async_api_view.contracts import (
     ActionState,
     AdapterAction,
@@ -1123,6 +1123,13 @@ def build_runtime(
     runner: CliRunner | None = None,
 ) -> ApplicationRuntime:
     """Initialize durable configuration and compose the one-process application."""
+    config_ids = tuple(
+        canonical_config_id(system.config_id)
+        for system in settings.databricks_systems
+        if system.config_id is not None
+    )
+    if len(set(config_ids)) != len(config_ids):
+        raise ConfigError("Databricks system IDs must be unique")
     settings.app.database_path.parent.mkdir(parents=True, exist_ok=True)
     store = SQLiteStore(settings.app.database_path)
     try:
@@ -1144,6 +1151,7 @@ def _compose_runtime(
     configured_capability_ids: set[str] = set()
     configured_scope_ids: set[str] = set()
     for system in settings.databricks_systems:
+        config_id = canonical_config_id(system.config_id) if system.config_id is not None else None
         legacy_stable = str(
             uuid5(
                 NAMESPACE_URL,
@@ -1151,10 +1159,10 @@ def _compose_runtime(
             )
         )
         stable = legacy_stable
-        if system.config_id is not None:
+        if config_id is not None:
             mapped = store.get_configured_system_identity(
                 system_kind="databricks.workspace",
-                config_id=system.config_id,
+                config_id=config_id,
                 authority_key=system.workspace_root,
             )
             legacy_system = store.get_system(legacy_stable)
@@ -1164,7 +1172,7 @@ def _compose_runtime(
                 else str(
                     uuid5(
                         NAMESPACE_URL,
-                        f"async-api-view/databricks/{system.config_id}/{system.workspace_root}",
+                        f"async-api-view/databricks/{config_id}/{system.workspace_root}",
                     )
                 )
             )
@@ -1183,10 +1191,10 @@ def _compose_runtime(
             workspace_root_object_id=str(uuid5(NAMESPACE_URL, f"{stable}/workspace-root")),
             workspace_root_scope_id=str(uuid5(NAMESPACE_URL, f"{stable}/workspace-root-scope")),
         )
-        if system.config_id is not None:
+        if config_id is not None:
             store.upsert_configured_system_identity(
                 system_kind="databricks.workspace",
-                config_id=system.config_id,
+                config_id=config_id,
                 authority_key=system.workspace_root,
                 system_id=seeded.system.system_id,
             )

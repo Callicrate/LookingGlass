@@ -96,6 +96,12 @@ def _identifier(value: object, field_name: str) -> str:
     return identifier
 
 
+def canonical_config_id(value: object, field_name: str = "Databricks system ID") -> str:
+    """Validate and case-normalize one stable local configuration identity."""
+
+    return _identifier(value, field_name).casefold()
+
+
 def load_settings(path: Path) -> ProjectSettings:
     """Load a bounded TOML file without accepting secrets or remote command data."""
     config_path = path.resolve(strict=True)
@@ -174,7 +180,9 @@ def load_settings(path: Path) -> ProjectSettings:
                     f"{field_prefix}.workspace_root",
                 ),
                 config_id=(
-                    _identifier(entry["id"], f"{field_prefix}.id") if "id" in entry else None
+                    canonical_config_id(entry["id"], f"{field_prefix}.id")
+                    if "id" in entry
+                    else None
                 ),
             )
         )

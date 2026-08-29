@@ -122,6 +122,7 @@ _RUNTIME_EVENT_TYPES = frozenset(
     }
 )
 _RUNTIME_SUMMARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:;()_-]{0,511}$")
+_CONFIG_ID = re.compile(r"\A[a-z0-9._-]{1,128}\Z")
 _ALERT_SEVERITIES = frozenset({"info", "warning", "error", "critical"})
 _CAPABILITY_KEY_ALTER_TABLES = {
     "ALTER TABLE refresh_credit ADD COLUMN capability_key TEXT;": "refresh_credit",
@@ -141,6 +142,15 @@ _REQUIRED_RUNTIME_INDEXES = {
         "CREATE INDEX ix_configured_scopes_object ON configured_scopes (object_id, scope_id)",
     ),
 }
+
+
+def _canonical_config_id(value: str) -> str:
+    normalized = require_text(value, "config_id", max_length=128).casefold()
+    if _CONFIG_ID.fullmatch(normalized) is None:
+        raise ValueError(
+            "config_id may contain only ASCII letters, digits, periods, underscores, and hyphens"
+        )
+    return normalized
 
 
 def _utc_text(value: datetime) -> str:
@@ -556,15 +566,19 @@ class SQLiteStore:
     def get_configured_system_identity(
         self, *, system_kind: str, config_id: str, authority_key: str
     ) -> str | None:
+        """Return the earliest durable mapping across ASCII-case aliases."""
+
         require_contract_key(system_kind, "system_kind")
-        require_text(config_id, "config_id", max_length=128)
+        config_id = _canonical_config_id(config_id)
         require_text(authority_key, "authority_key", max_length=2048)
         with self._lock:
             row = self._connection.execute(
                 """
                 SELECT system_id
                 FROM configured_system_identities
-                WHERE system_kind = ? AND config_id = ? AND authority_key = ?
+                WHERE system_kind = ? AND config_id = ? COLLATE NOCASE AND authority_key = ?
+                ORDER BY record_created_at, config_id, system_id
+                LIMIT 1
                 """,
                 (system_kind, config_id, authority_key),
             ).fetchone()
@@ -580,7 +594,7 @@ class SQLiteStore:
         now: datetime | None = None,
     ) -> None:
         require_contract_key(system_kind, "system_kind")
-        require_text(config_id, "config_id", max_length=128)
+        config_id = _canonical_config_id(config_id)
         require_text(authority_key, "authority_key", max_length=2048)
         system_id = require_uuid(system_id, "system_id")
         timestamp = _utc_text(now or _now())
@@ -591,17 +605,31 @@ class SQLiteStore:
             ).fetchone()
             if system is None or system["system_kind"] != system_kind:
                 raise ValueError("configured identity references an incompatible system")
+            aliases = connection.execute(
+                """
+                SELECT record_created_at
+                FROM configured_system_identities
+                WHERE system_kind = ? AND config_id = ? COLLATE NOCASE AND authority_key = ?
+                ORDER BY record_created_at, config_id, system_id
+                """,
+                (system_kind, config_id, authority_key),
+            ).fetchall()
+            created_at = aliases[0]["record_created_at"] if aliases else timestamp
+            connection.execute(
+                """
+                DELETE FROM configured_system_identities
+                WHERE system_kind = ? AND config_id = ? COLLATE NOCASE AND authority_key = ?
+                """,
+                (system_kind, config_id, authority_key),
+            )
             connection.execute(
                 """
                 INSERT INTO configured_system_identities (
                     system_kind, config_id, authority_key, system_id,
                     record_created_at, record_updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(system_kind, config_id, authority_key) DO UPDATE SET
-                    system_id = excluded.system_id,
-                    record_updated_at = excluded.record_updated_at
                 """,
-                (system_kind, config_id, authority_key, system_id, timestamp, timestamp),
+                (system_kind, config_id, authority_key, system_id, created_at, timestamp),
             )
 
     def reconcile_configured_resources(

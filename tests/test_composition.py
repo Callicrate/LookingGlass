@@ -13,7 +13,12 @@ from async_api_view.adapters.databricks import CliExecution, CliInvocation, CliR
 from async_api_view.application import SystemBootstrapService
 from async_api_view.cli import _run_once
 from async_api_view.composition import build_runtime
-from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
+from async_api_view.config import (
+    AppSettings,
+    ConfigError,
+    DatabricksSystemSettings,
+    ProjectSettings,
+)
 from async_api_view.contracts import (
     ActionCompletion,
     ActionOutcome,
@@ -919,6 +924,45 @@ def test_explicit_config_id_adopts_legacy_system_identity(tmp_path: Path) -> Non
         for system in renamed.store.list_systems()
     ] == [(legacy_system_id, "Renamed", True)]
     renamed.store.close()
+
+
+def test_case_only_config_id_change_preserves_identity_and_cache(tmp_path: Path) -> None:
+    initial = build_runtime(
+        settings(tmp_path, config_id="primary"),
+        runner=FakeCliRunner(b"[]"),
+    )
+    system_id = initial.store.list_systems()[0].system_id
+    object_ids = {item.object_id for item in initial.store.list_objects()}
+    initial.store._connection.execute(
+        "UPDATE configured_system_identities SET config_id = 'Primary'"
+    )
+    initial.store.close()
+
+    restarted = build_runtime(
+        settings(tmp_path, config_id="PRIMARY"),
+        runner=FakeCliRunner(b"[]"),
+    )
+
+    assert [(system.system_id, system.enabled) for system in restarted.store.list_systems()] == [
+        (system_id, True)
+    ]
+    assert {item.object_id for item in restarted.store.list_objects()} == object_ids
+    identities = restarted.store._connection.execute(
+        "SELECT config_id, system_id FROM configured_system_identities"
+    ).fetchall()
+    assert [tuple(row) for row in identities] == [("primary", system_id)]
+    restarted.store.close()
+
+
+def test_direct_settings_reject_non_ascii_config_id_before_database_creation(
+    tmp_path: Path,
+) -> None:
+    project_settings = settings(tmp_path, config_id="İ")
+
+    with pytest.raises(ConfigError, match="letters, digits"):
+        build_runtime(project_settings, runner=FakeCliRunner(b"[]"))
+
+    assert not project_settings.app.database_path.exists()
 
 
 def test_workspace_root_change_creates_new_authority_and_pauses_predecessor(
