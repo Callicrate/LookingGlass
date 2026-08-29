@@ -70,14 +70,14 @@ Implemented and covered by automated tests:
 - generic local-only coordination and idempotent observation ingestion;
 - closed Databricks CLI command mapping, bounded execution, error redaction, and Workspace/Unity Catalog metadata normalizers;
 - loopback operational UI with bounded inventory, containment, alert-history, action-activity, and per-action attempt pages, object facet/provenance detail, registered refresh controls, intent polling, ephemeral local-caller authorization, per-session CSRF, Origin/Host checks, stale/error states, and output escaping;
-- local configuration, initialization, doctor, one-shot worker, and serve commands;
+- local configuration, initialization, doctor, one-shot worker, online backup, and serve commands;
 - an end-to-end fake-CLI test covering request, admission, execution, ingestion, display, and duplicate suppression.
 
 Not yet verified or intentionally deferred:
 
 - the live inventory smoke test, pending an explicit choice of existing Databricks CLI profile;
 - automatic refresh subscriptions and UI-session heartbeat scheduling;
-- persistent Workspace content artifacts and retention deletion;
+- Workspace content reads, persistent artifacts, and retention deletion; the current worker rejects content actions before CLI execution;
 - the Linux-over-SSH adapter;
 - evidence compaction and multi-process deployment.
 
@@ -1175,22 +1175,22 @@ The accepted version 1 inventory is:
 | Databricks concept | Canonical mapping |
 |---|---|
 | Workspace directories | `folder.metadata` and `folder.membership` |
-| Workspace files and notebooks | `file.metadata` and, when requested and allowed, `file.content` |
+| Workspace files and notebooks | Current: `file.metadata`; deferred target: retained `file.content` artifacts |
 | Unity Catalog catalogs | `generic_object` with source kind `databricks.uc.catalog` |
 | Unity Catalog schemas | `generic_object` with source kind `databricks.uc.schema` |
 | Unity Catalog tables and views | Metadata-only `generic_object` records, including schema/column metadata when returned by the metadata API |
 | Unity Catalog volumes | Metadata-only `generic_object` records for the volume object |
 
 Catalog-to-schema and schema-to-table/view/volume containment are canonical relationships.
-Workspace content artifacts use the normal 365-day type default and retention override rules.
+When implemented, Workspace content artifacts use the normal 365-day type default and retention override rules.
 
-The initial registered capability keys are:
+The versioned capability contract includes the following keys. Registration preserves the future contract; it does not make a deferred capability executable.
 
 | Capability key | Canonical target and output |
 |---|---|
 | `databricks.workspace.children.read` | Configured Workspace folder to membership plus child folder/file metadata |
 | `databricks.workspace.metadata.read` | Known Workspace object to folder/file metadata |
-| `databricks.workspace.content.read` | Known Workspace file/notebook to one retained `file.content` artifact |
+| `databricks.workspace.content.read` | Deferred: known Workspace file/notebook to one retained `file.content` artifact; the current worker rejects this key before CLI execution |
 | `databricks.uc.catalogs.read` | Configured metastore/workspace scope to catalog metadata and relationships |
 | `databricks.uc.schemas.read` | Known catalog to schema metadata and relationships |
 | `databricks.uc.relations.read` | Known schema to table/view metadata and relationships |
@@ -1598,11 +1598,11 @@ Every adapter MUST pass a shared conformance suite proving:
 - The CLI runner rejects `databricks api`, unregistered command groups/subcommands, arbitrary endpoints, and free-form flags.
 - Startup fails clearly when the CLI version or a required `workspace`, `catalogs`, `schemas`, `tables`, or `volumes` command group is incompatible.
 - Profile selection and JSON output are passed as structured arguments and are redacted from persisted diagnostics.
-- Sanitized fixture output for every registered capability normalizes to the expected objects, facets, relationships, coverage, and provenance.
+- Sanitized fixture output covers every registered parser contract; content remains parser-only and is not executed by the current worker.
 - A live `databricks.workspace.children.read` action is the first external end-to-end test.
 - Two equivalent refresh intents inside the interval produce at most one Databricks CLI action.
 - Worker results reach canonical state only through the action-lifecycle and observation-ingestion ports.
-- Workspace content uses the artifact/retention contract and remains disabled when content policy is incomplete.
+- Workspace content actions are rejected before CLI execution until the artifact/retention persistence port and policy are complete.
 - Unity Catalog table/view results contain metadata only, and volume results contain volume-object metadata only.
 - CLI authentication, permission, pagination, timeout, rate, malformed-output, and partial-result cases map to canonical outcomes without erasing cached facts.
 
@@ -1664,7 +1664,7 @@ Exit condition: cached Workspace state remains readable after Databricks becomes
 
 ### Phase 2: complete the Databricks worker
 
-- Add Workspace object metadata and Workspace file/notebook content support.
+- Complete Workspace file/notebook content support; Workspace object metadata is already implemented.
 - Store Workspace content through the artifact contract with 365-day default retention; keep capture disabled until its size/security policy is configured.
 - Add Unity Catalog catalog, schema, table/view metadata, and volume-object metadata capabilities.
 - Enforce the prohibition on table/view rows, SQL content inspection, volume file listing/content, and storage-location traversal.

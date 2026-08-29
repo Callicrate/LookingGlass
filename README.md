@@ -90,13 +90,13 @@ The closed worker registry supports:
 
 - Workspace folder membership and object metadata;
 - Workspace file/notebook metadata;
-- policy-gated Workspace content normalization;
 - Unity Catalog catalog, schema, table/view metadata, and volume-object metadata.
 
 It does not use the Databricks SDK, direct REST calls, SQL inspection, or `databricks api`.
 It never reads table/view rows, lists files inside Unity Catalog volumes, reads volume file content, or follows storage locations.
 
-Workspace content artifact persistence remains disabled in the composed application until its size, encryption, and local-access policy is configured.
+Workspace content reads and retained artifacts are not part of the current executable product.
+The worker rejects content actions before target resolution or CLI execution until artifact storage, encryption, local access, and retention are implemented; parser and artifact contracts remain only as deferred implementation seams.
 
 ## Commands
 
