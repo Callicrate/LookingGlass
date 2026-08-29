@@ -789,6 +789,268 @@ def test_collection_action_rejects_unlinked_off_collection_fact(tmp_path) -> Non
     assert {item.external_key for item in store.list_objects()} == {"workspace:/Shared"}
 
 
+def test_collection_authority_queries_scale_linearly_with_batch_size(tmp_path) -> None:
+    def select_count(item_count: int) -> int:
+        store = SQLiteStore(tmp_path / f"authority-{item_count}.sqlite3")
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local",
+            profile="DEFAULT",
+            workspace_root="/Shared",
+            now=NOW,
+        )
+        authority = _membership_authority(
+            seeded.system.system_id,
+            seeded.workspace_root_scope.scope_id,
+        )
+        targets = tuple(
+            ObjectLocator(
+                object_type="file",
+                source_kind="databricks.workspace.file",
+                external_key=f"workspace:/Shared/item-{index}.py",
+                display_name=f"item-{index}.py",
+            )
+            for index in range(item_count)
+        )
+        batch = ObservationBatch(
+            batch_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=NOW,
+            received_at=NOW,
+            facet_observations=tuple(
+                FacetObservation(
+                    observation_id=uuid4(),
+                    target=target,
+                    facet="metadata",
+                    facet_version="1",
+                    update_mode=UpdateMode.SNAPSHOT,
+                    field_coverage=FieldCoverage.COMPLETE,
+                    payload={"name": target.display_name},
+                    authorized_by=(authority,),
+                )
+                for target in targets
+            ),
+            relationship_observations=tuple(
+                _membership_relationship(
+                    authority,
+                    seeded.workspace_root_object_id,
+                    target,
+                )
+                for target in targets
+            ),
+        )
+        selects = 0
+
+        def trace(statement: str) -> None:
+            nonlocal selects
+            if statement.lstrip().upper().startswith("SELECT"):
+                selects += 1
+
+        store._connection.set_trace_callback(trace)
+        try:
+            result = run(store.ingest(batch))
+        finally:
+            store._connection.set_trace_callback(None)
+        assert result.status.value == "accepted"
+        assert len(result.accepted_observation_ids) == item_count * 2
+        return selects
+
+    small_count = select_count(100)
+    large_count = select_count(200)
+
+    assert large_count <= small_count * 2 + 50
+
+
+def test_collection_authority_preserves_facet_first_identity_projection(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "facet-first-authority.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        now=NOW,
+    )
+    authority = _membership_authority(
+        seeded.system.system_id,
+        seeded.workspace_root_scope.scope_id,
+    )
+    facet_target = ObjectLocator(
+        object_type="file",
+        source_kind="databricks.workspace.file",
+        external_key="workspace:/Shared/ordered.py",
+        display_name="facet-name.py",
+    )
+    relationship_target = replace(facet_target, display_name="relationship-name.py")
+    batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW,
+        facet_observations=(
+            FacetObservation(
+                observation_id=uuid4(),
+                target=facet_target,
+                facet="metadata",
+                facet_version="1",
+                update_mode=UpdateMode.SNAPSHOT,
+                field_coverage=FieldCoverage.COMPLETE,
+                payload={"name": "facet-name.py"},
+                authorized_by=(authority,),
+            ),
+        ),
+        relationship_observations=(
+            _membership_relationship(
+                authority,
+                seeded.workspace_root_object_id,
+                relationship_target,
+            ),
+        ),
+    )
+
+    assert run(store.ingest(batch)).status.value == "accepted"
+    projected = next(
+        item for item in store.list_objects() if item.external_key == "workspace:/Shared/ordered.py"
+    )
+    assert projected.display_name == "facet-name.py"
+
+
+def test_collection_link_authority_cannot_cross_exact_scope_identity(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "exact-scope-authority.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        now=NOW,
+    )
+    relationship_scope = replace(
+        _membership_authority(
+            seeded.system.system_id,
+            seeded.workspace_root_scope.scope_id,
+        ),
+        field_mask=("relationship-scope",),
+    )
+    facet_scope = replace(relationship_scope, field_mask=("facet-scope",))
+    target = ObjectLocator(
+        object_type="file",
+        source_kind="databricks.workspace.file",
+        external_key="workspace:/Shared/scope-bound.py",
+        display_name="scope-bound.py",
+    )
+    facet = FacetObservation(
+        observation_id=uuid4(),
+        target=target,
+        facet="metadata",
+        facet_version="1",
+        update_mode=UpdateMode.SNAPSHOT,
+        field_coverage=FieldCoverage.COMPLETE,
+        payload={"name": "scope-bound.py"},
+        authorized_by=(facet_scope,),
+    )
+    relationship = _membership_relationship(
+        relationship_scope,
+        seeded.workspace_root_object_id,
+        target,
+    )
+    batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW,
+        facet_observations=(facet,),
+        relationship_observations=(relationship,),
+    )
+
+    result = run(store.ingest(batch))
+
+    assert result.status.value == "partial"
+    assert result.accepted_observation_ids == (relationship.observation_id,)
+    assert result.issue_count == 1
+    assert (
+        store.get_facet_sync(
+            next(
+                item.object_id
+                for item in store.list_objects()
+                if item.external_key == "workspace:/Shared/scope-bound.py"
+            ),
+            "metadata",
+        )
+        is None
+    )
+
+
+def test_conflicting_relationship_ids_cannot_lend_collection_authority(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "conflicting-link-authority.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        now=NOW,
+    )
+    authority = _membership_authority(
+        seeded.system.system_id,
+        seeded.workspace_root_scope.scope_id,
+    )
+    target = ObjectLocator(
+        object_type="file",
+        source_kind="databricks.workspace.file",
+        external_key="workspace:/Shared/colliding.py",
+        display_name="colliding.py",
+    )
+    collision_id = uuid4()
+    first_relationship = replace(
+        _membership_relationship(
+            authority,
+            seeded.workspace_root_object_id,
+            target,
+        ),
+        observation_id=collision_id,
+    )
+    conflicting_relationship = replace(
+        first_relationship,
+        object=replace(target, external_key="workspace:/Shared/other.py"),
+    )
+    facet = FacetObservation(
+        observation_id=uuid4(),
+        target=target,
+        facet="metadata",
+        facet_version="1",
+        update_mode=UpdateMode.SNAPSHOT,
+        field_coverage=FieldCoverage.COMPLETE,
+        payload={"name": "colliding.py"},
+        authorized_by=(authority,),
+    )
+    batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW,
+        facet_observations=(facet,),
+        relationship_observations=(first_relationship, conflicting_relationship),
+    )
+
+    result = run(store.ingest(batch))
+
+    assert result.status.value == "partial"
+    assert result.accepted_observation_ids == (first_relationship.observation_id,)
+    assert result.issue_count == 2
+    projected = next(
+        item
+        for item in store.list_objects()
+        if item.external_key == "workspace:/Shared/colliding.py"
+    )
+    assert store.get_facet_sync(projected.object_id, "metadata") is None
+
+
 def test_partial_facet_patch_never_clears_unobserved_fields(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(

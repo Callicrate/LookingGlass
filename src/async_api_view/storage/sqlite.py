@@ -3959,14 +3959,47 @@ class SQLiteStore:
         ).fetchone()
         return row["object_id"] if row is not None else None
 
+    def _cached_authority_capability_rows(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        batch: ObservationBatch,
+        scope: RefreshScope,
+        cache: dict[tuple[object, ...], tuple[sqlite3.Row, ...]],
+    ) -> tuple[sqlite3.Row, ...]:
+        key = (batch.action_id, *_scope_columns(scope))
+        if key not in cache:
+            cache[key] = self._authority_capability_rows(
+                connection,
+                batch=batch,
+                scope=scope,
+            )
+        return cache[key]
+
+    def _cached_authority_target_object_id(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        scope: RefreshScope,
+        cache: dict[tuple[object, ...], str | None],
+    ) -> str | None:
+        key = _scope_columns(scope)
+        if key not in cache:
+            cache[key] = self._authority_target_object_id(connection, scope)
+        return cache[key]
+
     def _facet_item_is_authorized(
         self,
         connection: sqlite3.Connection,
         *,
         batch: ObservationBatch,
-        declarations: tuple[CoverageDeclaration, ...],
         observation: FacetObservation,
         object_id: str,
+        fallback_scopes: tuple[RefreshScope, ...],
+        capability_cache: dict[tuple[object, ...], tuple[sqlite3.Row, ...]],
+        target_cache: dict[tuple[object, ...], str | None],
+        authorized_contains_locators: set[tuple[RefreshScope, tuple[object, ...]]],
+        authorized_contains_objects: set[tuple[RefreshScope, str]],
     ) -> bool:
         if not self._adapter_owns_object(
             connection,
@@ -3974,16 +4007,12 @@ class SQLiteStore:
             adapter_key=batch.adapter_key,
         ):
             return False
-        for scope in self._item_authority_scopes(
-            connection,
-            batch=batch,
-            explicit=observation.authorized_by,
-            declarations=declarations,
-        ):
-            for capability in self._authority_capability_rows(
+        for scope in observation.authorized_by or fallback_scopes:
+            for capability in self._cached_authority_capability_rows(
                 connection,
                 batch=batch,
                 scope=scope,
+                cache=capability_cache,
             ):
                 if (
                     self._capability_authorizes_scope(
@@ -3993,70 +4022,30 @@ class SQLiteStore:
                     )
                     and observation.facet in _json_value(capability["produced_facets_json"])
                     and (
-                        self._authority_target_object_id(connection, scope) == object_id
-                        or self._collection_item_is_linked(
+                        self._cached_authority_target_object_id(
                             connection,
-                            batch=batch,
-                            declarations=declarations,
                             scope=scope,
-                            target=observation.target,
+                            cache=target_cache,
                         )
+                        == object_id
+                        or (scope, self._locator_identity_key(observation.target))
+                        in authorized_contains_locators
+                        or (scope, object_id) in authorized_contains_objects
                     )
                 ):
                     return True
         return False
 
-    def _collection_item_is_linked(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        batch: ObservationBatch,
-        declarations: tuple[CoverageDeclaration, ...],
-        scope: RefreshScope,
-        target: ObjectLocator,
-    ) -> bool:
-        expected_subject = self._authority_target_object_id(connection, scope)
-        if expected_subject is None:
-            return False
-        for relationship_observation in batch.relationship_observations:
-            if (
-                relationship_observation.predicate != "contains"
-                or relationship_observation.presence is not PresenceState.PRESENT
-                or not self._locators_match_existing_identity(
-                    connection,
-                    system_id=batch.system_id,
-                    left=relationship_observation.object,
-                    right=target,
-                )
-                or self._existing_locator_object_id(
-                    connection,
-                    system_id=batch.system_id,
-                    locator=relationship_observation.subject,
-                )
-                != expected_subject
-                or scope
-                not in self._item_authority_scopes(
-                    connection,
-                    batch=batch,
-                    explicit=relationship_observation.authorized_by,
-                    declarations=declarations,
-                )
-            ):
-                continue
-            if any(
-                self._capability_authorizes_scope(
-                    capability,
-                    scope,
-                    relationship=True,
-                )
-                for capability in self._authority_capability_rows(
-                    connection,
-                    batch=batch,
-                    scope=scope,
-                )
-            ):
-                return True
-        return False
+    @staticmethod
+    def _locator_identity_key(locator: ObjectLocator) -> tuple[object, ...]:
+        if locator.object_id is not None:
+            return ("object", locator.object_type, locator.object_id)
+        return (
+            "external",
+            locator.object_type,
+            locator.source_kind,
+            locator.external_key,
+        )
 
     @staticmethod
     def _existing_locator_object_id(
@@ -4089,27 +4078,88 @@ class SQLiteStore:
             ).fetchone()
         return row["object_id"] if row is not None else None
 
-    @classmethod
-    def _locators_match_existing_identity(
-        cls,
+    def _collection_authority_index(
+        self,
         connection: sqlite3.Connection,
         *,
-        system_id: str,
-        left: ObjectLocator,
-        right: ObjectLocator,
-    ) -> bool:
-        if left == right:
-            return True
-        left_id = cls._existing_locator_object_id(
-            connection,
-            system_id=system_id,
-            locator=left,
-        )
-        return left_id is not None and left_id == cls._existing_locator_object_id(
-            connection,
-            system_id=system_id,
-            locator=right,
-        )
+        batch: ObservationBatch,
+        fallback_scopes: tuple[RefreshScope, ...],
+        capability_cache: dict[tuple[object, ...], tuple[sqlite3.Row, ...]],
+        target_cache: dict[tuple[object, ...], str | None],
+    ) -> tuple[
+        set[tuple[RefreshScope, tuple[object, ...]]],
+        set[tuple[RefreshScope, str]],
+    ]:
+        locators: set[tuple[RefreshScope, tuple[object, ...]]] = set()
+        objects: set[tuple[RefreshScope, str]] = set()
+        locator_object_cache: dict[tuple[object, ...], str | None] = {}
+
+        def existing_object_id(locator: ObjectLocator) -> str | None:
+            key = self._locator_identity_key(locator)
+            if key not in locator_object_cache:
+                locator_object_cache[key] = self._existing_locator_object_id(
+                    connection,
+                    system_id=batch.system_id,
+                    locator=locator,
+                )
+            return locator_object_cache[key]
+
+        item_digest_by_id: dict[str, set[bytes]] = {}
+        for observation in batch.relationship_observations:
+            item_digest_by_id.setdefault(observation.observation_id, set()).add(
+                hashlib.sha256(self._journal_item_json(observation).encode()).digest()
+            )
+        conflicting_input_ids = {
+            observation_id
+            for observation_id, item_digests in item_digest_by_id.items()
+            if len(item_digests) > 1
+        }
+        for observation in batch.relationship_observations:
+            if (
+                observation.predicate != "contains"
+                or observation.presence is not PresenceState.PRESENT
+                or observation.observation_id in conflicting_input_ids
+                or self._journal_item_status(
+                    connection,
+                    observation_id=observation.observation_id,
+                    batch=batch,
+                    item_kind="relationship",
+                    item=observation,
+                )
+                == "conflict"
+            ):
+                continue
+            subject_id = existing_object_id(observation.subject)
+            if subject_id is None or not self._adapter_owns_object(
+                connection,
+                object_id=subject_id,
+                adapter_key=batch.adapter_key,
+            ):
+                continue
+            object_id = existing_object_id(observation.object)
+            for scope in observation.authorized_by or fallback_scopes:
+                if self._cached_authority_target_object_id(
+                    connection,
+                    scope=scope,
+                    cache=target_cache,
+                ) != subject_id or not any(
+                    self._capability_authorizes_scope(
+                        capability,
+                        scope,
+                        relationship=True,
+                    )
+                    for capability in self._cached_authority_capability_rows(
+                        connection,
+                        batch=batch,
+                        scope=scope,
+                        cache=capability_cache,
+                    )
+                ):
+                    continue
+                locators.add((scope, self._locator_identity_key(observation.object)))
+                if object_id is not None:
+                    objects.add((scope, object_id))
+        return locators, objects
 
     def _relationship_item_is_authorized(
         self,
@@ -4120,6 +4170,9 @@ class SQLiteStore:
         observation: RelationshipObservation,
         subject_id: str,
         object_id: str,
+        fallback_scopes: tuple[RefreshScope, ...],
+        capability_cache: dict[tuple[object, ...], tuple[sqlite3.Row, ...]],
+        target_cache: dict[tuple[object, ...], str | None],
     ) -> bool:
         if observation.predicate != "contains" or not all(
             self._adapter_owns_object(
@@ -4130,13 +4183,15 @@ class SQLiteStore:
             for candidate in (subject_id, object_id)
         ):
             return False
-        for scope in self._item_authority_scopes(
-            connection,
-            batch=batch,
-            explicit=observation.authorized_by,
-            declarations=declarations,
-        ):
-            if self._authority_target_object_id(connection, scope) != subject_id:
+        for scope in observation.authorized_by or fallback_scopes:
+            if (
+                self._cached_authority_target_object_id(
+                    connection,
+                    scope=scope,
+                    cache=target_cache,
+                )
+                != subject_id
+            ):
                 continue
             if observation.presence is PresenceState.ABSENT and not any(
                 declaration.scope == scope
@@ -4151,10 +4206,11 @@ class SQLiteStore:
                     scope,
                     relationship=True,
                 )
-                for capability in self._authority_capability_rows(
+                for capability in self._cached_authority_capability_rows(
                     connection,
                     batch=batch,
                     scope=scope,
+                    cache=capability_cache,
                 )
             ):
                 return True
@@ -5058,9 +5114,27 @@ class SQLiteStore:
                     batch_digest,
                 ),
             )
-            accepted_ids: list[str] = []
+            facet_accepted_ids: list[str] = []
+            relationship_accepted_ids: list[str] = []
             issue_count = 0
             positive_contains: set[tuple[str, str]] = set()
+            fallback_authority_scopes = self._item_authority_scopes(
+                connection,
+                batch=batch,
+                explicit=(),
+                declarations=declarations,
+            )
+            authority_capability_cache: dict[tuple[object, ...], tuple[sqlite3.Row, ...]] = {}
+            authority_target_cache: dict[tuple[object, ...], str | None] = {}
+            authorized_contains_locators, authorized_contains_objects = (
+                self._collection_authority_index(
+                    connection,
+                    batch=batch,
+                    fallback_scopes=fallback_authority_scopes,
+                    capability_cache=authority_capability_cache,
+                    target_cache=authority_target_cache,
+                )
+            )
             for observation in batch.facet_observations:
                 try:
                     with self._ingestion_item_savepoint(connection):
@@ -5097,9 +5171,13 @@ class SQLiteStore:
                         if not self._facet_item_is_authorized(
                             connection,
                             batch=batch,
-                            declarations=declarations,
                             observation=observation,
                             object_id=target.object_id,
+                            fallback_scopes=fallback_authority_scopes,
+                            capability_cache=authority_capability_cache,
+                            target_cache=authority_target_cache,
+                            authorized_contains_locators=authorized_contains_locators,
+                            authorized_contains_objects=authorized_contains_objects,
                         ):
                             raise ValueError("facet_observation_not_authorized")
                         recorded_status = self._record_journal_item(
@@ -5150,7 +5228,7 @@ class SQLiteStore:
                                 observation=observation,
                                 object_id=target.object_id,
                             )
-                        accepted_ids.append(observation.observation_id)
+                        facet_accepted_ids.append(observation.observation_id)
                 except ValueError as error:
                     issue_count += 1
                     self._record_ingestion_issue(
@@ -5194,6 +5272,9 @@ class SQLiteStore:
                             observation=observation,
                             subject_id=subject.object_id,
                             object_id=object_value.object_id,
+                            fallback_scopes=fallback_authority_scopes,
+                            capability_cache=authority_capability_cache,
+                            target_cache=authority_target_cache,
                         ):
                             raise ValueError("relationship_observation_not_authorized")
                         recorded_status = self._record_journal_item(
@@ -5219,7 +5300,7 @@ class SQLiteStore:
                             and observation.presence is PresenceState.PRESENT
                         ):
                             positive_contains.add((subject.object_id, object_value.object_id))
-                        accepted_ids.append(observation.observation_id)
+                        relationship_accepted_ids.append(observation.observation_id)
                 except ValueError as error:
                     issue_count += 1
                     self._record_ingestion_issue(
@@ -5258,6 +5339,7 @@ class SQLiteStore:
                 if issue_count or has_incomplete_coverage
                 else IngestionStatus.ACCEPTED
             )
+            accepted_ids = facet_accepted_ids + relationship_accepted_ids
             connection.execute(
                 """
                 UPDATE observation_batches
