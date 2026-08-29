@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 04:14 ET
+Updated: 2026-08-29 04:16 ET
 
 ## Goal
 
@@ -72,6 +72,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Enforce valid terminal outcomes, errors, ordinals, and retry timing at the action DTO boundary.
 - [x] Prevent contradictory Unity Catalog response identity from redirecting later refreshes.
 - [x] Reject primitive string enums across every shared contract DTO boundary.
+- [x] Return open intent pages to the unlock flow when browser authorization expires.
 
 ## Evidence and decisions
 
@@ -218,6 +219,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The real ignored local database was snapshotted through the new command to `.local/backups/rookery-20260829-0355.sqlite3`; the standalone 315,392-byte copy reports integrity `ok` at migration `0011`.
 - Shared enum validators now cover target kinds, presence/knowledge states, refresh origin/coverage, observation modes, collection/absence coverage, guard decisions, ingestion results, capability operation/targets, and action records.
 - Persisted intent reconstruction explicitly restores `RefreshOrigin`; a raw `"dispatch"` can no longer make the worker silently abandon a live lease, and raw automatic origins cannot bypass session requirements.
+- Intent polling now reloads on authorization denial instead of retrying forever as a false disconnection, and the unlock page tells expired sessions to restart Rookery for a new link.
 
 ## Risks / watch list
 
