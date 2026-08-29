@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 05:26 ET
+Updated: 2026-08-29 05:35 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 297 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
+- Latest checks: 305 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: no medium-or-higher defect open; continue fresh post-fix residual audits against the clean 291-test head.
@@ -80,6 +80,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Atomically revalidate authority and deadlines at the final remote-start transition.
 - [x] Exclude workspace status/progress, CI, and Murmuration metadata from source distributions.
 - [x] Return controlled CLI errors for corrupt or incompatible local SQLite state.
+- [x] Preserve filtered and paged action context across detail drilldowns.
 
 ## Evidence and decisions
 
@@ -238,6 +239,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Resolver-time revocation regressions prove system, binding, capability, and newly expired deadlines all stop before process creation with no attempt record.
 - CI now verifies distribution contents on Windows and Ubuntu after every build; the source archive has 71 intended entries with workspace audit surfaces excluded, and the wheel has all 53 required runtime entries/assets.
 - `init`, `run-once`, and `serve` now catch SQLite open/migration failures at the CLI boundary, emit one bounded generic error, return exit code 2, and close the database handle without exposing a traceback.
+- Action-detail links carry a percent-encoded local `/actions` return path; detail pages validate path, length, query keys, duplicates, and filter combinations before rendering the escaped back link.
 - A fresh multi-process storage/runtime audit cleared transaction, lease recovery, aggregate, configuration reconciliation, backup, and poison-row behavior with 92 focused tests.
 
 ## Risks / watch list
