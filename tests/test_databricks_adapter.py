@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from async_api_view.adapters import databricks as databricks_adapter
 from async_api_view.adapters.databricks import (
     DATABRICKS_ADAPTER_KEY,
     DATABRICKS_ADAPTER_VERSION,
@@ -25,7 +26,6 @@ from async_api_view.adapters.databricks import (
     DownstreamFailure,
     InvalidDownstreamResponse,
     ResolvedTarget,
-    normalize,
     redact_diagnostic,
 )
 from async_api_view.contracts import (
@@ -45,6 +45,12 @@ from async_api_view.contracts import (
     TargetKind,
     TargetRef,
 )
+
+_DELIVERY_ID = str(uuid4())
+
+
+def normalize(**kwargs):
+    return databricks_adapter.normalize(delivery_id=_DELIVERY_ID, **kwargs)
 
 
 def _binding() -> ConnectionBinding:

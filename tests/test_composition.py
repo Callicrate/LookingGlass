@@ -1253,6 +1253,106 @@ async def test_worker_startup_retries_with_one_event_and_clears_dashboard_error(
 
 
 @pytest.mark.anyio
+async def test_recovered_worker_uses_a_new_delivery_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = FakeCliRunner(b"[]")
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=refresh.system_id,
+            target_kind=refresh.target_kind,
+            target_id=refresh.target_id,
+            capability_key=refresh.capability_key,
+            facet=refresh.facet,
+        )
+    )
+    assert await runtime.coordinator.run_once() is not None
+    first_started = datetime.now(UTC)
+    first = await runtime.store.lease_next(
+        adapter_key="databricks",
+        worker_id="first-worker",
+        now=first_started,
+    )
+    assert first is not None
+    original_record_attempt = runtime.store.record_attempt
+
+    async def lose_lease_before_attempt(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("injected crash boundary")
+
+    monkeypatch.setattr(runtime.store, "record_attempt", lose_lease_before_attempt)
+    await runtime.worker.process(first, now=first_started)
+    assert runtime.store.list_actions()[0].state.value == "running"
+    assert (
+        runtime.store._connection.execute(
+            "SELECT COUNT(*) FROM observation_batches WHERE action_id = ?",
+            (first.action.action_id,),
+        ).fetchone()[0]
+        == 1
+    )
+
+    monkeypatch.setattr(runtime.store, "record_attempt", original_record_attempt)
+    recovered_at = datetime.now(UTC)
+    runtime.store._connection.execute(
+        "UPDATE adapter_actions SET leased_until = ? WHERE action_id = ?",
+        (
+            (recovered_at - timedelta(microseconds=1))
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z"),
+            first.action.action_id,
+        ),
+    )
+    recovered = await runtime.store.lease_next(
+        adapter_key="databricks",
+        worker_id="recovered-worker",
+        now=recovered_at,
+    )
+    assert recovered is not None
+    await runtime.worker.process(recovered, now=recovered_at)
+
+    batches = runtime.store._connection.execute(
+        """
+        SELECT batch_id, issue_count
+        FROM observation_batches WHERE action_id = ? ORDER BY batch_id
+        """,
+        (first.action.action_id,),
+    ).fetchall()
+    credit_count = runtime.store._connection.execute(
+        "SELECT COUNT(*) FROM refresh_credit WHERE system_id = ?",
+        (first.action.system_id,),
+    ).fetchone()[0]
+    journal_ids = {
+        row["observation_id"]
+        for row in runtime.store._connection.execute(
+            """
+            SELECT journal.observation_id
+            FROM observation_journal AS journal
+            JOIN observation_batches AS batch ON batch.batch_id = journal.batch_id
+            WHERE batch.action_id = ?
+            """,
+            (first.action.action_id,),
+        ).fetchall()
+    }
+    assert runtime.store.list_actions()[0].state.value == "partial"
+    assert len(batches) == 2
+    assert batches[0]["batch_id"] != batches[1]["batch_id"]
+    assert {batch["issue_count"] for batch in batches} == {0}
+    assert credit_count == 0
+    assert len(journal_ids) == 2
+    assert len(runner.calls) == 2
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_blocked_worker_startup_does_not_hold_cached_authenticated_dashboard(
     tmp_path: Path,
 ) -> None:

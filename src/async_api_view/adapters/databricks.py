@@ -800,14 +800,19 @@ def normalize(
     action: AdapterAction,
     binding: ConnectionBinding,
     target: ResolvedTarget,
+    delivery_id: str,
     stdout: bytes,
     observed_at: datetime,
 ) -> NormalizedResult:
     """Validate sanitized JSON and create deterministic canonical evidence."""
     payload = _json_output(stdout)
     observed_at = observed_at.astimezone(UTC)
+
+    def evidence_id(label: str) -> str:
+        return _id(action, f"delivery:{delivery_id}:{label}")
+
     base = dict(
-        batch_id=_id(action, "batch"),
+        batch_id=_id(action, f"batch:{delivery_id}"),
         system_id=action.system_id,
         connection_binding_id=binding.binding_id,
         adapter_key=DATABRICKS_ADAPTER_KEY,
@@ -829,7 +834,7 @@ def normalize(
         children = _items(payload, "objects")
         facets.append(
             FacetObservation(
-                _id(action, "root-membership"),
+                evidence_id("root-membership"),
                 root,
                 "membership",
                 "1",
@@ -882,7 +887,7 @@ def normalize(
             child_identity_witnesses.update(identity_witnesses)
             facets.append(
                 FacetObservation(
-                    _id(action, f"metadata:{child.external_key}"),
+                    evidence_id(f"metadata:{child.external_key}"),
                     child,
                     "metadata" if child.object_type != "generic_object" else "attributes",
                     "1",
@@ -895,7 +900,7 @@ def normalize(
             )
             relationships.append(
                 RelationshipObservation(
-                    _id(action, f"contains:{child.external_key}"),
+                    evidence_id(f"contains:{child.external_key}"),
                     root,
                     "contains",
                     child,
@@ -922,7 +927,7 @@ def normalize(
         body = _workspace_payload(item)
         facets.append(
             FacetObservation(
-                _id(action, f"metadata:{locator.external_key}"),
+                evidence_id(f"metadata:{locator.external_key}"),
                 locator,
                 facet,
                 "1",
@@ -939,7 +944,14 @@ def normalize(
         )
     elif capability == "databricks.workspace.content.read":
         payload = _mapping_payload(payload, capability=capability)
-        _normalize_content(action, binding, target, payload, facets)
+        _normalize_content(
+            action,
+            binding,
+            target,
+            payload,
+            facets,
+            delivery_id=delivery_id,
+        )
     elif capability == "databricks.uc.catalogs.read":
         for item in _items(payload, "catalogs"):
             name = _name(item.get("name"), label="catalog name")
@@ -947,7 +959,7 @@ def normalize(
             body = _generic_payload(item, entity="catalog")
             facets.append(
                 FacetObservation(
-                    _id(action, f"catalog:{name}"),
+                    evidence_id(f"catalog:{name}"),
                     locator,
                     "attributes",
                     "1",
@@ -971,7 +983,7 @@ def normalize(
             body = _generic_payload(item, entity="schema")
             facets.append(
                 FacetObservation(
-                    _id(action, f"schema:{catalog}.{name}"),
+                    evidence_id(f"schema:{catalog}.{name}"),
                     locator,
                     "attributes",
                     "1",
@@ -984,7 +996,7 @@ def normalize(
             )
             relationships.append(
                 RelationshipObservation(
-                    _id(action, f"contains:{locator.external_key}"),
+                    evidence_id(f"contains:{locator.external_key}"),
                     parent,
                     "contains",
                     locator,
@@ -1026,7 +1038,7 @@ def normalize(
             body = _generic_payload(item, entity=item_entity)
             facets.append(
                 FacetObservation(
-                    _id(action, f"{item_entity}:{catalog}.{schema}.{name}"),
+                    evidence_id(f"{item_entity}:{catalog}.{schema}.{name}"),
                     locator,
                     "attributes",
                     "1",
@@ -1039,7 +1051,7 @@ def normalize(
             )
             relationships.append(
                 RelationshipObservation(
-                    _id(action, f"contains:{locator.external_key}"),
+                    evidence_id(f"contains:{locator.external_key}"),
                     parent,
                     "contains",
                     locator,
@@ -1098,6 +1110,8 @@ def _normalize_content(
     target: ResolvedTarget,
     payload: Mapping[str, Any],
     facets: list[FacetObservation],
+    *,
+    delivery_id: str,
 ) -> None:
     maximum, media_type = _content_settings(binding)
     content = _content_bytes(payload, maximum)
@@ -1118,7 +1132,7 @@ def _normalize_content(
         body["media_type"] = media_type
     facets.append(
         FacetObservation(
-            _id(action, f"content:{locator.external_key}"),
+            _id(action, f"delivery:{delivery_id}:content:{locator.external_key}"),
             locator,
             "content",
             "1",
@@ -1313,6 +1327,7 @@ class DatabricksWorker:
                 action=action,
                 binding=binding,
                 target=target,
+                delivery_id=lease.lease_id,
                 stdout=execution.stdout,
                 observed_at=datetime.now(UTC),
             )
