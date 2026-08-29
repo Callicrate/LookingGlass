@@ -2796,7 +2796,7 @@ class SQLiteStore:
         if ActionState(row["state"]) not in allowed_states:
             raise ValueError("adapter action is not in a lease-authorized state")
         leased_until = _dt(row["leased_until"])
-        if leased_until is None or leased_until < at:
+        if leased_until is None or leased_until <= at:
             raise ValueError("adapter action lease has expired")
         return row
 
@@ -3518,7 +3518,12 @@ class SQLiteStore:
         )
 
     def _validate_batch_context(
-        self, connection: sqlite3.Connection, batch: ObservationBatch
+        self,
+        connection: sqlite3.Connection,
+        batch: ObservationBatch,
+        *,
+        lease_id: str | None,
+        require_action_lease: bool = True,
     ) -> None:
         binding = connection.execute(
             """
@@ -3554,6 +3559,16 @@ class SQLiteStore:
                 )
             ):
                 raise ValueError("batch_action_contract_mismatch")
+            if require_action_lease:
+                if lease_id is None:
+                    raise ValueError("action_linked_batch_requires_lease")
+                self._require_live_action_lease(
+                    connection,
+                    action_id=batch.action_id,
+                    lease_id=require_uuid(lease_id, "lease_id"),
+                    allowed_states={ActionState.RUNNING},
+                    at=_now(),
+                )
 
     def _validate_coverage(
         self, connection: sqlite3.Connection, batch: ObservationBatch
@@ -4162,7 +4177,9 @@ class SQLiteStore:
                 (_utc_text(batch.observed_at), coverage_observation_id, row["relationship_id"]),
             )
 
-    async def ingest(self, batch: ObservationBatch) -> IngestionResult:
+    async def ingest(
+        self, batch: ObservationBatch, *, lease_id: str | None = None
+    ) -> IngestionResult:
         """Validate, journal, and conservatively project normalized evidence.
 
         The accepted journal is intentionally uncompacted in this slice.  A bad
@@ -4190,7 +4207,12 @@ class SQLiteStore:
                     )
                 if prior["batch_digest"] == "":
                     try:
-                        self._validate_batch_context(connection, batch)
+                        self._validate_batch_context(
+                            connection,
+                            batch,
+                            lease_id=None,
+                            require_action_lease=False,
+                        )
                         self._validate_coverage(connection, batch)
                     except ValueError:
                         return IngestionResult(
@@ -4213,7 +4235,7 @@ class SQLiteStore:
                         )
                 return IngestionResult(batch_id=batch.batch_id, status=IngestionStatus.REJECTED)
             try:
-                self._validate_batch_context(connection, batch)
+                self._validate_batch_context(connection, batch, lease_id=lease_id)
                 declarations = self._validate_coverage(connection, batch)
             except ValueError:
                 return IngestionResult(batch_id=batch.batch_id, status=IngestionStatus.REJECTED)

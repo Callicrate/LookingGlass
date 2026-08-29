@@ -1357,9 +1357,16 @@ def test_legacy_pre_digest_batch_redelivery_backfills_only_exact_match(tmp_path)
             requested_scopes=(scope,),
         )
         run(store.enqueue(action))
-        lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+        lease_now = datetime.now(UTC)
+        lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=lease_now))
         assert lease is not None
-        run(store.mark_running(action_id=action.action_id, lease_id=lease.lease_id, started_at=NOW))
+        run(
+            store.mark_running(
+                action_id=action.action_id,
+                lease_id=lease.lease_id,
+                started_at=lease_now,
+            )
+        )
         observation = FacetObservation(
             observation_id=uuid4(),
             target=ObjectLocator(object_type="folder", object_id=seeded.workspace_root_object_id),
@@ -1381,7 +1388,7 @@ def test_legacy_pre_digest_batch_redelivery_backfills_only_exact_match(tmp_path)
             received_at=NOW,
             facet_observations=(observation,),
         )
-        assert run(store.ingest(batch)).status.value == "accepted"
+        assert run(store.ingest(batch, lease_id=lease.lease_id)).status.value == "accepted"
         store._connection.execute(
             "UPDATE observation_batches SET batch_digest = '' WHERE batch_id = ?",
             (batch.batch_id,),
@@ -1398,7 +1405,7 @@ def test_legacy_pre_digest_batch_redelivery_backfills_only_exact_match(tmp_path)
             reopened.lease_next(
                 adapter_key="databricks",
                 worker_id="recovered",
-                now=NOW + timedelta(seconds=61),
+                now=lease.leased_until + timedelta(microseconds=1),
             )
         )
         assert recovered is not None and recovered.action.action_id == action.action_id

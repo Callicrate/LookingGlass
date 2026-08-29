@@ -12,5 +12,7 @@ class SQLiteObservationIngestor:
     def __init__(self, store: SQLiteStore) -> None:
         self._store = store
 
-    async def ingest(self, batch: ObservationBatch) -> IngestionResult:
-        return await self._store.ingest(batch)
+    async def ingest(
+        self, batch: ObservationBatch, *, lease_id: str | None = None
+    ) -> IngestionResult:
+        return await self._store.ingest(batch, lease_id=lease_id)

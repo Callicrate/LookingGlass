@@ -550,11 +550,14 @@ def test_partial_collection_does_not_satisfy_follow_up_refresh(tmp_path) -> None
     run(store.submit_refresh(_intent(scope, NOW)))
     admitted = run(DurableCoordinator(store, worker_id="first").run_once(now=NOW))
     assert admitted is not None and admitted.state.value == "admitted"
-    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+    lease_now = datetime.now(UTC)
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=lease_now))
     assert lease is not None
     run(
         store.mark_running(
-            action_id=lease.action.action_id, lease_id=lease.lease_id, started_at=NOW
+            action_id=lease.action.action_id,
+            lease_id=lease.lease_id,
+            started_at=lease_now,
         )
     )
     partial_batch = ObservationBatch(
@@ -568,7 +571,7 @@ def test_partial_collection_does_not_satisfy_follow_up_refresh(tmp_path) -> None
         received_at=NOW,
         coverage=(CoverageDeclaration(scope=scope, completeness=CollectionCoverage.PARTIAL),),
     )
-    assert run(store.ingest(partial_batch)).status.value == "partial"
+    assert run(store.ingest(partial_batch, lease_id=lease.lease_id)).status.value == "partial"
     assert store.latest_qualifying_observation(scope) is None
     run(
         store.complete_action(

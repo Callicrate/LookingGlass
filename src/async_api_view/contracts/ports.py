@@ -84,4 +84,6 @@ class BindingQueryPort(Protocol):
 class ObservationIngestionPort(Protocol):
     """The only canonical-state write surface available to API workers."""
 
-    async def ingest(self, batch: ObservationBatch) -> IngestionResult: ...
+    async def ingest(
+        self, batch: ObservationBatch, *, lease_id: str | None = None
+    ) -> IngestionResult: ...

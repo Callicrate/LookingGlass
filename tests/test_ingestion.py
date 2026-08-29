@@ -498,9 +498,16 @@ def test_action_coverage_cannot_borrow_another_capability_policy(tmp_path) -> No
         requested_scopes=(metadata_scope,),
     )
     run(store.enqueue(action))
-    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+    action_now = datetime.now(UTC)
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=action_now))
     assert lease is not None
-    run(store.mark_running(action_id=action.action_id, lease_id=lease.lease_id, started_at=NOW))
+    run(
+        store.mark_running(
+            action_id=action.action_id,
+            lease_id=lease.lease_id,
+            started_at=action_now,
+        )
+    )
     for capability_key in (None, "databricks.workspace.children.read"):
         borrowed_scope = RefreshScope(
             system_id=seeded.system.system_id,
@@ -529,7 +536,7 @@ def test_action_coverage_cannot_borrow_another_capability_policy(tmp_path) -> No
                 ),
             ),
         )
-        assert run(store.ingest(forged)).status.value == "rejected"
+        assert run(store.ingest(forged, lease_id=lease.lease_id)).status.value == "rejected"
 
 
 def test_incidental_coverage_requires_enabled_capability_but_running_action_keeps_policy(
@@ -591,9 +598,16 @@ def test_incidental_coverage_requires_enabled_capability_but_running_action_keep
         requested_scopes=(metadata_scope,),
     )
     run(store.enqueue(action))
-    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+    action_now = datetime.now(UTC)
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=action_now))
     assert lease is not None
-    run(store.mark_running(action_id=action.action_id, lease_id=lease.lease_id, started_at=NOW))
+    run(
+        store.mark_running(
+            action_id=action.action_id,
+            lease_id=lease.lease_id,
+            started_at=action_now,
+        )
+    )
     store._connection.execute(
         """
         UPDATE capability_bindings SET enabled = 0
@@ -607,11 +621,89 @@ def test_incidental_coverage_requires_enabled_capability_but_running_action_keep
         adapter_key="databricks",
         adapter_version="1",
         action_id=action.action_id,
-        observed_at=NOW + timedelta(seconds=1),
-        received_at=NOW + timedelta(seconds=1),
+        observed_at=action_now,
+        received_at=action_now,
         coverage=(CoverageDeclaration(metadata_scope, CollectionCoverage.COMPLETE),),
     )
-    assert run(store.ingest(running_result)).status.value == "accepted"
+    assert run(store.ingest(running_result, lease_id=lease.lease_id)).status.value == "accepted"
+
+
+def test_action_linked_ingestion_requires_the_current_running_lease(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        enabled_capability_keys=("databricks.workspace.metadata.read",),
+        now=NOW,
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.OBJECT, seeded.workspace_root_object_id),
+        object_type="folder",
+        facet="metadata",
+        capability_key="databricks.workspace.metadata.read",
+    )
+    action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.metadata.read",
+        capability_version="1",
+        target=scope.target,
+        requested_scopes=(scope,),
+    )
+    run(store.enqueue(action))
+    first_started = datetime.now(UTC)
+    first = run(
+        store.lease_next(
+            adapter_key="databricks",
+            worker_id="expired-worker",
+            now=first_started,
+        )
+    )
+    assert first is not None
+    run(
+        store.mark_running(
+            action_id=action.action_id,
+            lease_id=first.lease_id,
+            started_at=first_started,
+        )
+    )
+    reassigned_at = first.leased_until + timedelta(microseconds=1)
+    current = run(
+        store.lease_next(
+            adapter_key="databricks",
+            worker_id="current-worker",
+            now=reassigned_at,
+        )
+    )
+    assert current is not None
+    run(
+        store.mark_running(
+            action_id=action.action_id,
+            lease_id=current.lease_id,
+            started_at=reassigned_at,
+        )
+    )
+    batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        action_id=action.action_id,
+        observed_at=reassigned_at,
+        received_at=reassigned_at,
+        coverage=(CoverageDeclaration(scope, CollectionCoverage.COMPLETE),),
+    )
+
+    assert run(store.ingest(batch, lease_id=first.lease_id)).status.value == "rejected"
+    assert run(store.ingest(batch, lease_id=current.lease_id)).status.value == "accepted"
+    assert run(store.ingest(batch)).status.value == "duplicate"
 
 
 def test_rejected_items_roll_back_identity_and_journal_but_keep_valid_sibling(

@@ -1316,7 +1316,10 @@ class DatabricksWorker:
                 stdout=execution.stdout,
                 observed_at=datetime.now(UTC),
             )
-            result = await self.ingestion.ingest(normalized.batch)
+            result = await self.ingestion.ingest(
+                normalized.batch,
+                lease_id=lease.lease_id,
+            )
             if result.status.value == "rejected":
                 error = ErrorClass.ADAPTER_CONTRACT_MISMATCH
                 if not await self._record_attempt(

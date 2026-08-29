@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 07:14 ET
+Updated: 2026-08-29 07:32 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 319 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
+- Latest checks: 320 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: adapter and documentation audits are clear after evidence-backed challenge/repair; the storage-durability audit is still running, with no medium-or-higher defect open.
+- Active review round: the high stale-worker ingestion race and protected-web surface are independently clear; three medium storage findings remain queued while the release-engineering audit continues.
 - Next progress report due: 2026-08-29 08:05 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -87,6 +87,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Apply complete desired configuration atomically and bind dispatch to settings revision.
 - [x] Close independent review of the non-blocking runtime-startup repair.
 - [x] Distinguish current manual refresh from planned Phase 4 automation throughout operator and architecture documentation.
+- [x] Close independent review of action-linked ingestion lease fencing.
+- [ ] Persist authoritative complete-membership boundaries against delayed older positive edges.
+- [ ] Expire coordinator claims at disposition/admission commit time.
+- [ ] Reject incompatible non-Rookery schemas before mutating the migration ledger.
 
 ## Evidence and decisions
 
@@ -95,6 +99,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The post-fix reviewer cleared the runtime repair after requiring the lifespan regression itself to fail within a bounded timeout instead of risking a wedged CI run.
 - Pinned Databricks CLI v0.298 source confirms all four Unity Catalog list commands exhaust SDK iterators before rendering one JSON array; an apparent pagination finding was withdrawn, and unexpected continuation envelopes remain fail-closed.
 - Operator and architecture docs now distinguish fail-fast `doctor` from supervised nonblocking `serve`, and current manual refresh from unimplemented Phase 4 scheduler/subscription/UI behavior.
+- First-time action-linked ingestion now atomically requires the matching unexpired `running` lease; a reassignment regression rejects the expired worker, accepts the current worker, and preserves exact replay idempotency.
+- Ten independent two-connection races confirmed stale ingestion cannot reserve a batch ID and the replacement lease can accept that same deterministic batch; exact-expiry and legacy replay probes also pass.
+- A fresh protected-web audit cleared Host-before-bootstrap ordering, strict Origin checks, static confinement, and scoped security lint with 115 exact-HEAD tests.
 - Stale cached state must remain visible and must not be represented as live truth.
 - A live Databricks smoke test remains out of scope because selecting a profile would require credentials or user input.
 - The production composition now passes an explicit host allowlist, so the test-only `testserver` host is not accepted by the real runtime.

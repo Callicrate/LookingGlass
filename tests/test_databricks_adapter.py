@@ -1019,10 +1019,12 @@ class _BlockingRunner:
 class _Ingestion:
     def __init__(self, status: IngestionStatus = IngestionStatus.ACCEPTED) -> None:
         self.batches: list[object] = []
+        self.lease_ids: list[str | None] = []
         self.status = status
 
-    async def ingest(self, batch: object) -> IngestionResult:
+    async def ingest(self, batch: object, *, lease_id: str | None = None) -> IngestionResult:
         self.batches.append(batch)
+        self.lease_ids.append(lease_id)
         return IngestionResult(batch.batch_id, self.status)
 
 
@@ -1050,6 +1052,7 @@ def test_worker_uses_only_ports() -> None:
     )
     assert asyncio.run(worker.run_once())
     assert ingestion.batches
+    assert ingestion.lease_ids == [worker.queue.lease.lease_id]
     assert all(
         event[1] == worker.queue.lease.lease_id
         for event in lifecycle.events
