@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 08:50 ET
+Updated: 2026-08-29 09:04 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 331 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 333 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: pytest advisory remediation, locked auditing, immutable CI action pins, and Dependabot are independently clear; three release-hardening findings remain queued.
-- Next progress report due: 2026-08-29 09:03 ET.
+- Active review round: complete runtime-asset verification and isolated installed-wheel smoke are independently clear; reproducible build isolation and standalone first-run guidance remain queued.
+- Next progress report due: 2026-08-29 10:04 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -91,7 +91,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close independent review of authoritative complete-membership watermarks.
 - [x] Close independent review of coordinator claim expiry fencing.
 - [x] Close independent review of SQLite application identity and complete schema validation.
-- [ ] Verify every packaged runtime asset and smoke-test the installed wheel.
+- [x] Close review of complete packaged runtime assets and installed-wheel smoke.
 - [ ] Constrain isolated build dependencies for reproducible release archives.
 - [x] Close review of pytest advisory remediation and locked CI dependency auditing.
 - [ ] Complete a documented first-run path for standalone wheel installation.
@@ -119,6 +119,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - CI action tags were resolved against their official repositories and replaced with immutable commit SHAs; Dependabot is configured to propose weekly GitHub Actions updates.
 - The 08:40 Murmuration tend again found no scoped shared context and remained read-only because native project credentials are absent; notifications and BookStack remain gated.
 - Independent release review confirmed both action SHAs match their official tag refs, pinned uv 0.12.1 supports the exact audit command, Dependabot syntax is coherent, and no mutable executable input was added.
+- Distribution verification now derives all 26 migrations/templates/static assets from source, requires one version-matched archive pair, rejects missing/unexpected wheel resources, and installs/imports/executes the wheel in an isolated venv.
+- The post-fix distribution review cleared missing-directory detection, source-derived `app.js` regression, sanitized checkout-independent imports, venv provenance, local subprocess waivers, both pytest launcher forms, and bounded cross-platform cleanup.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.

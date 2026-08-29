@@ -119,7 +119,7 @@ Use `--log-level DEBUG`, `INFO`, `WARNING`, or `ERROR` when needed.
 ```powershell
 uv run ruff format --check src tests scripts
 uv run ruff check src tests scripts
-uv run ruff check src --select S
+uv run ruff check src scripts --select S
 uv run coverage run -m pytest -q
 uv run coverage report
 uv lock --check

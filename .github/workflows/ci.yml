@@ -36,7 +36,7 @@ jobs:
       - name: Lint
         run: |
           uv run ruff check src tests scripts
-          uv run ruff check src --select S
+          uv run ruff check src scripts --select S
       - name: Test
         run: |
           uv run coverage run -m pytest -q
