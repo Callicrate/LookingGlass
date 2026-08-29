@@ -122,6 +122,7 @@ uv run coverage run -m pytest -q
 uv run coverage report
 uv lock --check
 uv build
+uv run python scripts/verify_distribution.py
 ```
 
 The default test suite uses fake CLI results and does not contact Databricks.
