@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 19:15 ET
+Updated: 2026-08-29 19:16 ET
 
 ## Goal
 
@@ -13,7 +13,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: fresh storage, CLI/runtime, and end-to-end coordinator/lifecycle audits are medium+ clear; all reproduced low findings are repaired and independently closed.
-- Next progress report due: 2026-08-29 19:20 ET.
+- Next progress report due: 2026-08-29 20:16 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 18:20 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 19:20 ET.
+- [ ] Tend Murmuration about hourly; the 19:16 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 20:16 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -243,6 +243,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Those six compatibility paths lift the exact Windows/Ubuntu gates to 438 passed plus one complementary platform skip and 89%/88% branch coverage.
 - The end-to-end lifecycle review found no medium-or-higher defect and reproduced only an unused legacy `mark_running()` equality gap at exact lease expiry.
 - Legacy start now rejects `leased_until == started_at`, matching the production final guard; independent re-review closed the low and exact cross-platform parity is 439 passed plus one complementary platform skip.
+- The 19:16 Murmuration tend again found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
