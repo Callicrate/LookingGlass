@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 03:31 ET
+Updated: 2026-08-29 03:38 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 261 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 264 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: continue residual-risk review after documentation truth and protected-web failure semantics were independently cleared.
@@ -68,6 +68,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Present the user-facing product consistently as Rookery without breaking package/CLI compatibility.
 - [x] Record every failed action attempt as linked, redacted, non-alertable operational history.
 - [x] Distinguish current metadata support from deferred Workspace content contracts in operator docs.
+- [x] Roll back identity, journal, and projection writes for every rejected facet item.
+- [x] Enforce valid terminal outcomes, errors, ordinals, and retry timing at the action DTO boundary.
 
 ## Evidence and decisions
 
@@ -203,6 +205,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Operational-event replay tests prove duplicate attempt writes cannot duplicate history or mutate retry state, and all diagnostics remain redacted.
 - README and architecture now state that Workspace content is parser/future-contract work only; the executable worker rejects it before target resolution or CLI execution.
 - Protected dashboard, object, alert, action, and intent routes independently cleared authorization ordering, input validation, 404/503 distinctions, safe backend-failure responses, escaping, and security-header coverage.
+- All facet observations now use transaction-local savepoints; a merge-over-limit regression proves rejected items cannot rename objects, advance presence time, journal provenance, or replace supporting evidence.
+- `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
+- Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
 
 ## Risks / watch list
 
