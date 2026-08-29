@@ -64,6 +64,7 @@ uv run async-api-view --config config.local.toml doctor
 
 `doctor` verifies the installed CLI version and required command groups.
 It does not query workspace inventory or validate the selected profile's authentication.
+It is the fail-fast compatibility check: `serve` performs the same check in its background supervisor so cached pages remain available while compatibility is pending or failing.
 
 ### Run
 
@@ -72,6 +73,7 @@ uv run async-api-view --config config.local.toml serve
 ```
 
 `serve` prints a one-time browser activation link to its controlling terminal.
+It does not hold the local UI behind Databricks CLI readiness; refresh controls stay disabled with a worker-unavailable explanation while compatibility is checked and retried.
 Open that complete link, including its `#` fragment, within ten minutes.
 The browser removes the fragment before exchanging it, so the capability does not enter HTTP request targets, redirects, or access logs.
 The link uses a process-unique, high-entropy `rookery-….localhost` hostname while the server still binds only to the configured loopback address.

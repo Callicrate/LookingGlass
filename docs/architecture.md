@@ -41,7 +41,8 @@ It shows what is currently known about a remote system, when each fact was obser
 It does not claim that cached state is live remote truth.
 
 Users inspect canonical local state through a UI or TUI.
-Manual refreshes and automatic refreshes both create the same generic refresh intent.
+The current slice exposes manual refreshes through one generic refresh intent.
+Planned Phase 4 automatic refreshes will create that same intent rather than introducing a second execution path.
 A generic coordinator validates, coalesces, defers, or admits that intent using only canonical local data.
 An API-specific adapter worker is the only component allowed to resolve credentials, understand a downstream API or CLI, and contact a remote system.
 The worker returns normalized observations, which are accepted even when an equivalent targeted refresh would have been throttled.
@@ -638,10 +639,10 @@ Examples:
 The core trusts a coverage declaration only from a registered adapter contract.
 It does not infer cross-facet freshness from matching field names.
 
-### Manual and automatic refresh
+### Manual refresh and planned automatic refresh
 
-Manual and automatic requests have identical eligibility, coalescing, deferral, and adapter behavior.
-Their origin remains recorded for display and metrics.
+The current implementation supports manual requests.
+Phase 4 automatic requests will have identical eligibility, coalescing, deferral, and adapter behavior, while their origin remains recorded for display and metrics.
 
 A manual request made before `eligible_at` is deferred or satisfied by existing evidence, not silently discarded.
 Version 1 has no one-shot force or bypass capability.
@@ -649,16 +650,17 @@ To make a targeted refresh eligible sooner, the local user must lower the applic
 That policy change applies normally to subsequent and deferred work, is recorded as local configuration, and does not bypass adapter rate limits.
 Changing a policy MUST wake affected deferred scopes for immediate local re-evaluation.
 
-### Auto-refresh scheduling
+### Planned auto-refresh scheduling
 
-The scheduler:
+The scheduler, subscription UI, and UI-session heartbeat in this subsection are Phase 4 contracts and are not implemented in the current slice.
+The planned scheduler will:
 
-1. reads enabled auto-refresh subscriptions;
-2. expands each subscription into supported facet scopes;
-3. computes due scopes from canonical state and policy;
-4. submits ordinary refresh intents;
-5. relies on normal queue deduplication and admission;
-6. never contacts an adapter directly.
+1. read enabled auto-refresh subscriptions;
+2. expand each subscription into supported facet scopes;
+3. compute due scopes from canonical state and policy;
+4. submit ordinary refresh intents;
+5. rely on normal queue deduplication and admission;
+6. never contact an adapter directly.
 
 The scheduler MAY scan ahead and submit a future intent with `not_before=eligible_at`.
 The coordinator MUST re-evaluate it when claimed because newer incidental evidence may have satisfied it.
@@ -1103,7 +1105,7 @@ The first useful client SHOULD support:
 - queued, deferred, coalesced, running, partial, failed, and satisfied refresh activity;
 - per-scope outcomes when one request selects multiple facets;
 - manual refresh for supported selected facets;
-- auto-refresh selection;
+- planned Phase 4 auto-refresh selection;
 - adapter and provenance detail sufficient to explain a value;
 - declared collateral effects for the selected observation capability;
 - content availability and retention expiry when content is stored;
@@ -1144,9 +1146,9 @@ An object-level indicator SHOULD be derived from the facets relevant to the curr
 - File content MUST respect separate authorization and display policies.
 - The client SHOULD make locally rejected, coalesced, deferred, and satisfied-without-call outcomes understandable.
 
-### Auto-refresh selection
+### Planned Phase 4 auto-refresh selection
 
-The UI MUST make clear:
+When implemented, the auto-refresh UI MUST make clear:
 
 - which system, object subtree, or facets are selected;
 - the effective interval and source of that interval;
@@ -1599,7 +1601,8 @@ Every adapter MUST pass a shared conformance suite proving:
 - Every downstream invocation uses the Databricks CLI with structured arguments and no shell command string.
 - The pinned CLI's iterator renderer exhausts list pagination before emitting JSON; any continuation-token envelope is rejected as incomplete rather than credited.
 - The CLI runner rejects `databricks api`, unregistered command groups/subcommands, arbitrary endpoints, and free-form flags.
-- Startup fails clearly when the CLI version or a required `workspace`, `catalogs`, `schemas`, `tables`, or `volumes` command group is incompatible.
+- `doctor` fails clearly when the CLI version or a required `workspace`, `catalogs`, `schemas`, `tables`, or `volumes` command group is incompatible.
+- `serve` keeps cached pages available, marks refresh authority unavailable, and retries compatibility checks in its supervised background loop.
 - Profile selection and JSON output are passed as structured arguments and are redacted from persisted diagnostics.
 - Sanitized fixture output covers every registered parser contract; content remains parser-only and is not executed by the current worker.
 - A live `databricks.workspace.children.read` action is the first external end-to-end test.
