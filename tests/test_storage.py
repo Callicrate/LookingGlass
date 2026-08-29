@@ -291,6 +291,104 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
         check.close()
 
 
+def test_drifted_migration_prefix_rolls_back_all_later_mutations(tmp_path) -> None:
+    path = tmp_path / "drifted-prefix.sqlite3"
+    migrations = sorted(Path("src/async_api_view/storage/migrations").glob("*.sql"))
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
+    for migration in migrations[:10]:
+        legacy.executescript(migration.read_text(encoding="utf-8"))
+        legacy.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (migration.stem, "2026-08-24T12:00:00Z"),
+        )
+    legacy.execute("DROP INDEX ix_configured_scopes_object")
+    legacy.execute("ALTER TABLE configured_scopes RENAME TO configured_scopes_canonical")
+    legacy.execute(
+        """
+        CREATE TABLE configured_scopes (
+            scope_id TEXT PRIMARY KEY,
+            system_id TEXT NOT NULL REFERENCES systems(system_id) ON DELETE RESTRICT,
+            object_id TEXT REFERENCES remote_objects(object_id) ON DELETE CASCADE,
+            object_type TEXT NOT NULL,
+            enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+            display_name TEXT NOT NULL,
+            record_created_at TEXT NOT NULL,
+            record_updated_at TEXT NOT NULL
+        )
+        """
+    )
+    legacy.execute("DROP TABLE configured_scopes_canonical")
+    legacy.executemany(
+        """
+        INSERT INTO refresh_overrides (
+            level, scope_id, facet, interval_seconds, record_updated_at
+        ) VALUES ('system', 'sentinel', NULL, ?, ?)
+        """,
+        (
+            (28_800, "2026-08-24T12:00:00Z"),
+            (14_400, "2026-08-24T13:00:00Z"),
+        ),
+    )
+    legacy.commit()
+    legacy.close()
+
+    with pytest.raises(
+        sqlite3.DatabaseError,
+        match="schema object configured_scopes is incompatible",
+    ):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        assert [
+            row[0]
+            for row in check.execute("SELECT version FROM schema_migrations ORDER BY version")
+        ] == [migration.stem for migration in migrations[:10]]
+        assert [
+            row[0]
+            for row in check.execute(
+                """
+                SELECT interval_seconds FROM refresh_overrides
+                WHERE level = 'system' AND scope_id = 'sentinel' AND facet IS NULL
+                ORDER BY interval_seconds DESC
+                """
+            )
+        ] == [28_800, 14_400]
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'ux_refresh_overrides_identity'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'ix_configured_scopes_object'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            check.execute(
+                """
+                SELECT COUNT(*) FROM sqlite_schema
+                WHERE type = 'table' AND name = 'relationship_coverage_watermarks'
+                """
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            "ON DELETE CASCADE"
+            in check.execute(
+                "SELECT sql FROM sqlite_schema WHERE name = 'configured_scopes'"
+            ).fetchone()[0]
+        )
+        assert check.execute("PRAGMA application_id").fetchone()[0] == 0
+    finally:
+        check.close()
+
+
 def test_online_backup_captures_live_wal_and_never_overwrites(tmp_path) -> None:
     source = tmp_path / "state.sqlite3"
     destination = tmp_path / "backups" / "state.sqlite3"

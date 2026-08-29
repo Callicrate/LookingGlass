@@ -477,11 +477,13 @@ class SQLiteStore:
                 self._connection.execute("PRAGMA busy_timeout = 5000")
                 self._enable_wal_mode()
                 self._connection.execute("PRAGMA synchronous = FULL")
-            self._migrate()
-            self._repair_required_runtime_indexes()
-            self._validate_current_schema()
-            with self._lock:
-                self._connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
+            # Validation closes the same transaction that applies every migration and
+            # index repair, so incompatible legacy DDL cannot retain partial cleanup.
+            with self._immediate_transaction() as connection:
+                self._migrate()
+                self._repair_required_runtime_indexes()
+                self._validate_current_schema()
+                connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
         except BaseException:
             self._connection.close()
             raise
@@ -553,6 +555,8 @@ class SQLiteStore:
             connection.execute("RELEASE SAVEPOINT ingestion_item")
 
     def _migrate(self) -> None:
+        if not self._connection.in_transaction:  # pragma: no cover - private invariant
+            raise RuntimeError("schema migration requires an initialization transaction")
         with self._lock:
             self._validate_database_identity()
             self._connection.execute(
@@ -565,24 +569,17 @@ class SQLiteStore:
             )
             for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
                 script = migration.read_text(encoding="utf-8")
-                self._connection.execute("BEGIN IMMEDIATE")
-                try:
-                    applied = self._connection.execute(
-                        "SELECT 1 FROM schema_migrations WHERE version = ?",
-                        (migration.stem,),
-                    ).fetchone()
-                    if applied is None:
-                        for statement in self._migration_statements(script):
-                            self._execute_migration_statement(statement)
-                        self._connection.execute(
-                            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                            (migration.stem, _utc_text(_now())),
-                        )
-                except BaseException:
-                    self._connection.rollback()
-                    raise
-                else:
-                    self._connection.commit()
+                applied = self._connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = ?",
+                    (migration.stem,),
+                ).fetchone()
+                if applied is None:
+                    for statement in self._migration_statements(script):
+                        self._execute_migration_statement(statement)
+                    self._connection.execute(
+                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                        (migration.stem, _utc_text(_now())),
+                    )
 
     def _validate_database_identity(self) -> None:
         application_id = int(self._connection.execute("PRAGMA application_id").fetchone()[0])

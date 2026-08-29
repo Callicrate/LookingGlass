@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 12:14 ET
+Updated: 2026-08-29 12:22 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 359 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 360 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: the O(N²) collection-authority path is independently clear after the exact full gate; pre-migration schema-drift atomicity is the active open medium finding.
+- Active review round: linear collection authority and fully atomic schema initialization are independently clear after the exact full gate; no known medium-or-higher finding remains, so fresh residual audits resume.
 - Next progress report due: 2026-08-29 12:27 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -107,7 +107,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Reject redirected `serve` before applying durable configuration.
 - [x] Close review of immutable CI action pins and Dependabot updates.
 - [x] Close full-gate and independent review of linear per-batch collection authority.
-- [ ] Reject declared-prefix schema drift before any migration mutates user state.
+- [x] Make migration, repair, validation, and application-ID startup changes fully atomic.
 
 ## Evidence and decisions
 
@@ -160,7 +160,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - A performance audit reproduced quadratic per-item collection authorization: 100 paired items executed about 12,000 SELECTs and 200 executed about 44,000 while holding the ingestion write transaction.
 - The repair indexes eligible same-batch relationship evidence once without changing facet-first projection order, caches per-batch scope/capability/target lookups, and checks collection-linked facets through exact scope plus locator/canonical identity.
 - Independent traces measured 1,706/3,406 SELECTs for 100/200 paired items versus the prior 12,003/44,003; exact-scope borrowing, conflicting IDs, ABSENT edges, foreign subjects, and equal-time facet-first identity behavior are covered.
-- A migration audit reproduced that a drifted declared-prefix schema could be deduplicated/migrated before final validation rejected it; preflight validation before any mutation remains queued.
+- A migration audit reproduced that a drifted declared-prefix schema could be deduplicated/migrated before final validation rejected it; atomic rollback was chosen to preserve supported partial-migration recovery.
+- Schema startup now uses one outer immediate transaction for every migration, ledger write, required-index repair, final validation, and application-ID change; any failure restores the pre-startup logical state.
+- The v10 drift regression proves failed startup preserves both duplicate overrides, all ten original ledger entries, absent later schema/indexes, the original drifted DDL, and markerless application ID; partial `0002` recovery and concurrent initialization remain green.
+- Independent review reproduced the rollback and cleared 39 storage tests plus 80 threaded and 48 process-level concurrent opens with no medium-or-higher finding.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
