@@ -841,6 +841,35 @@ def test_alert_history_shows_filters_paging_and_escaped_summaries() -> None:
     ]
 
 
+def test_operational_badges_preserve_semantic_scan_priority() -> None:
+    alert = replace(ready_alert_history().alerts[0], severity="critical")
+    action = ready_action_history().actions[0]
+    backend = FakeBackend(
+        alert_view=replace(ready_alert_history(), alerts=(alert,)),
+        action_view=replace(
+            ready_action_history(),
+            actions=(action, replace(action, action_id=CHILD_ID, state="partial")),
+        ),
+    )
+    client = client_for(backend)
+
+    alerts = client.get("/alerts")
+    actions = client.get("/actions")
+    styles = client.get("/static/style.css")
+
+    assert 'class="badge badge--critical"' in alerts.text
+    assert 'class="badge badge--retry_wait"' in actions.text
+    assert 'class="badge badge--partial"' in actions.text
+    for selector in (
+        ".badge--info",
+        ".badge--warning",
+        ".badge--critical",
+        ".badge--retry_wait",
+        ".badge--partial",
+    ):
+        assert selector in styles.text
+
+
 @pytest.mark.parametrize(
     "query",
     [

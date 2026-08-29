@@ -78,9 +78,10 @@ main > section { margin-bottom: 30px; }
 
 .badge { display: inline-block; width: max-content; min-height: 22px; padding: 2px 8px; border-radius: 999px; background: #e8ecea; color: #46514e; font-size: 0.72rem; font-weight: 750; text-transform: capitalize; white-space: nowrap; }
 .badge--current, .badge--satisfied, .badge--succeeded { background: var(--accent-soft); color: #0e584a; }
-.badge--stale, .badge--due, .badge--deferred, .badge--coalesced { background: var(--warn-soft); color: var(--warn); }
+.badge--info, .badge--refreshing, .badge--queued, .badge--leased, .badge--running, .badge--admitted { background: #dfeafa; color: #265f96; }
+.badge--stale, .badge--due, .badge--deferred, .badge--coalesced, .badge--warning, .badge--partial, .badge--retry_wait { background: var(--warn-soft); color: var(--warn); }
 .badge--failed, .badge--error, .badge--rejected { background: var(--danger-soft); color: var(--danger); }
-.badge--refreshing, .badge--queued, .badge--leased, .badge--running, .badge--admitted { background: #dfeafa; color: #265f96; }
+.badge--critical { background: #7c2424; color: white; }
 .badge--unsupported, .badge--unobserved, .badge--cancelled { background: #e8ecea; color: #59635f; }
 
 .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
