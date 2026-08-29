@@ -276,9 +276,9 @@ This boundary permits expected local persistence while preserving the rule that 
 3. The generic coordinator leases the intent and validates it using local data.
 4. It records an independent rejected, satisfied, coalesced, deferred, or admitted outcome for each normalized intent scope.
 5. Admission creates a versioned adapter action through an atomic transaction or durable outbox.
-6. The appropriate adapter worker leases the action and invokes the local pre-dispatch guard.
-7. The guard revalidates mutable local policy and may satisfy or cancel the action without a remote call.
-8. If still valid, the adapter records the logical action start before contacting the remote system.
+6. The appropriate adapter worker leases the action and invokes the local pre-dispatch guard before resolving command inputs.
+7. Immediately before process creation, the guard revalidates mutable local authority, deadline, scope, target, policy, and evidence.
+8. If still valid, that final guard transaction records the logical action start atomically; otherwise it satisfies or cancels without a remote call.
 9. The adapter performs one or more source-specific attempts according to its own retry and rate policy.
 10. The adapter emits normalized observation batches and a redacted action outcome.
 11. The ingester validates and applies all safe observations.
