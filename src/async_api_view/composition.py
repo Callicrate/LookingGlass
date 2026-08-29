@@ -42,6 +42,7 @@ from async_api_view.contracts import (
 from async_api_view.ingestion import SQLiteObservationIngestor
 from async_api_view.storage import (
     ActionActivityRecord,
+    ActionAttemptRecord,
     OperationalEventRecord,
     SQLiteStore,
     StoredAction,
@@ -49,6 +50,8 @@ from async_api_view.storage import (
 )
 from async_api_view.web import (
     ActionActivityView,
+    ActionAttemptView,
+    ActionDetailView,
     ActionHistoryQuery,
     ActionHistoryView,
     ActionSystemOption,
@@ -353,6 +356,18 @@ class SQLiteWebBackend:
             retry_at=action.retry_at,
             error_class=action.error_class,
             diagnostic=action.redacted_diagnostic,
+        )
+
+    @staticmethod
+    def _action_attempt_view(attempt: ActionAttemptRecord) -> ActionAttemptView:
+        return ActionAttemptView(
+            ordinal=attempt.ordinal,
+            started_at=attempt.started_at,
+            ended_at=attempt.ended_at,
+            outcome=attempt.outcome,
+            error_class=attempt.error_class,
+            retry_at=attempt.retry_at,
+            diagnostic=attempt.redacted_diagnostic,
         )
 
     def _refresh_options(
@@ -670,6 +685,22 @@ class SQLiteWebBackend:
             action_filter=query.action_id,
             previous_page_url=(self._action_page_url(query, page - 1) if page > 1 else None),
             next_page_url=(self._action_page_url(query, page + 1) if page < page_count else None),
+            loaded_at=datetime.now(UTC),
+        )
+
+    async def action_detail(self, action_id: str) -> ActionDetailView | None:
+        action = self._store.get_action_activity(action_id)
+        if action is None:
+            return None
+        systems = self._store.list_systems()
+        system_names = {system.system_id: system.display_name for system in systems}
+        return ActionDetailView(
+            action=self._action_activity_view(action, system_names),
+            attempts=tuple(
+                self._action_attempt_view(attempt)
+                for attempt in self._store.list_action_attempts(action_id, limit=100)
+            ),
+            attempt_total=self._store.count_action_attempts(action_id),
             loaded_at=datetime.now(UTC),
         )
 

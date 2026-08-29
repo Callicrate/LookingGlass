@@ -30,7 +30,14 @@
     if (!row) return;
     for (const field of ["label", "state", "target_kind", "target_id", "action_id", "eligible_at", "failure", "cached_context"]) {
       const element = row.querySelector(`[data-field="${field}"]`);
-      setText(element, scope[field], field === "failure" ? "None" : "Unknown");
+      if (field === "action_id" && element && scope[field]) {
+        const link = document.createElement("a");
+        link.href = `/actions/${encodeURIComponent(scope[field])}`;
+        link.textContent = scope[field];
+        element.replaceChildren(link);
+      } else {
+        setText(element, scope[field], field === "failure" ? "None" : "Unknown");
+      }
     }
     const badge = row.querySelector('[data-field="state"]');
     if (badge) badge.className = `badge badge--${String(scope.state).replace(/[^a-z_-]/g, "")}`;

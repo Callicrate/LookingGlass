@@ -31,7 +31,7 @@
           <dl class="facts facts--wide">
             <div><dt>Capability / facet</dt><dd><code>{{ scope.capability_key|display }}</code> · {{ scope.facet|display }}</dd></div>
             <div><dt>Canonical target</dt><dd><span data-field="target_kind">{{ scope.target_kind|display }}</span> · <code data-field="target_id">{{ scope.target_id|display }}</code></dd></div>
-            <div><dt>Linked action</dt><dd data-field="action_id">{{ scope.action_id|display if scope.action_id else 'Not assigned' }}</dd></div>
+            <div><dt>Linked action</dt><dd data-field="action_id">{% if scope.action_id %}<a href="/actions/{{ scope.action_id|display }}">{{ scope.action_id|display }}</a>{% else %}Not assigned{% endif %}</dd></div>
             <div><dt>Eligible at</dt><dd data-field="eligible_at">{{ scope.eligible_at|timestamp }}</dd></div>
             <div><dt>Failure</dt><dd class="failure" data-field="failure">{{ scope.failure|display if scope.failure else 'None' }}</dd></div>
             <div><dt>Cached-state context</dt><dd data-field="cached_context">{{ scope.cached_context|display }}</dd></div>

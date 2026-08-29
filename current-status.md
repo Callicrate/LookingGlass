@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 00:49 ET
+Updated: 2026-08-29 01:01 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 230 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
-- Runtime surface: 4 CLI commands and 10 HTTP routes, verified from source.
-- Version control: local `main` contains the verified action-activity, unique browser-host, durable retry, and deadline-guard slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: expose bounded per-action attempt detail, then harden poison-action handling.
+- Latest checks: 233 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Runtime surface: 4 CLI commands and 11 HTTP routes, verified from source.
+- Version control: local `main` contains the verified action-activity, action-attempt, unique browser-host, durable retry, and deadline-guard slices plus all prior correctness fixes; completed batches are committed with focused messages.
+- Active review round: harden poison-action handling, then run the next residual-risk review.
 - Next progress report due: 2026-08-29 01:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -48,6 +48,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
 - [x] Terminalize expired action deadlines before any remote dispatch.
+- [x] Expose bounded, redacted per-action attempt detail from alerts, activity, and intent receipts.
+- [ ] Terminalize malformed persisted action timestamps once instead of repeatedly faulting the worker.
 
 ## Evidence and decisions
 
@@ -140,6 +142,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Truly expired attached scopes become `expired`; still-live coalesced scopes detach, return to `queued`, and immediately admit a replacement action after the stale action releases dedupe authority.
 - Deadline splitting/cancellation is atomic under `BEGIN IMMEDIATE`, expected expiry remains non-alertable, and independent review found no blocker at 230 tests.
 - The second hourly Murmuration pass found no Rookery-specific shared context; forum health remained public/read-only while native notifications, writes, and BookStack stayed credential-gated.
+- Protected `/actions/{uuid}` detail now shows the durable action plus the latest 100 attempts in chronological order, including outcomes, retry times, canonical errors, and escaped redacted diagnostics.
+- Activity rows, dashboard/full alerts, initial intent receipts, and polling updates now link to action detail without exposing bindings, command text, profiles, or payloads.
+- Attempt overflow reports `Showing latest 100 of N`; successful lifecycle writes persist `NULL` rather than a false `no diagnostic supplied` failure message.
+- Isolated desktop browser QA rendered a failed-retry-then-success sequence with no console/network errors and Lighthouse 100 in every audited category; the packaged template and full 233-test gate pass at 86% branch coverage.
 
 ## Risks / watch list
 

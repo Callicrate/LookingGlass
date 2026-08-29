@@ -8,6 +8,7 @@ shared action-lifecycle and observation-ingestion ports.
 
 from .models import (
     ActionActivityRecord,
+    ActionAttemptRecord,
     ConfiguredScopeRecord,
     IntentScopeRecord,
     IntentScopeWork,
@@ -20,6 +21,7 @@ from .sqlite import SQLiteStore
 
 __all__ = [
     "ActionActivityRecord",
+    "ActionAttemptRecord",
     "ConfiguredScopeRecord",
     "IntentScopeRecord",
     "IntentScopeWork",

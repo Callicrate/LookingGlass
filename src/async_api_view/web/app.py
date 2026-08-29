@@ -66,6 +66,13 @@ def _object_id(value: str) -> str:
         raise HTTPException(status_code=404, detail="Object not found") from exc
 
 
+def _action_id(value: str) -> str:
+    try:
+        return str(UUID(value))
+    except (AttributeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Action not found") from exc
+
+
 def _url_matches_request_origin(
     request: Request,
     value: str,
@@ -368,6 +375,18 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Action activity is unavailable") from exc
         content = templates.get_template("actions.html").render(request=request, view=view)
+        return HTMLResponse(content)
+
+    @app.get("/actions/{action_id}", response_class=HTMLResponse)
+    async def action_detail(request: Request, action_id: str) -> HTMLResponse:
+        normalized_id = _action_id(action_id)
+        try:
+            view = await app.state.backend.action_detail(normalized_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Action detail is unavailable") from exc
+        if view is None:
+            raise HTTPException(status_code=404, detail="Action not found")
+        content = templates.get_template("action.html").render(request=request, view=view)
         return HTMLResponse(content)
 
     @app.get("/objects/{object_id}", response_class=HTMLResponse)

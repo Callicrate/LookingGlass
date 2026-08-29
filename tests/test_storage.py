@@ -516,6 +516,7 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
                     ActionOutcome.FAILED,
                     ErrorClass.CONNECTION_TIMEOUT,
                     retry_at=retry_at,
+                    redacted_diagnostic="token=do-not-persist",
                 ),
                 lease_id=first.lease_id,
             )
@@ -523,6 +524,16 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
         assert store.get_stored_action(action.action_id).state.value == "retry_wait"
 
     with SQLiteStore(path) as reopened:
+        activity = reopened.get_action_activity(action.action_id)
+        attempts = reopened.list_action_attempts(action.action_id)
+        assert activity is not None and activity.action_id == action.action_id
+        assert len(attempts) == 1
+        assert attempts[0].ordinal == 1
+        assert attempts[0].error_class == "connection_timeout"
+        assert attempts[0].retry_at == retry_at
+        assert "do-not-persist" not in (attempts[0].redacted_diagnostic or "")
+        with pytest.raises(ValueError, match="attempt limit"):
+            reopened.list_action_attempts(action.action_id, limit=101)
         assert (
             run(
                 reopened.lease_next(
@@ -651,6 +662,25 @@ def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> Non
         ).fetchall()
         assert any(expected_index in row[3] for row in plan)
         assert not any("TEMP B-TREE" in row[3] for row in plan)
+
+    store._connection.executemany(
+        """
+        INSERT INTO action_attempts (attempt_id, action_id, ordinal, started_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            (
+                str(uuid4()),
+                action_ids[0],
+                ordinal,
+                (NOW + timedelta(seconds=ordinal)).isoformat().replace("+00:00", "Z"),
+            )
+            for ordinal in range(1, 102)
+        ),
+    )
+    latest_attempts = store.list_action_attempts(action_ids[0], limit=100)
+    assert store.count_action_attempts(action_ids[0]) == 101
+    assert [attempt.ordinal for attempt in latest_attempts] == list(range(2, 102))
 
 
 def test_runtime_failure_is_bounded_and_diagnostics_redact_json_and_home_paths(tmp_path) -> None:

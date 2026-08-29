@@ -21,7 +21,12 @@ from async_api_view.contracts import (
     TargetKind,
     TargetRef,
 )
-from async_api_view.storage import ActionActivityRecord, SQLiteStore, StoredAction
+from async_api_view.storage import (
+    ActionActivityRecord,
+    ActionAttemptRecord,
+    SQLiteStore,
+    StoredAction,
+)
 from async_api_view.web import (
     ActionHistoryQuery,
     AlertHistoryQuery,
@@ -289,6 +294,10 @@ async def test_direct_workspace_metadata_refresh_is_accepted_and_credited(
     assert intent is not None and intent.terminal
     assert intent.scopes[0].state == "succeeded"
     assert stored_action.state.value == "succeeded"
+    assert stored_action.redacted_diagnostic is None
+    assert (
+        runtime.store.list_action_attempts(stored_action.action_id)[0].redacted_diagnostic is None
+    )
     assert runtime.store.latest_qualifying_observation(stored_action.action.requested_scopes[0])
 
     second_intent_id = await runtime.backend.submit_refresh(
@@ -916,6 +925,61 @@ async def test_action_history_maps_bounded_pages_and_preserves_filters(
     assert view.previous_page_url == f"/actions?state=failed&system={system.system_id}"
     assert view.next_page_url is None
     assert view.systems[0].system_id == system.system_id
+    runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_action_detail_maps_bounded_attempt_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    system = runtime.store.list_systems()[0]
+    action_id = str(uuid4())
+    created_at = datetime(2026, 8, 29, tzinfo=UTC)
+    action = ActionActivityRecord(
+        action_id=action_id,
+        system_id=system.system_id,
+        capability_key="databricks.workspace.metadata.read",
+        target_kind="object",
+        target_id=str(uuid4()),
+        state="retry_wait",
+        created_at=created_at,
+        started_at=created_at,
+        completed_at=None,
+        retry_at=created_at + timedelta(seconds=5),
+        error_class="connection_timeout",
+        redacted_diagnostic="redacted action",
+    )
+    attempt = ActionAttemptRecord(
+        attempt_id=str(uuid4()),
+        action_id=action_id,
+        ordinal=1,
+        started_at=created_at,
+        ended_at=created_at + timedelta(seconds=1),
+        outcome="failed",
+        error_class="connection_timeout",
+        retry_at=created_at + timedelta(seconds=5),
+        redacted_diagnostic="redacted attempt",
+    )
+    monkeypatch.setattr(runtime.store, "get_action_activity", lambda _action_id: action)
+
+    def action_attempts(requested_id: str, *, limit: int) -> tuple[ActionAttemptRecord, ...]:
+        assert requested_id == action_id
+        assert limit == 100
+        return (attempt,)
+
+    monkeypatch.setattr(runtime.store, "list_action_attempts", action_attempts)
+    monkeypatch.setattr(runtime.store, "count_action_attempts", lambda _action_id: 1)
+
+    view = await runtime.backend.action_detail(action_id)
+
+    assert view is not None
+    assert view.action.system_name == system.display_name
+    assert view.action.retry_at == action.retry_at
+    assert len(view.attempts) == 1
+    assert view.attempt_total == 1
+    assert view.attempts[0].ordinal == 1
+    assert view.attempts[0].diagnostic == "redacted attempt"
     runtime.store.close()
 
 

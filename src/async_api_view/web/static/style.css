@@ -103,6 +103,9 @@ td { max-width: 300px; padding: 10px 11px; border-top: 1px solid var(--line); ve
 .activity-lookup { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto; align-items: end; gap: 10px; margin-bottom: 10px; }
 .activity-list { display: grid; gap: 8px; }
 .activity-row { padding: 14px 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.action-summary { padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.attempt-list { display: grid; gap: 8px; }
+.attempt-row { padding: 14px 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
 .relationship-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 8px; }
 .relationship-row { display: grid; gap: 3px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); text-decoration: none; }
 .relationship-row:hover { border-color: #9db8b1; background: #fbfdfc; }

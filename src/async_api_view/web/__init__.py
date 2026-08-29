@@ -4,6 +4,8 @@ from .app import create_app
 from .auth import LocalCallerAuthorizer, LocalSession
 from .models import (
     ActionActivityView,
+    ActionAttemptView,
+    ActionDetailView,
     ActionHistoryQuery,
     ActionHistoryView,
     ActionSystemOption,
@@ -29,6 +31,8 @@ from .models import (
 
 __all__ = [
     "ActionActivityView",
+    "ActionAttemptView",
+    "ActionDetailView",
     "ActionHistoryQuery",
     "ActionHistoryView",
     "ActionSystemOption",

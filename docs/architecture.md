@@ -69,7 +69,7 @@ Implemented and covered by automated tests:
 - durable SQLite intents, actions, leases, observations, projections, and alertable failures;
 - generic local-only coordination and idempotent observation ingestion;
 - closed Databricks CLI command mapping, bounded execution, error redaction, and Workspace/Unity Catalog metadata normalizers;
-- loopback operational UI with bounded inventory, containment, alert-history, and action-activity pages, object facet/provenance detail, registered refresh controls, intent polling, ephemeral local-caller authorization, per-session CSRF, Origin/Host checks, stale/error states, and output escaping;
+- loopback operational UI with bounded inventory, containment, alert-history, action-activity, and per-action attempt pages, object facet/provenance detail, registered refresh controls, intent polling, ephemeral local-caller authorization, per-session CSRF, Origin/Host checks, stale/error states, and output escaping;
 - local configuration, initialization, doctor, one-shot worker, and serve commands;
 - an end-to-end fake-CLI test covering request, admission, execution, ingestion, display, and duplicate suppression.
 

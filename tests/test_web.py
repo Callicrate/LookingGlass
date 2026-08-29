@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 
 from async_api_view.web import (
     ActionActivityView,
+    ActionAttemptView,
+    ActionDetailView,
     ActionHistoryQuery,
     ActionHistoryView,
     ActionSystemOption,
@@ -68,17 +70,20 @@ class FakeBackend:
     object_view: ObjectDetailView | None = None
     alert_view: AlertHistoryView = field(default_factory=AlertHistoryView)
     action_view: ActionHistoryView = field(default_factory=ActionHistoryView)
+    action_detail_view: ActionDetailView | None = None
     intent_id: str = "intent-1"
     dashboard_error: Exception | None = None
     intent_error: Exception | None = None
     object_error: Exception | None = None
     alert_error: Exception | None = None
     action_error: Exception | None = None
+    action_detail_error: Exception | None = None
     submitted: list[RefreshRequest] = field(default_factory=list)
     dashboard_queries: list[DashboardQuery] = field(default_factory=list)
     object_queries: list[tuple[str, ObjectDetailQuery]] = field(default_factory=list)
     alert_queries: list[AlertHistoryQuery] = field(default_factory=list)
     action_queries: list[ActionHistoryQuery] = field(default_factory=list)
+    action_detail_ids: list[str] = field(default_factory=list)
 
     async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView:
         if self.dashboard_error:
@@ -161,6 +166,12 @@ class FakeBackend:
             action_filter=normalized_query.action_id,
         )
 
+    async def action_detail(self, action_id: str) -> ActionDetailView | None:
+        if self.action_detail_error:
+            raise self.action_detail_error
+        self.action_detail_ids.append(action_id)
+        return self.action_detail_view
+
 
 def authenticated_client(app: FastAPI) -> TestClient:
     client = TestClient(app, base_url="https://testserver")
@@ -192,6 +203,7 @@ def test_local_access_denies_every_protected_surface_before_backend_work() -> No
         client.get("/"),
         client.get("/alerts"),
         client.get("/actions"),
+        client.get(f"/actions/{ACTION_ID}"),
         client.get(f"/objects/{DETAIL_ID}"),
         client.get("/intents/intent-1"),
         client.get("/api/intents/intent-1"),
@@ -206,6 +218,7 @@ def test_local_access_denies_every_protected_surface_before_backend_work() -> No
     assert backend.object_queries == []
     assert backend.alert_queries == []
     assert backend.action_queries == []
+    assert backend.action_detail_ids == []
     assert backend.submitted == []
 
 
@@ -503,6 +516,25 @@ def ready_action_history() -> ActionHistoryView:
     )
 
 
+def ready_action_detail() -> ActionDetailView:
+    return ActionDetailView(
+        action=ready_action_history().actions[0],
+        attempts=(
+            ActionAttemptView(
+                ordinal=1,
+                started_at=NOW,
+                ended_at=NOW,
+                outcome="failed",
+                error_class="downstream_rate_limit",
+                retry_at="2026-08-24T14:40:09+00:00",
+                diagnostic='<script>alert("attempt")</script>',
+            ),
+        ),
+        attempt_total=1,
+        loaded_at=NOW,
+    )
+
+
 def test_empty_dashboard_explains_unknown_state() -> None:
     response = client_for(FakeBackend()).get("/")
 
@@ -645,7 +677,7 @@ def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
     assert "View history" in response.text
     assert "refresh.action.failed" in response.text
     assert "connection_timeout" in response.text
-    assert f"/actions?action={ACTION_ID}" in response.text
+    assert f"/actions/{ACTION_ID}" in response.text
     assert '<script>alert("x")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
 
@@ -662,7 +694,7 @@ def test_alert_history_shows_filters_paging_and_escaped_summaries() -> None:
     assert "queue.coordinator.failed" in response.text
     assert "unknown_adapter_failure" in response.text
     assert "/alerts?page=2" in response.text
-    assert f"/actions?action={ACTION_ID}" in response.text
+    assert f"/actions/{ACTION_ID}" in response.text
     assert '<script>alert("x")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
     assert backend.alert_queries == [
@@ -755,6 +787,36 @@ def test_action_history_returns_safe_unavailable_response() -> None:
 
     assert response.status_code == 503
     assert "secret profile token" not in response.text
+
+
+def test_action_detail_shows_bounded_escaped_attempts() -> None:
+    backend = FakeBackend(action_detail_view=replace(ready_action_detail(), attempt_total=101))
+
+    response = client_for(backend).get(f"/actions/{ACTION_ID}")
+
+    assert response.status_code == 200
+    assert "Action detail" in response.text
+    assert "Attempt 1" in response.text
+    assert "Showing latest 1 of 101" in response.text
+    assert "downstream_rate_limit" in response.text
+    assert '<script>alert("attempt")</script>' not in response.text
+    assert "&lt;script&gt;alert" in response.text
+    assert backend.action_detail_ids == [ACTION_ID]
+
+
+def test_action_detail_returns_safe_not_found_and_unavailable_states() -> None:
+    missing_backend = FakeBackend(action_detail_view=None)
+    missing = client_for(missing_backend).get(f"/actions/{ACTION_ID}")
+    invalid = client_for(FakeBackend()).get("/actions/not-a-uuid")
+    unavailable = client_for(
+        FakeBackend(action_detail_error=RuntimeError("secret profile token"))
+    ).get(f"/actions/{ACTION_ID}")
+
+    assert missing.status_code == 404
+    assert invalid.status_code == 404
+    assert unavailable.status_code == 503
+    assert "secret profile token" not in unavailable.text
+    assert missing_backend.action_detail_ids == [ACTION_ID]
 
 
 def test_remote_markup_is_escaped() -> None:
@@ -1031,7 +1093,7 @@ def test_intent_page_and_json_show_each_scope_disposition() -> None:
                 target_id="scope-1",
                 capability_key=OPTION.capability_key,
                 facet="membership",
-                action_id="action-1",
+                action_id=ACTION_ID,
                 eligible_at="2026-08-25T14:35:09+00:00",
                 cached_context="3 cached children, stale",
             ),
@@ -1053,7 +1115,8 @@ def test_intent_page_and_json_show_each_scope_disposition() -> None:
 
     assert page.status_code == 200
     assert "deferred" in page.text
-    assert "action-1" in page.text
+    assert ACTION_ID in page.text
+    assert f"/actions/{ACTION_ID}" in page.text
     assert "configured_scope" in page.text
     assert "scope-1" in page.text
     assert "3 cached children, stale" in page.text

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Durable local adapter action and bounded attempt evidence.">
+  <title>Action detail · Async API View</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to action detail</a>
+  <header class="topbar">
+    <div><p class="eyebrow">Durable worker evidence</p><h1>Action detail</h1></div>
+    <a class="back-link" href="/actions">← Action activity</a>
+  </header>
+  <main id="main">
+    <section class="action-summary" aria-labelledby="action-heading">
+      <div class="scope-title">
+        <div><p class="eyebrow">{{ view.action.system_name|display }}</p><h2 id="action-heading">{{ view.action.capability_key|display }}</h2></div>
+        <span class="badge badge--{{ view.action.state|display }}">{{ view.action.state|display|replace('_', ' ') }}</span>
+      </div>
+      <dl class="facts facts--wide">
+        <div><dt>Action</dt><dd><code>{{ view.action.action_id|display }}</code></dd></div>
+        <div><dt>Target</dt><dd>{{ view.action.target_kind|display|replace('_', ' ') }} · <code>{{ view.action.target_id|display }}</code></dd></div>
+        <div><dt>Created</dt><dd><time>{{ view.action.created_at|timestamp }}</time></dd></div>
+        <div><dt>Started</dt><dd><time>{{ view.action.started_at|timestamp }}</time></dd></div>
+        <div><dt>Completed</dt><dd><time>{{ view.action.completed_at|timestamp }}</time></dd></div>
+        {% if view.action.retry_at %}<div><dt>Retry at</dt><dd><time>{{ view.action.retry_at|timestamp }}</time></dd></div>{% endif %}
+        {% if view.action.error_class %}<div><dt>Error class</dt><dd class="failure">{{ view.action.error_class|display }}</dd></div>{% endif %}
+        {% if view.action.diagnostic %}<div><dt>Diagnostic</dt><dd class="failure">{{ view.action.diagnostic|display }}</dd></div>{% endif %}
+      </dl>
+    </section>
+    <section aria-labelledby="attempts-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">Bounded execution record</p><h2 id="attempts-heading">Attempts</h2></div>
+        <span class="count">{% if view.attempt_total > view.attempts|length %}Showing latest {{ view.attempts|length }} of {{ view.attempt_total }}{% else %}{{ view.attempt_total }} recorded{% endif %}</span>
+      </div>
+      {% if view.attempts %}<div class="attempt-list">
+        {% for attempt in view.attempts %}<article class="attempt-row">
+          <div class="scope-title">
+            <strong>Attempt {{ attempt.ordinal }}</strong>
+            <span class="badge badge--{{ attempt.outcome|display if attempt.outcome else 'running' }}">{{ attempt.outcome|display if attempt.outcome else 'in progress' }}</span>
+          </div>
+          <dl class="facts facts--wide">
+            <div><dt>Started</dt><dd><time>{{ attempt.started_at|timestamp }}</time></dd></div>
+            <div><dt>Ended</dt><dd><time>{{ attempt.ended_at|timestamp }}</time></dd></div>
+            {% if attempt.retry_at %}<div><dt>Retry at</dt><dd><time>{{ attempt.retry_at|timestamp }}</time></dd></div>{% endif %}
+            {% if attempt.error_class %}<div><dt>Error class</dt><dd class="failure">{{ attempt.error_class|display }}</dd></div>{% endif %}
+            {% if attempt.diagnostic %}<div><dt>Diagnostic</dt><dd class="failure">{{ attempt.diagnostic|display }}</dd></div>{% endif %}
+          </dl>
+        </article>{% endfor %}
+      </div>{% else %}<div class="empty-state"><strong>No attempts recorded</strong><p>The action has not produced a durable attempt yet.</p></div>{% endif %}
+    </section>
+  </main>
+  <footer>Attempt diagnostics are redacted local evidence; no command text or downstream payload is shown.</footer>
+</body>
+</html>

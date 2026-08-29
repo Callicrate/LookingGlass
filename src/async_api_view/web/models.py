@@ -294,6 +294,25 @@ class ActionActivityView:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionAttemptView:
+    ordinal: int
+    started_at: datetime | str | None
+    ended_at: datetime | str | None = None
+    outcome: str | None = None
+    error_class: str | None = None
+    retry_at: datetime | str | None = None
+    diagnostic: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActionDetailView:
+    action: ActionActivityView
+    attempts: tuple[ActionAttemptView, ...] = ()
+    attempt_total: int = 0
+    loaded_at: datetime | str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ActionHistoryView:
     actions: tuple[ActionActivityView, ...] = ()
     systems: tuple[ActionSystemOption, ...] = ()
@@ -383,6 +402,8 @@ class WebBackend(Protocol):
         self, query: ActionHistoryQuery | None = None
     ) -> ActionHistoryView: ...
 
+    async def action_detail(self, action_id: str) -> ActionDetailView | None: ...
+
     async def submit_refresh(self, request: RefreshRequest) -> str: ...
 
     async def intent(self, intent_id: str) -> IntentView | None: ...
@@ -418,6 +439,10 @@ class UnavailableBackend:
 
     async def action_history(self, query: ActionHistoryQuery | None = None) -> ActionHistoryView:
         del query
+        raise RuntimeError("local state services unavailable")
+
+    async def action_detail(self, action_id: str) -> ActionDetailView | None:
+        del action_id
         raise RuntimeError("local state services unavailable")
 
     async def submit_refresh(self, request: RefreshRequest) -> str:

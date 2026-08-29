@@ -70,6 +70,7 @@ from async_api_view.core import decide_refresh, resolve_refresh_interval, scope_
 
 from .models import (
     ActionActivityRecord,
+    ActionAttemptRecord,
     ConfiguredScopeRecord,
     IntentScopeRecord,
     IntentScopeWork,
@@ -1781,6 +1782,54 @@ class SQLiteStore:
             redacted_diagnostic=row["redacted_diagnostic"],
         )
 
+    @staticmethod
+    def _action_attempt_from_row(row: sqlite3.Row) -> ActionAttemptRecord:
+        return ActionAttemptRecord(
+            attempt_id=row["attempt_id"],
+            action_id=row["action_id"],
+            ordinal=row["ordinal"],
+            started_at=_dt(row["started_at"]),  # type: ignore[arg-type]
+            ended_at=_dt(row["ended_at"]),
+            outcome=row["outcome"],
+            error_class=row["error_class"],
+            retry_at=_dt(row["retry_at"]),
+            redacted_diagnostic=row["redacted_diagnostic"],
+        )
+
+    def get_action_activity(self, action_id: str) -> ActionActivityRecord | None:
+        action_id = require_uuid(action_id, "action_id")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM adapter_actions WHERE action_id = ?", (action_id,)
+            ).fetchone()
+        return self._action_activity_from_row(row) if row is not None else None
+
+    def list_action_attempts(
+        self, action_id: str, *, limit: int = 100
+    ) -> tuple[ActionAttemptRecord, ...]:
+        action_id = require_uuid(action_id, "action_id")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("attempt limit must be between 1 and 100")
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM action_attempts
+                WHERE action_id = ?
+                ORDER BY ordinal DESC
+                LIMIT ?
+                """,
+                (action_id, limit),
+            ).fetchall()
+        return tuple(reversed(tuple(self._action_attempt_from_row(row) for row in rows)))
+
+    def count_action_attempts(self, action_id: str) -> int:
+        action_id = require_uuid(action_id, "action_id")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COUNT(*) FROM action_attempts WHERE action_id = ?", (action_id,)
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
+
     def count_action_activity(
         self,
         *,
@@ -2234,7 +2283,11 @@ class SQLiteStore:
                     attempt.outcome.value if attempt.outcome else None,
                     attempt.error_class.value if attempt.error_class else None,
                     _utc_text(attempt.retry_at) if attempt.retry_at else None,
-                    _redact(attempt.redacted_diagnostic),
+                    (
+                        _redact(attempt.redacted_diagnostic)
+                        if attempt.redacted_diagnostic is not None
+                        else None
+                    ),
                 ),
             )
             if attempt.retry_at is not None:
@@ -2326,7 +2379,11 @@ class SQLiteStore:
                     destination_state.value,
                     _utc_text(completion.completed_at),
                     completion.error_class.value if completion.error_class else None,
-                    _redact(completion.redacted_diagnostic),
+                    (
+                        _redact(completion.redacted_diagnostic)
+                        if completion.redacted_diagnostic is not None
+                        else None
+                    ),
                     _utc_text(completion.retry_at) if completion.retry_at else None,
                     completion.action_id,
                 ),

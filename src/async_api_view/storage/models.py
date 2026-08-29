@@ -99,6 +99,19 @@ class ActionActivityRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionAttemptRecord:
+    attempt_id: str
+    action_id: str
+    ordinal: int
+    started_at: datetime
+    ended_at: datetime | None
+    outcome: str | None
+    error_class: str | None
+    retry_at: datetime | None
+    redacted_diagnostic: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class OperationalEventRecord:
     event_id: str
     event_type: str
