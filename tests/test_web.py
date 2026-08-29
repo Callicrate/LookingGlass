@@ -194,6 +194,23 @@ def client_for(backend: FakeBackend) -> TestClient:
     return authenticated_client(app)
 
 
+def assert_html_error_shell(
+    response,
+    *,
+    status: int,
+    heading: str,
+    retry: bool,
+) -> None:
+    assert response.status_code == status
+    assert response.headers["content-type"].startswith("text/html")
+    assert f"<title>{heading} · Rookery</title>" in response.text
+    assert '<main id="main"' in response.text
+    assert 'role="alert"' in response.text
+    assert heading in response.text
+    assert 'href="/">Return to dashboard</a>' in response.text
+    assert (">Try again</a>" in response.text) is retry
+
+
 def test_local_access_denies_every_protected_surface_before_backend_work() -> None:
     backend = FakeBackend(dashboard_view=ready_dashboard())
     app = create_app(backend, allowed_hosts=("testserver",))
@@ -858,8 +875,84 @@ def test_alert_history_default_backend_reports_unavailable() -> None:
     app = create_app(allowed_hosts=("testserver",))
     response = authenticated_client(app).get("/alerts")
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Alert history is unavailable"}
+    assert_html_error_shell(
+        response,
+        status=503,
+        heading="Local state unavailable",
+        retry=True,
+    )
+    assert "Alert history is unavailable" in response.text
+
+
+def test_browser_routes_render_accessible_error_shells() -> None:
+    cases = (
+        (
+            "/alerts",
+            FakeBackend(alert_error=RuntimeError("secret alert token")),
+            503,
+            "Local state unavailable",
+            True,
+        ),
+        (
+            "/actions",
+            FakeBackend(action_error=RuntimeError("secret action token")),
+            503,
+            "Local state unavailable",
+            True,
+        ),
+        (
+            f"/actions/{ACTION_ID}",
+            FakeBackend(action_detail_view=None),
+            404,
+            "Page not found",
+            False,
+        ),
+        (
+            f"/objects/{DETAIL_ID}",
+            FakeBackend(object_error=RuntimeError("secret object token")),
+            503,
+            "Local state unavailable",
+            True,
+        ),
+        (
+            "/intents/intent-1",
+            FakeBackend(intent_error=RuntimeError("secret intent token")),
+            503,
+            "Local state unavailable",
+            True,
+        ),
+        (
+            "/objects/not-a-uuid",
+            FakeBackend(),
+            404,
+            "Page not found",
+            False,
+        ),
+        (
+            "/missing",
+            FakeBackend(),
+            404,
+            "Page not found",
+            False,
+        ),
+        (
+            "/alerts?page=0",
+            FakeBackend(),
+            400,
+            "Request not accepted",
+            False,
+        ),
+    )
+    for path, backend, status, heading, retry in cases:
+        response = client_for(backend).get(path)
+
+        assert_html_error_shell(
+            response,
+            status=status,
+            heading=heading,
+            retry=retry,
+        )
+        assert "secret" not in response.text.lower()
 
 
 def test_action_history_shows_filters_paging_and_escaped_diagnostics() -> None:
@@ -1008,6 +1101,9 @@ def test_refresh_reports_unavailable_dashboard_without_leaking_error() -> None:
     )
 
     assert response.status_code == 503
+    assert response.headers["content-type"].startswith("text/html")
+    assert 'role="alert"' in response.text
+    assert "Return to dashboard" in response.text
     assert "secret profile token" not in response.text
     assert backend.submitted == []
 
@@ -1288,9 +1384,17 @@ def test_intent_status_failures_are_safe_and_retryable() -> None:
 
     page = client.get("/intents/intent-1")
     poll = client.get("/api/intents/intent-1")
+    missing_poll = client_for(FakeBackend()).get("/api/intents/intent-1")
 
     assert page.status_code == 503
     assert poll.status_code == 503
+    assert page.headers["content-type"].startswith("text/html")
+    assert 'role="alert"' in page.text
+    assert poll.headers["content-type"].startswith("application/json")
+    assert poll.json() == {"detail": "Intent status is unavailable"}
+    assert missing_poll.status_code == 404
+    assert missing_poll.headers["content-type"].startswith("application/json")
+    assert missing_poll.json() == {"detail": "Intent not found"}
     assert "secret worker token" not in page.text + poll.text
 
 

@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -324,6 +325,40 @@ def create_app(
     templates.filters["display"] = display_text
     templates.filters["timestamp"] = timestamp
     app.mount("/static", StaticFiles(directory=root / "static"), name="static")
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_response(request: Request, exc: StarletteHTTPException) -> Response:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers=exc.headers,
+            )
+        headings = {
+            400: "Request not accepted",
+            403: "Access denied",
+            404: "Page not found",
+            413: "Request too large",
+            415: "Unsupported request",
+            503: "Local state unavailable",
+        }
+        message = (
+            display_text(exc.detail, limit=512)
+            if isinstance(exc.detail, str)
+            else "Rookery could not complete this request."
+        )
+        retry_path = (
+            request.url.path
+            if exc.status_code >= 500 and request.method in {"GET", "HEAD"}
+            else None
+        )
+        content = templates.get_template("error.html").render(
+            status_code=exc.status_code,
+            heading=headings.get(exc.status_code, "Request failed"),
+            message=message,
+            retry_path=retry_path,
+        )
+        return HTMLResponse(content, status_code=exc.status_code, headers=exc.headers)
 
     async def secure_responses(request: Request, call_next):  # type: ignore[no-untyped-def]
         response = await call_next(request)

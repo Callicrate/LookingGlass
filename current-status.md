@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 13:02 ET
+Updated: 2026-08-29 13:12 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 363 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 364 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: overlong/dangling-ID poison quarantine is independently clear; the shared accessible HTML error shell is implemented locally with 87 web tests green and awaits full-gate/review.
+- Active review round: overlong/dangling-ID quarantine and the shared accessible HTML error shell are independently clear after the exact full gate; no known medium-or-higher finding remains, so fresh residual review resumes.
 - Next progress report due: 2026-08-29 13:26 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -110,7 +110,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Make migration, repair, validation, and application-ID startup changes fully atomic.
 - [x] Close full-gate and independent review of batch-wide observation-ID collision preflight.
 - [x] Make corrupt overlong or dangling durable IDs quarantine once without wedging either queue.
-- [ ] Keep HTML route failures inside an accessible, navigable Rookery error shell.
+- [x] Keep HTML route failures inside an accessible, navigable Rookery error shell.
 
 ## Evidence and decisions
 
@@ -175,7 +175,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Corrupt 600-character persisted action/scope IDs made quarantine event-key validation fail, rolled back terminalization, and indefinitely blocked healthy queue rows.
 - Quarantine events now use bounded kind-separated SHA-256 keys that never embed or revalidate corrupt persisted IDs; 600-character action/scope regressions terminalize once and prove immediate healthy queue progress within the 363-test full gate.
 - Quarantine events retain `system_id` only when its parent exists, so combined overlong-ID/dangling-system corruption emits one event with NULL system linkage instead of re-wedging either queue; independent replay, rollback, valid-linkage, and action-linkage probes are clear.
-- Backend failures and missing records on browser HTML routes currently render FastAPI's raw JSON response with no title, landmark, navigation, or recovery path; a shared redacted HTML error shell is queued after quarantine.
+- Backend failures and missing records on browser HTML routes rendered FastAPI's raw JSON response with no title, landmark, navigation, or recovery path.
+- Browser-route 400/404/503 failures now render an autoescaped Rookery shell with title, landmarks, alert semantics, dashboard recovery, and safe GET retry links; API intent polling remains JSON-only, and packaged runtime assets rise to 28.
+- Independent desktop/mobile Chrome review cleared overflow, accessibility tree, keyboard order, recovery navigation, auth/host ordering, security headers, hostile input escaping, secret absence, and JSON API preservation.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.

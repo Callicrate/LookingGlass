@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Rookery could not complete this local request.">
+  <title>{{ heading|e }} · Rookery</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to error details</a>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Rookery · local operational view</p>
+      <h1>Request interrupted</h1>
+    </div>
+  </header>
+
+  <main id="main" class="error-main">
+    <section class="error-card" role="alert" aria-labelledby="error-heading">
+      <p class="eyebrow">Error {{ status_code }}</p>
+      <h2 id="error-heading">{{ heading|e }}</h2>
+      <p>{{ message|e }}</p>
+      <nav class="error-actions" aria-label="Recovery options">
+        {% if retry_path %}<a class="button-link" href="{{ retry_path|e }}">Try again</a>{% endif %}
+        <a href="/">Return to dashboard</a>
+      </nav>
+    </section>
+  </main>
+</body>
+</html>
