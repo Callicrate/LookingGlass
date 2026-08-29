@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 22:17 ET
+Updated: 2026-08-28 22:12 ET
 
 ## Goal
 
@@ -13,7 +13,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 4 CLI commands and 6 HTTP routes, verified from source.
 - Version control: local `main` is clean; every completed implementation batch is committed with focused messages.
 - Active review round: fresh residual-risk audit, package smoke validation, and low-coverage boundary triage.
-- Next progress report due: 2026-08-28 22:42 ET.
+- Next progress report due: 2026-08-28 23:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -79,6 +79,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Containment pages include only present relationships, show relationship and child-object presence separately, and use one indexed join without temporary sorting or per-child lookups.
 - The object page passed desktop/mobile interaction and screenshot checks with no console or network errors; Lighthouse scored 100 in every audited category on both profiles.
 - The exact locked CI sequence passes on native Windows and Ubuntu/WSL with Python 3.12; CI now runs both operating systems with fail-fast disabled.
+- A fresh post-commit review of the object route, containment join/index, refresh authorization, CI matrix, migrations, and docs found no remaining medium-or-higher local defect.
+- The real ignored local database is migrated through `0006_relationship_navigation` and still passes integrity and foreign-key checks.
 
 ## Risks / watch list
 
