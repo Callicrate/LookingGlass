@@ -29,6 +29,10 @@ class AppSettings:
     cli_output_limit_bytes: int = 8 * 1024 * 1024
 
     def __post_init__(self) -> None:
+        if not isinstance(self.database_path, Path):
+            raise ConfigError("app.database_path must be a Path")
+        object.__setattr__(self, "host", _loopback_host(self.host))
+        object.__setattr__(self, "port", _positive_int(self.port, "app.port", maximum=65535))
         object.__setattr__(
             self,
             "worker_poll_seconds",
@@ -37,6 +41,24 @@ class AppSettings:
                 "app.worker_poll_seconds",
                 maximum=60.0,
                 minimum=MIN_WORKER_POLL_SECONDS,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "cli_timeout_seconds",
+            _positive_float(
+                self.cli_timeout_seconds,
+                "app.cli_timeout_seconds",
+                maximum=300.0,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "cli_output_limit_bytes",
+            _positive_int(
+                self.cli_output_limit_bytes,
+                "app.cli_output_limit_bytes",
+                maximum=64 * 1024 * 1024,
             ),
         )
 
@@ -49,17 +71,45 @@ class DatabricksSystemSettings:
     config_id: str | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _bounded_text(self.name, "name", max_length=128))
         object.__setattr__(
             self,
             "profile",
             validate_databricks_profile(self.profile, "profile"),
         )
+        object.__setattr__(
+            self,
+            "workspace_root",
+            _workspace_root(self.workspace_root, "workspace_root"),
+        )
+        if self.config_id is not None:
+            object.__setattr__(self, "config_id", canonical_config_id(self.config_id))
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectSettings:
     app: AppSettings
     databricks_systems: tuple[DatabricksSystemSettings, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.app, AppSettings):
+            raise ConfigError("app must be AppSettings")
+        if not isinstance(self.databricks_systems, tuple) or not all(
+            isinstance(system, DatabricksSystemSettings) for system in self.databricks_systems
+        ):
+            raise ConfigError("databricks_systems must be DatabricksSystemSettings entries")
+        if len(self.databricks_systems) > MAX_DATABRICKS_SYSTEMS:
+            raise ConfigError(f"at most {MAX_DATABRICKS_SYSTEMS} Databricks systems are allowed")
+        names = [system.name.casefold() for system in self.databricks_systems]
+        if len(set(names)) != len(names):
+            raise ConfigError("Databricks system names must be unique")
+        config_ids = [
+            system.config_id.casefold()
+            for system in self.databricks_systems
+            if system.config_id is not None
+        ]
+        if len(set(config_ids)) != len(config_ids):
+            raise ConfigError("Databricks system IDs must be unique")
 
 
 def _mapping(value: object, field_name: str) -> dict[str, Any]:

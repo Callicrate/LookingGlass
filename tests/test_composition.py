@@ -1234,12 +1234,10 @@ def test_case_only_config_id_change_preserves_identity_and_cache(tmp_path: Path)
 def test_direct_settings_reject_non_ascii_config_id_before_database_creation(
     tmp_path: Path,
 ) -> None:
-    project_settings = settings(tmp_path, config_id="İ")
-
     with pytest.raises(ConfigError, match="letters, digits"):
-        build_runtime(project_settings, runner=FakeCliRunner(b"[]"))
+        settings(tmp_path, config_id="İ")
 
-    assert not project_settings.app.database_path.exists()
+    assert not (tmp_path / "state.sqlite3").exists()
 
 
 def test_workspace_root_change_creates_new_authority_and_pauses_predecessor(

@@ -6,6 +6,7 @@ from async_api_view.config import (
     AppSettings,
     ConfigError,
     DatabricksSystemSettings,
+    ProjectSettings,
     load_settings,
 )
 
@@ -72,6 +73,76 @@ def test_programmatic_settings_enforce_poll_and_profile_boundaries(tmp_path: Pat
         AppSettings(database_path=tmp_path / "state.sqlite3", worker_poll_seconds=1e-12)
     with pytest.raises(ConfigError, match="must start with a letter or digit"):
         DatabricksSystemSettings("workspace", "-bad", "/")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"host": "0.0.0.0"}, "loopback"),
+        ({"port": 0}, "app.port"),
+        ({"cli_timeout_seconds": float("nan")}, "app.cli_timeout_seconds"),
+        ({"cli_output_limit_bytes": 0}, "app.cli_output_limit_bytes"),
+    ],
+)
+def test_programmatic_app_settings_share_toml_safety_contract(
+    tmp_path: Path,
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ConfigError, match=message):
+        AppSettings(database_path=tmp_path / "state.sqlite3", **overrides)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"name": ""}, "name"),
+        ({"workspace_root": "relative"}, "absolute Workspace path"),
+        ({"config_id": "bad;id"}, "letters"),
+    ],
+)
+def test_programmatic_databricks_settings_share_toml_safety_contract(
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    values: dict[str, object] = {
+        "name": "workspace",
+        "profile": "TEST_PROFILE",
+        "workspace_root": "/Shared",
+        "config_id": "workspace",
+    }
+    values.update(overrides)
+
+    with pytest.raises(ConfigError, match=message):
+        DatabricksSystemSettings(**values)  # type: ignore[arg-type]
+
+
+def test_programmatic_databricks_settings_normalize_identity_and_root() -> None:
+    settings = DatabricksSystemSettings(
+        name="workspace",
+        profile="TEST_PROFILE",
+        workspace_root="/Shared/",
+        config_id="WorkSpace",
+    )
+
+    assert settings.workspace_root == "/Shared"
+    assert settings.config_id == "workspace"
+
+
+def test_programmatic_project_settings_reject_duplicate_names_and_ids(tmp_path: Path) -> None:
+    app = AppSettings(database_path=tmp_path / "state.sqlite3")
+    first = DatabricksSystemSettings("workspace", "ONE", "/One", "primary")
+
+    with pytest.raises(ConfigError, match="names must be unique"):
+        ProjectSettings(
+            app,
+            (first, DatabricksSystemSettings("WORKSPACE", "TWO", "/Two", "secondary")),
+        )
+    with pytest.raises(ConfigError, match="IDs must be unique"):
+        ProjectSettings(
+            app,
+            (first, DatabricksSystemSettings("secondary", "TWO", "/Two", "PRIMARY")),
+        )
 
 
 @pytest.mark.parametrize(
