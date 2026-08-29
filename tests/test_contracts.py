@@ -14,18 +14,24 @@ from async_api_view.contracts import (
     ActionLease,
     ActionLifecyclePort,
     ActionOutcome,
+    ActionRecord,
     AdapterAction,
+    CapabilityBinding,
     CollectionCoverage,
     CoverageDeclaration,
     ErrorClass,
     FacetObservation,
     FieldCoverage,
+    GuardDecision,
+    IngestionResult,
     ObjectLocator,
     ObservationBatch,
+    OperationClass,
     RefreshCoverage,
     RefreshIntent,
     RefreshOrigin,
     RefreshScope,
+    RelationshipObservation,
     TargetKind,
     TargetRef,
     UpdateMode,
@@ -151,6 +157,87 @@ def test_partial_observation_requires_explicit_matching_field_mask() -> None:
             field_coverage=FieldCoverage.PARTIAL,
             payload={"name": "report.py"},
         )
+
+
+def test_contract_models_reject_primitive_enum_values() -> None:
+    refresh_scope = scope()
+    locator = ObjectLocator(object_type="file", object_id=uuid4())
+
+    with pytest.raises(ValueError, match="TargetKind"):
+        TargetRef("object", uuid4())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="RefreshCoverage"):
+        RefreshScope(
+            system_id=refresh_scope.system_id,
+            target=refresh_scope.target,
+            object_type="file",
+            facet="metadata",
+            coverage="facet",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="RefreshOrigin"):
+        RefreshIntent(
+            intent_id=uuid4(),
+            idempotency_key="primitive-origin",
+            origin="automatic",  # type: ignore[arg-type]
+            actor_id="local-user",
+            scopes=(refresh_scope,),
+            requested_at=NOW,
+        )
+    with pytest.raises(ValueError, match="CollectionCoverage"):
+        CoverageDeclaration(
+            refresh_scope,
+            "complete",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="AbsenceAuthority"):
+        CoverageDeclaration(
+            refresh_scope,
+            CollectionCoverage.COMPLETE,
+            ("relationship",),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="UpdateMode"):
+        FacetObservation(
+            observation_id=uuid4(),
+            target=locator,
+            facet="metadata",
+            facet_version="1",
+            update_mode="snapshot",  # type: ignore[arg-type]
+            field_coverage=FieldCoverage.COMPLETE,
+        )
+    with pytest.raises(ValueError, match="PresenceState"):
+        RelationshipObservation(
+            observation_id=uuid4(),
+            subject=locator,
+            predicate="contains",
+            object=locator,
+            presence="present",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="GuardDisposition"):
+        GuardDecision("dispatch", "dispatch")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="IngestionStatus"):
+        IngestionResult(uuid4(), "accepted")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="OperationClass"):
+        CapabilityBinding(
+            capability_binding_id=uuid4(),
+            connection_binding_id=uuid4(),
+            capability_key="example.read",
+            capability_version="1",
+            operation_class="observe",  # type: ignore[arg-type]
+            target_kinds=(TargetKind.OBJECT,),
+            produced_facets=("metadata",),
+            enabled=True,
+        )
+    with pytest.raises(ValueError, match="TargetKind"):
+        CapabilityBinding(
+            capability_binding_id=uuid4(),
+            connection_binding_id=uuid4(),
+            capability_key="example.read",
+            capability_version="1",
+            operation_class=OperationClass.OBSERVE,
+            target_kinds=("object",),  # type: ignore[arg-type]
+            produced_facets=("metadata",),
+            enabled=True,
+        )
+    with pytest.raises(ValueError, match="ActionState"):
+        ActionRecord(uuid4(), "ready", NOW)  # type: ignore[arg-type]
 
 
 def test_dispatch_and_intent_have_no_command_secret_or_force_fields() -> None:

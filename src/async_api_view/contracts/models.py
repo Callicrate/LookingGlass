@@ -10,9 +10,11 @@ from uuid import UUID
 from ._validation import (
     JSONDTO,
     JSONValue,
+    normalize_enum_tuple,
     optional_utc,
     optional_uuid,
     require_contract_key,
+    require_enum,
     require_positive_duration,
     require_text,
     require_utc,
@@ -67,6 +69,7 @@ class TargetRef(JSONDTO):
     target_id: str
 
     def __post_init__(self) -> None:
+        require_enum(self.kind, TargetKind, "kind")
         _set_uuid(self, "target_id")
 
 
@@ -116,6 +119,7 @@ class RemoteObject(JSONDTO):
         require_contract_key(self.source_kind, "source_kind")
         require_text(self.external_key, "external_key", max_length=4096)
         require_text(self.display_name, "display_name", max_length=1024)
+        require_enum(self.presence, PresenceState, "presence")
         _set_utc(self, "first_seen_at")
         _set_optional_utc(self, "last_seen_at")
         if self.last_seen_at is not None and self.last_seen_at < self.first_seen_at:
@@ -138,6 +142,7 @@ class FacetState(JSONDTO):
         _set_uuid(self, "object_id")
         require_contract_key(self.facet, "facet")
         require_text(self.facet_version, "facet_version", max_length=32)
+        require_enum(self.knowledge, KnowledgeState, "knowledge")
         object.__setattr__(self, "payload", validate_json(self.payload, "payload"))
         _set_optional_utc(self, "observed_at")
         _set_utc(self, "state_changed_at")
@@ -167,6 +172,7 @@ class RelationshipState(JSONDTO):
         ):
             _set_uuid(self, name)
         require_contract_key(self.predicate, "predicate")
+        require_enum(self.presence, PresenceState, "presence")
         _set_utc(self, "observed_at")
 
 
@@ -184,6 +190,7 @@ class RefreshScope(JSONDTO):
         _set_uuid(self, "system_id")
         require_contract_key(self.object_type, "object_type")
         require_contract_key(self.facet, "facet")
+        require_enum(self.coverage, RefreshCoverage, "coverage")
         if self.capability_key is not None:
             require_contract_key(self.capability_key, "capability_key")
         normalized_fields = tuple(dict.fromkeys(self.field_mask))
@@ -212,6 +219,7 @@ class RefreshIntent(JSONDTO):
         _set_uuid(self, "intent_id")
         require_text(self.idempotency_key, "idempotency_key", max_length=512)
         require_text(self.actor_id, "actor_id", max_length=512)
+        require_enum(self.origin, RefreshOrigin, "origin")
         if not self.scopes:
             raise ValueError("scopes must contain at least one refresh scope")
         _set_utc(self, "requested_at")
@@ -283,9 +291,18 @@ class CoverageDeclaration(JSONDTO):
     absence_authority: tuple[AbsenceAuthority, ...] = ()
 
     def __post_init__(self) -> None:
+        require_enum(self.completeness, CollectionCoverage, "completeness")
+        object.__setattr__(
+            self,
+            "absence_authority",
+            normalize_enum_tuple(
+                self.absence_authority,
+                AbsenceAuthority,
+                "absence_authority",
+            ),
+        )
         if self.completeness is not CollectionCoverage.COMPLETE and self.absence_authority:
             raise ValueError("absence authority requires complete collection coverage")
-        object.__setattr__(self, "absence_authority", tuple(dict.fromkeys(self.absence_authority)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,6 +323,8 @@ class FacetObservation(JSONDTO):
         _set_uuid(self, "observation_id")
         require_contract_key(self.facet, "facet")
         require_text(self.facet_version, "facet_version", max_length=32)
+        require_enum(self.update_mode, UpdateMode, "update_mode")
+        require_enum(self.field_coverage, FieldCoverage, "field_coverage")
         object.__setattr__(self, "payload", validate_json(self.payload, "payload"))
         normalized_mask = tuple(dict.fromkeys(self.field_mask))
         for name in normalized_mask:
@@ -335,6 +354,7 @@ class RelationshipObservation(JSONDTO):
     def __post_init__(self) -> None:
         _set_uuid(self, "observation_id")
         require_contract_key(self.predicate, "predicate")
+        require_enum(self.presence, PresenceState, "presence")
         if self.presence is PresenceState.UNKNOWN:
             raise ValueError("a relationship observation must assert present or absent")
 
@@ -463,6 +483,7 @@ class GuardDecision(JSONDTO):
     satisfying_observation_ids: tuple[str | UUID, ...] = ()
 
     def __post_init__(self) -> None:
+        require_enum(self.disposition, GuardDisposition, "disposition")
         require_contract_key(self.reason, "reason")
         object.__setattr__(
             self,
@@ -485,6 +506,7 @@ class IngestionResult(JSONDTO):
 
     def __post_init__(self) -> None:
         _set_uuid(self, "batch_id")
+        require_enum(self.status, IngestionStatus, "status")
         object.__setattr__(
             self,
             "accepted_observation_ids",
@@ -540,6 +562,12 @@ class CapabilityBinding(JSONDTO):
         _set_uuid(self, "connection_binding_id")
         require_contract_key(self.capability_key, "capability_key")
         require_text(self.capability_version, "capability_version", max_length=64)
+        require_enum(self.operation_class, OperationClass, "operation_class")
+        object.__setattr__(
+            self,
+            "target_kinds",
+            normalize_enum_tuple(self.target_kinds, TargetKind, "target_kinds"),
+        )
         if self.operation_class is not OperationClass.OBSERVE:
             raise ValueError("version 1 capabilities must be remote-observation-only")
         if not self.target_kinds or not self.produced_facets:
@@ -631,4 +659,5 @@ class ActionRecord(JSONDTO):
 
     def __post_init__(self) -> None:
         _set_uuid(self, "action_id")
+        require_enum(self.state, ActionState, "state")
         _set_optional_utc(self, "started_at")

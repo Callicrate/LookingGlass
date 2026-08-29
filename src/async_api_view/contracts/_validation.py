@@ -71,6 +71,20 @@ def require_positive_duration(value: timedelta, field_name: str) -> timedelta:
     return value
 
 
+def require_enum[T: Enum](value: object, enum_type: type[T], field_name: str) -> T:
+    if not isinstance(value, enum_type):
+        raise ValueError(f"{field_name} must be a {enum_type.__name__}")
+    return value
+
+
+def normalize_enum_tuple[T: Enum](
+    values: object, enum_type: type[T], field_name: str
+) -> tuple[T, ...]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        raise ValueError(f"{field_name} must be a sequence of {enum_type.__name__} values")
+    return tuple(dict.fromkeys(require_enum(value, enum_type, field_name) for value in values))
+
+
 def validate_json(value: Any, field_name: str = "payload") -> JSONValue:
     """Validate and defensively copy a JSON value.
 

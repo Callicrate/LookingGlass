@@ -50,6 +50,7 @@ from async_api_view.contracts import (
     RefreshCoverage,
     RefreshIntent,
     RefreshIntervalOverride,
+    RefreshOrigin,
     RefreshReceipt,
     RefreshScope,
     RelationshipObservation,
@@ -1577,7 +1578,7 @@ class SQLiteStore:
         return RefreshIntent(
             intent_id=row["intent_id"],
             idempotency_key=row["idempotency_key"],
-            origin=row["origin"],
+            origin=RefreshOrigin(row["origin"]),
             actor_id=row["actor_id"],
             scopes=tuple(_scope_from_row(scope_row) for scope_row in scope_rows),
             requested_at=_dt(row["requested_at"]),  # type: ignore[arg-type]
@@ -1707,7 +1708,7 @@ class SQLiteStore:
                     intent = RefreshIntent(
                         intent_id=row["intent_id"],
                         idempotency_key=row["idempotency_key"],
-                        origin=row["origin"],
+                        origin=RefreshOrigin(row["origin"]),
                         actor_id=row["actor_id"],
                         scopes=(scope,),
                         requested_at=_dt(row["requested_at"]),  # type: ignore[arg-type]
