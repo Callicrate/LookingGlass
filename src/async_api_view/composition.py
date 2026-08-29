@@ -40,9 +40,11 @@ from async_api_view.contracts import (
     TargetRef,
 )
 from async_api_view.ingestion import SQLiteObservationIngestor
-from async_api_view.storage import SQLiteStore, StoredAction, SystemRecord
+from async_api_view.storage import OperationalEventRecord, SQLiteStore, StoredAction, SystemRecord
 from async_api_view.web import (
     ActivityView,
+    AlertHistoryQuery,
+    AlertHistoryView,
     DashboardQuery,
     DashboardView,
     FacetView,
@@ -309,6 +311,20 @@ class SQLiteWebBackend:
             facets=facet_views,
         )
 
+    @staticmethod
+    def _event_view(
+        event: OperationalEventRecord, system_names: Mapping[str, str]
+    ) -> OperationalEventView:
+        return OperationalEventView(
+            event_type=event.event_type,
+            severity=event.severity,
+            summary=event.redacted_summary,
+            occurred_at=event.occurred_at,
+            system_name=system_names.get(event.system_id or "", "Local runtime"),
+            error_class=event.error_class,
+            action_id=event.action_id,
+        )
+
     def _refresh_options(
         self,
         *,
@@ -494,15 +510,7 @@ class SQLiteWebBackend:
         )
         actions = self._store.list_dashboard_actions()
         alerts = tuple(
-            OperationalEventView(
-                event_type=event.event_type,
-                severity=event.severity,
-                summary=event.redacted_summary,
-                occurred_at=event.occurred_at,
-                system_name=system_names.get(event.system_id, "Local runtime"),
-                error_class=event.error_class,
-                action_id=event.action_id,
-            )
+            self._event_view(event, system_names)
             for event in self._store.list_operational_events(alertable_only=True, limit=10)
         )
         actions_by_system: dict[str, list[StoredAction]] = {
@@ -563,6 +571,54 @@ class SQLiteWebBackend:
                 self._page_url(query, object_page + 1) if object_page < object_page_count else None
             ),
             alerts=alerts,
+        )
+
+    @staticmethod
+    def _alert_page_url(query: AlertHistoryQuery, page: int) -> str:
+        parameters: dict[str, str | int] = {}
+        if query.event_type:
+            parameters["type"] = query.event_type
+        if query.severity:
+            parameters["severity"] = query.severity
+        if page > 1:
+            parameters["page"] = page
+        encoded = urlencode(parameters)
+        return f"/alerts?{encoded}" if encoded else "/alerts"
+
+    async def alert_history(self, query: AlertHistoryQuery | None = None) -> AlertHistoryView:
+        query = query or AlertHistoryQuery()
+        event_type = query.event_type or None
+        severity = query.severity or None
+        total = self._store.count_alertable_events(
+            event_type=event_type,
+            severity=severity,
+        )
+        page_count = max(1, (total + query.page_size - 1) // query.page_size)
+        page = min(query.page, page_count)
+        offset = (page - 1) * query.page_size
+        systems = self._store.list_systems()
+        system_names = {system.system_id: system.display_name for system in systems}
+        alerts = tuple(
+            self._event_view(event, system_names)
+            for event in self._store.list_alertable_events_page(
+                offset=offset,
+                limit=query.page_size,
+                event_type=event_type,
+                severity=severity,
+            )
+        )
+        return AlertHistoryView(
+            alerts=alerts,
+            total=total,
+            page=page,
+            page_count=page_count,
+            page_start=offset + 1 if alerts else 0,
+            page_end=offset + len(alerts),
+            event_type_filter=query.event_type,
+            severity_filter=query.severity,
+            previous_page_url=(self._alert_page_url(query, page - 1) if page > 1 else None),
+            next_page_url=(self._alert_page_url(query, page + 1) if page < page_count else None),
+            loaded_at=datetime.now(UTC),
         )
 
     async def object_detail(

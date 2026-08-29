@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Bounded history of durable local operational alerts.">
+  <title>Operational alerts · Async API View</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to alert history</a>
+  <header class="topbar">
+    <div><p class="eyebrow">Local operations</p><h1>Alert history</h1></div>
+    <a class="back-link" href="/">← Remote state</a>
+  </header>
+
+  <main id="main">
+    <section aria-labelledby="alerts-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">Durable and redacted</p><h2 id="alerts-heading">Alertable failures</h2></div>
+        <span class="count">{% if view.total %}{{ view.page_start }}-{{ view.page_end }} of {{ view.total }}{% else %}0{% endif %}</span>
+      </div>
+      <form class="alert-toolbar" method="get" action="/alerts" aria-label="Filter alert history">
+        <label>Event type<input name="type" value="{{ view.event_type_filter|display }}" maxlength="128" pattern="[a-z][a-z0-9_.-]{0,127}" placeholder="queue.coordinator.failed"></label>
+        <label>Severity<select name="severity"><option value=""{% if not view.severity_filter %} selected{% endif %}>All</option><option value="info"{% if view.severity_filter == 'info' %} selected{% endif %}>Info</option><option value="warning"{% if view.severity_filter == 'warning' %} selected{% endif %}>Warning</option><option value="error"{% if view.severity_filter == 'error' %} selected{% endif %}>Error</option><option value="critical"{% if view.severity_filter == 'critical' %} selected{% endif %}>Critical</option></select></label>
+        <button type="submit">Filter</button>
+        {% if view.event_type_filter or view.severity_filter %}<a href="/alerts">Clear</a>{% endif %}
+      </form>
+      {% if view.alerts %}
+      <div class="alert-list">
+        {% for alert in view.alerts %}
+        <article class="alert-row">
+          <span class="badge badge--{{ alert.severity|display }}">{{ alert.severity|display }}</span>
+          <div>
+            <strong>{{ alert.event_type|display }}</strong>
+            <span class="subtle">{{ alert.system_name|display }} · <time>{{ alert.occurred_at|timestamp }}</time>{% if alert.error_class %} · {{ alert.error_class|display }}{% endif %}</span>
+            <span>{{ alert.summary|display }}</span>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% if view.page_count > 1 %}
+      <nav class="pagination" aria-label="Alert history pages">
+        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← Previous</a>{% else %}<span></span>{% endif %}
+        <span>Page {{ view.page }} of {{ view.page_count }}</span>
+        {% if view.next_page_url %}<a href="{{ view.next_page_url }}">Next →</a>{% else %}<span></span>{% endif %}
+      </nav>
+      {% endif %}
+      {% else %}
+      <div class="empty-state"><strong>{% if view.event_type_filter or view.severity_filter %}No matching alertable failures{% else %}No alertable failures stored{% endif %}</strong><p>{% if view.event_type_filter or view.severity_filter %}No durable alert matches the selected event type and severity.{% else %}No durable local failure has reached alertable state.{% endif %}</p></div>
+      {% endif %}
+    </section>
+  </main>
+  <footer>Alert summaries are bounded and redacted before persistence.</footer>
+</body>
+</html>

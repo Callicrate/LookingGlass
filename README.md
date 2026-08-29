@@ -19,6 +19,7 @@ The current runnable slice can:
 - register a Databricks workspace by named CLI profile;
 - filter and page through cached Workspace and Unity Catalog metadata in a loopback dashboard;
 - drill into one object's facets, provenance, current direct children, and registered refreshes;
+- browse and filter bounded pages of durable redacted operational alerts;
 - submit a generic refresh request;
 - validate, queue, and execute it through the Databricks worker;
 - ingest normalized observations into SQLite;

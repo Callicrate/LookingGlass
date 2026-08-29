@@ -14,7 +14,7 @@ from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
 from async_api_view.contracts import PresenceState, RemoteObject
 from async_api_view.storage import SQLiteStore, StoredAction
-from async_api_view.web import DashboardQuery, ObjectDetailQuery, RefreshRequest
+from async_api_view.web import AlertHistoryQuery, DashboardQuery, ObjectDetailQuery, RefreshRequest
 
 
 @pytest.fixture
@@ -668,6 +668,42 @@ async def test_repeated_worker_loop_failures_do_not_flood_events(tmp_path: Path)
     assert len(worker_events) == 1
 
     await runtime.stop()
+
+
+@pytest.mark.anyio
+async def test_alert_history_pages_and_filters_durable_events(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    started = datetime(2026, 8, 28, tzinfo=UTC)
+    for index in range(120):
+        runtime.store.record_runtime_failure(
+            event_type=(
+                "queue.coordinator.failed" if index % 2 == 0 else "queue.adapter_worker.failed"
+            ),
+            summary=f"Runtime failure {index}",
+            occurred_at=started + timedelta(seconds=index),
+        )
+
+    first = await runtime.backend.alert_history()
+    filtered = await runtime.backend.alert_history(
+        AlertHistoryQuery(
+            page=2,
+            event_type="queue.coordinator.failed",
+            severity="error",
+        )
+    )
+
+    assert first.total == 120
+    assert len(first.alerts) == 50
+    assert first.alerts[0].summary == "Runtime failure 119"
+    assert first.next_page_url == "/alerts?page=2"
+    assert filtered.total == 60
+    assert len(filtered.alerts) == 10
+    assert filtered.page_start == 51
+    assert filtered.page_end == 60
+    assert filtered.previous_page_url == ("/alerts?type=queue.coordinator.failed&severity=error")
+    assert filtered.next_page_url is None
+    assert {alert.event_type for alert in filtered.alerts} == {"queue.coordinator.failed"}
+    runtime.store.close()
 
 
 def test_runtime_recovery_backoff_has_a_floor(tmp_path: Path) -> None:

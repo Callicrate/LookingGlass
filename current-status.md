@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 22:12 ET
+Updated: 2026-08-28 22:34 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 185 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, and the branch-coverage gate passed.
-- Runtime surface: 4 CLI commands and 6 HTTP routes, verified from source.
-- Version control: local `main` is clean; every completed implementation batch is committed with focused messages.
-- Active review round: fresh residual-risk audit, package smoke validation, and low-coverage boundary triage.
+- Latest checks: 196 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, and the branch-coverage gate passed.
+- Runtime surface: 4 CLI commands and 7 HTTP routes, verified from source.
+- Version control: local `main` includes the verified bounded alert-history batch; completed implementation batches are committed with focused messages.
+- Active review round: select the next high-value local improvement after closing the alert-history checkpoint.
 - Next progress report due: 2026-08-28 23:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -37,6 +37,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Surface a bounded recent projection of durable alertable failures.
 - [x] Enforce an aggregate branch-coverage floor in CI.
 - [x] Choose bounded object/containment navigation over lower-value full alert history filtering.
+- [x] Add bounded, filterable full alert history without expanding dashboard query cost.
 
 ## Evidence and decisions
 
@@ -80,7 +81,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The object page passed desktop/mobile interaction and screenshot checks with no console or network errors; Lighthouse scored 100 in every audited category on both profiles.
 - The exact locked CI sequence passes on native Windows and Ubuntu/WSL with Python 3.12; CI now runs both operating systems with fail-fast disabled.
 - A fresh post-commit review of the object route, containment join/index, refresh authorization, CI matrix, migrations, and docs found no remaining medium-or-higher local defect.
-- The real ignored local database is migrated through `0006_relationship_navigation` and still passes integrity and foreign-key checks.
+- Full alert history is an explicit 50-row page with a 10,000-page ceiling, exact filtered totals, type/severity filters, stable ordering, and preserved filter state across pagination.
+- Alert counts and all four page-query shapes use static parameterized SQL; dedicated recency indexes avoid temporary sorting for unfiltered, type-only, severity-only, and combined filters.
+- The history route reports invalid or duplicate query input as 400 and backend failure as a generic 503; the backend-less fallback was corrected so missing state cannot be misrepresented as an empty history.
+- The alert-history page passed desktop/mobile browser checks without console or network errors; Lighthouse scored 100 in every audited category on both profiles.
+- Independent review found no release blocker in the alert-history diff; its sole low-severity fallback concern was fixed and covered directly.
+- Aggregate branch coverage is now 84% with 196 passing tests.
+- The real ignored local database is migrated through `0007_operational_event_filters`; `PRAGMA integrity_check` is `ok` with zero foreign-key violations.
 
 ## Risks / watch list
 

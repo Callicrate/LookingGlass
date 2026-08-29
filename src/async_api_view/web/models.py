@@ -12,6 +12,7 @@ MAX_DISPLAY_LENGTH = 512
 DEFAULT_OBJECT_PAGE_SIZE = 50
 MAX_OBJECT_QUERY_LENGTH = 128
 MAX_OBJECT_PAGE = 1_000_000
+MAX_ALERT_PAGE = 10_000
 _BIDI_CONTROLS = frozenset(
     {
         "\u061c",
@@ -28,7 +29,8 @@ _BIDI_CONTROLS = frozenset(
         "\u2069",
     }
 )
-_OBJECT_TYPE = re.compile(r"[a-z][a-z0-9_.-]{0,127}")
+_CONTRACT_KEY = re.compile(r"[a-z][a-z0-9_.-]{0,127}")
+_ALERT_SEVERITIES = frozenset({"", "info", "warning", "error", "critical"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,8 +61,26 @@ class ObjectDetailQuery:
             raise ValueError(f"relationship page must be between 1 and {MAX_OBJECT_PAGE}")
         if not 1 <= self.relationship_page_size <= 100:
             raise ValueError("relationship page size must be between 1 and 100")
-        if self.object_type and _OBJECT_TYPE.fullmatch(self.object_type) is None:
+        if self.object_type and _CONTRACT_KEY.fullmatch(self.object_type) is None:
             raise ValueError("object type filter is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class AlertHistoryQuery:
+    page: int = 1
+    page_size: int = DEFAULT_OBJECT_PAGE_SIZE
+    event_type: str = ""
+    severity: str = ""
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.page <= MAX_ALERT_PAGE:
+            raise ValueError(f"alert page must be between 1 and {MAX_ALERT_PAGE}")
+        if not 1 <= self.page_size <= 100:
+            raise ValueError("alert page size must be between 1 and 100")
+        if self.event_type and _CONTRACT_KEY.fullmatch(self.event_type) is None:
+            raise ValueError("alert event type is invalid")
+        if self.severity not in _ALERT_SEVERITIES:
+            raise ValueError("alert severity is invalid")
 
 
 def display_text(value: object | None, *, limit: int = MAX_DISPLAY_LENGTH) -> str:
@@ -192,6 +212,21 @@ class OperationalEventView:
 
 
 @dataclass(frozen=True, slots=True)
+class AlertHistoryView:
+    alerts: tuple[OperationalEventView, ...] = ()
+    total: int = 0
+    page: int = 1
+    page_count: int = 1
+    page_start: int = 0
+    page_end: int = 0
+    event_type_filter: str = ""
+    severity_filter: str = ""
+    previous_page_url: str | None = None
+    next_page_url: str | None = None
+    loaded_at: datetime | str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SystemView:
     system_id: str
     name: str
@@ -258,6 +293,8 @@ class WebBackend(Protocol):
         self, object_id: str, query: ObjectDetailQuery | None = None
     ) -> ObjectDetailView | None: ...
 
+    async def alert_history(self, query: AlertHistoryQuery | None = None) -> AlertHistoryView: ...
+
     async def submit_refresh(self, request: RefreshRequest) -> str: ...
 
     async def intent(self, intent_id: str) -> IntentView | None: ...
@@ -286,6 +323,10 @@ class UnavailableBackend:
     ) -> ObjectDetailView | None:
         del object_id, query
         return None
+
+    async def alert_history(self, query: AlertHistoryQuery | None = None) -> AlertHistoryView:
+        del query
+        raise RuntimeError("local state services unavailable")
 
     async def submit_refresh(self, request: RefreshRequest) -> str:
         del request

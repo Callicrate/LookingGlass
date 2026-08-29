@@ -3,6 +3,8 @@
 from .app import create_app
 from .models import (
     ActivityView,
+    AlertHistoryQuery,
+    AlertHistoryView,
     DashboardQuery,
     DashboardView,
     FacetView,
@@ -22,6 +24,8 @@ from .models import (
 
 __all__ = [
     "ActivityView",
+    "AlertHistoryQuery",
+    "AlertHistoryView",
     "DashboardQuery",
     "DashboardView",
     "FacetView",

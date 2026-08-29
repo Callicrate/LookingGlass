@@ -16,6 +16,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .models import (
+    AlertHistoryQuery,
     DashboardQuery,
     DashboardView,
     IntentView,
@@ -128,6 +129,22 @@ def _object_detail_query(request: Request) -> ObjectDetailQuery:
         raise HTTPException(status_code=400, detail="Invalid object query") from exc
 
 
+def _alert_history_query(request: Request) -> AlertHistoryQuery:
+    values = list(request.query_params.multi_items())
+    if any(name not in {"page", "type", "severity"} for name, _value in values):
+        raise HTTPException(status_code=400, detail="Unexpected alert query parameter")
+    if len({name for name, _value in values}) != len(values):
+        raise HTTPException(status_code=400, detail="Duplicate alert query parameter")
+    try:
+        return AlertHistoryQuery(
+            page=int(request.query_params.get("page", "1")),
+            event_type=request.query_params.get("type", ""),
+            severity=request.query_params.get("severity", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid alert query") from exc
+
+
 async def _parse_refresh_form(request: Request, csrf_token: str) -> RefreshRequest:
     if not _same_origin(request):
         raise HTTPException(status_code=403, detail="A same-origin request is required")
@@ -237,6 +254,16 @@ def create_app(
     @app.get("/favicon.ico", response_class=FileResponse, include_in_schema=False)
     async def favicon() -> FileResponse:
         return FileResponse(root / "static" / "favicon.svg", media_type="image/svg+xml")
+
+    @app.get("/alerts", response_class=HTMLResponse)
+    async def alert_history(request: Request) -> HTMLResponse:
+        query = _alert_history_query(request)
+        try:
+            view = await app.state.backend.alert_history(query)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Alert history is unavailable") from exc
+        content = templates.get_template("alerts.html").render(request=request, view=view)
+        return HTMLResponse(content)
 
     @app.get("/objects/{object_id}", response_class=HTMLResponse)
     async def object_page(request: Request, object_id: str) -> HTMLResponse:

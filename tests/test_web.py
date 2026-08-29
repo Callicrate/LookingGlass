@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from async_api_view.web import (
     ActivityView,
+    AlertHistoryQuery,
+    AlertHistoryView,
     DashboardQuery,
     DashboardView,
     FacetView,
@@ -53,13 +55,16 @@ class FakeBackend:
     dashboard_view: DashboardView = field(default_factory=DashboardView)
     intent_view: IntentView | None = None
     object_view: ObjectDetailView | None = None
+    alert_view: AlertHistoryView = field(default_factory=AlertHistoryView)
     intent_id: str = "intent-1"
     dashboard_error: Exception | None = None
     intent_error: Exception | None = None
     object_error: Exception | None = None
+    alert_error: Exception | None = None
     submitted: list[RefreshRequest] = field(default_factory=list)
     dashboard_queries: list[DashboardQuery] = field(default_factory=list)
     object_queries: list[tuple[str, ObjectDetailQuery]] = field(default_factory=list)
+    alert_queries: list[AlertHistoryQuery] = field(default_factory=list)
 
     async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView:
         if self.dashboard_error:
@@ -115,6 +120,18 @@ class FakeBackend:
             )
             if self.object_view is not None
             else None
+        )
+
+    async def alert_history(self, query: AlertHistoryQuery | None = None) -> AlertHistoryView:
+        if self.alert_error:
+            raise self.alert_error
+        normalized_query = query or AlertHistoryQuery()
+        self.alert_queries.append(normalized_query)
+        return replace(
+            self.alert_view,
+            page=normalized_query.page,
+            event_type_filter=normalized_query.event_type,
+            severity_filter=normalized_query.severity,
         )
 
 
@@ -221,6 +238,28 @@ def ready_object_detail() -> ObjectDetailView:
     )
 
 
+def ready_alert_history() -> AlertHistoryView:
+    return AlertHistoryView(
+        alerts=(
+            OperationalEventView(
+                event_type="queue.coordinator.failed",
+                severity="error",
+                summary='<script>alert("x")</script>',
+                occurred_at=NOW,
+                system_name="Local runtime",
+                error_class="unknown_adapter_failure",
+            ),
+        ),
+        total=51,
+        page=1,
+        page_count=2,
+        page_start=1,
+        page_end=50,
+        next_page_url="/alerts?page=2",
+        loaded_at=NOW,
+    )
+
+
 def test_empty_dashboard_explains_unknown_state() -> None:
     response = client_for(FakeBackend()).get("/")
 
@@ -228,6 +267,7 @@ def test_empty_dashboard_explains_unknown_state() -> None:
     assert "No systems configured" in response.text
     assert "No cached objects" in response.text
     assert "Refresh unsupported" in response.text
+    assert "View history" in response.text
 
 
 def test_display_text_replaces_terminal_and_bidi_controls() -> None:
@@ -356,11 +396,70 @@ def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
 
     assert response.status_code == 200
     assert "Recent alerts" in response.text
-    assert "Latest 1" in response.text
+    assert "View history" in response.text
     assert "refresh.action.failed" in response.text
     assert "connection_timeout" in response.text
     assert '<script>alert("x")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
+
+
+def test_alert_history_shows_filters_paging_and_escaped_summaries() -> None:
+    backend = FakeBackend(alert_view=ready_alert_history())
+
+    response = client_for(backend).get(
+        "/alerts?type=queue.coordinator.failed&severity=error&page=1"
+    )
+
+    assert response.status_code == 200
+    assert "Alert history" in response.text
+    assert "queue.coordinator.failed" in response.text
+    assert "unknown_adapter_failure" in response.text
+    assert "/alerts?page=2" in response.text
+    assert '<script>alert("x")</script>' not in response.text
+    assert "&lt;script&gt;alert" in response.text
+    assert backend.alert_queries == [
+        AlertHistoryQuery(
+            event_type="queue.coordinator.failed",
+            severity="error",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?page=0",
+        "?page=10001",
+        "?page=1000001",
+        "?severity=debug",
+        "?type=QUEUE.BAD",
+        "?type=a&type=b",
+        "?unknown=value",
+    ],
+)
+def test_alert_history_rejects_invalid_query_before_backend(query: str) -> None:
+    backend = FakeBackend(alert_view=ready_alert_history())
+
+    response = client_for(backend).get(f"/alerts{query}")
+
+    assert response.status_code == 400
+    assert backend.alert_queries == []
+
+
+def test_alert_history_returns_safe_unavailable_response() -> None:
+    response = client_for(FakeBackend(alert_error=RuntimeError("secret profile token"))).get(
+        "/alerts"
+    )
+
+    assert response.status_code == 503
+    assert "secret profile token" not in response.text
+
+
+def test_alert_history_default_backend_reports_unavailable() -> None:
+    response = TestClient(create_app(allowed_hosts=("testserver",))).get("/alerts")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Alert history is unavailable"}
 
 
 def test_remote_markup_is_escaped() -> None:

@@ -56,6 +56,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0004_configured_system_identities",
             "0005_operational_event_recency",
             "0006_relationship_navigation",
+            "0007_operational_event_filters",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -134,6 +135,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0004_configured_system_identities",
         "0005_operational_event_recency",
         "0006_relationship_navigation",
+        "0007_operational_event_filters",
     )
     assert versions == (expected,) * workers
 
@@ -229,6 +231,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0004_configured_system_identities",
             "0005_operational_event_recency",
             "0006_relationship_navigation",
+            "0007_operational_event_filters",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -488,8 +491,36 @@ def test_runtime_failure_is_bounded_and_diagnostics_redact_json_and_home_paths(t
         summary="Worker stopped unexpectedly",
         occurred_at=NOW + timedelta(seconds=1),
     )
+    store._connection.execute(
+        """
+        INSERT INTO operational_events (
+            event_id, idempotency_key, event_type, severity, alertable,
+            redacted_summary, occurred_at
+        ) VALUES (?, ?, ?, ?, 0, ?, ?)
+        """,
+        (
+            str(uuid4()),
+            str(uuid4()),
+            "refresh.expected",
+            "info",
+            "Expected local disposition",
+            NOW.isoformat(),
+        ),
+    )
     assert len(store.list_operational_events(alertable_only=True)) == 2
     assert store.list_operational_events(alertable_only=True, limit=1) == (later,)
+    assert store.count_alertable_events() == 2
+    assert store.count_alertable_events(event_type="queue.coordinator.failed") == 1
+    assert store.count_alertable_events(severity="error") == 2
+    assert len(store.list_alertable_events_page(offset=0, limit=10)) == 2
+    with pytest.raises(ValueError, match="offset"):
+        store.list_alertable_events_page(offset=-1, limit=10)
+    with pytest.raises(ValueError, match="limit"):
+        store.list_alertable_events_page(offset=0, limit=101)
+    with pytest.raises(ValueError, match="event_type"):
+        store.list_alertable_events_page(offset=0, limit=10, event_type="BAD TYPE")
+    with pytest.raises(ValueError, match="severity"):
+        store.list_alertable_events_page(offset=0, limit=10, severity="debug")
     query_plan = store._connection.execute(
         """
         EXPLAIN QUERY PLAN
@@ -500,6 +531,44 @@ def test_runtime_failure_is_bounded_and_diagnostics_redact_json_and_home_paths(t
         """
     ).fetchall()
     assert any("ix_operational_events_alertable_recency" in row[3] for row in query_plan)
+    combined_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT * FROM operational_events
+        WHERE alertable = 1 AND event_type = ? AND severity = ?
+        ORDER BY occurred_at DESC, event_id
+        LIMIT 50
+        """,
+        ("queue.coordinator.failed", "error"),
+    ).fetchall()
+    type_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT * FROM operational_events
+        WHERE alertable = 1 AND event_type = ?
+        ORDER BY occurred_at DESC, event_id
+        LIMIT 50
+        """,
+        ("queue.coordinator.failed",),
+    ).fetchall()
+    severity_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT * FROM operational_events
+        WHERE alertable = 1 AND severity = ?
+        ORDER BY occurred_at DESC, event_id
+        LIMIT 50
+        """,
+        ("error",),
+    ).fetchall()
+    assert any(
+        "ix_operational_events_alertable_type_severity_recency" in row[3] for row in combined_plan
+    )
+    assert any("ix_operational_events_alertable_type_recency" in row[3] for row in type_plan)
+    assert any(
+        "ix_operational_events_alertable_severity_recency" in row[3] for row in severity_plan
+    )
+    assert not any("TEMP B-TREE" in row[3] for row in (*combined_plan, *type_plan, *severity_plan))
     with pytest.raises(ValueError, match="registered"):
         store.record_runtime_failure(
             event_type="refresh.action.failed",

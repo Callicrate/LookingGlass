@@ -119,6 +119,7 @@ _RUNTIME_EVENT_TYPES = frozenset(
     }
 )
 _RUNTIME_SUMMARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:;()_-]{0,511}$")
+_ALERT_SEVERITIES = frozenset({"info", "warning", "error", "critical"})
 _CAPABILITY_KEY_ALTER_TABLES = {
     "ALTER TABLE refresh_credit ADD COLUMN capability_key TEXT;": "refresh_credit",
     "ALTER TABLE refresh_intent_scopes ADD COLUMN capability_key TEXT;": "refresh_intent_scopes",
@@ -2202,6 +2203,20 @@ class SQLiteStore:
                 )
             self._refresh_action_parent_aggregates(connection, action_id=completion.action_id)
 
+    @staticmethod
+    def _operational_event_from_row(row: sqlite3.Row) -> OperationalEventRecord:
+        return OperationalEventRecord(
+            event_id=row["event_id"],
+            event_type=row["event_type"],
+            severity=row["severity"],
+            alertable=bool(row["alertable"]),
+            system_id=row["system_id"],
+            action_id=row["action_id"],
+            error_class=row["error_class"],
+            redacted_summary=row["redacted_summary"],
+            occurred_at=_dt(row["occurred_at"]),  # type: ignore[arg-type]
+        )
+
     def list_operational_events(
         self,
         *,
@@ -2239,20 +2254,84 @@ class SQLiteStore:
             parameters = (*parameters, limit)
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
-        return tuple(
-            OperationalEventRecord(
-                event_id=row["event_id"],
-                event_type=row["event_type"],
-                severity=row["severity"],
-                alertable=bool(row["alertable"]),
-                system_id=row["system_id"],
-                action_id=row["action_id"],
-                error_class=row["error_class"],
-                redacted_summary=row["redacted_summary"],
-                occurred_at=_dt(row["occurred_at"]),  # type: ignore[arg-type]
+        return tuple(self._operational_event_from_row(row) for row in rows)
+
+    def count_alertable_events(
+        self, *, event_type: str | None = None, severity: str | None = None
+    ) -> int:
+        if event_type is not None:
+            require_contract_key(event_type, "event_type")
+        if severity is not None and severity not in _ALERT_SEVERITIES:
+            raise ValueError("severity is not registered")
+        if event_type is None and severity is None:
+            statement = "SELECT COUNT(*) FROM operational_events WHERE alertable = 1"
+            parameters: tuple[object, ...] = ()
+        elif event_type is not None and severity is None:
+            statement = (
+                "SELECT COUNT(*) FROM operational_events WHERE alertable = 1 AND event_type = ?"
             )
-            for row in rows
-        )
+            parameters = (event_type,)
+        elif event_type is None:
+            statement = (
+                "SELECT COUNT(*) FROM operational_events WHERE alertable = 1 AND severity = ?"
+            )
+            parameters = (severity,)
+        else:
+            statement = (
+                "SELECT COUNT(*) FROM operational_events "
+                "WHERE alertable = 1 AND event_type = ? AND severity = ?"
+            )
+            parameters = (event_type, severity)
+        with self._lock:
+            row = self._connection.execute(statement, parameters).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def list_alertable_events_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        event_type: str | None = None,
+        severity: str | None = None,
+    ) -> tuple[OperationalEventRecord, ...]:
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("alert offset must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("alert limit must be between 1 and 100")
+        if event_type is not None:
+            require_contract_key(event_type, "event_type")
+        if severity is not None and severity not in _ALERT_SEVERITIES:
+            raise ValueError("severity is not registered")
+        if event_type is None and severity is None:
+            statement = (
+                "SELECT * FROM operational_events WHERE alertable = 1 "
+                "ORDER BY occurred_at DESC, event_id LIMIT ? OFFSET ?"
+            )
+            parameters: tuple[object, ...] = (limit, offset)
+        elif event_type is not None and severity is None:
+            statement = (
+                "SELECT * FROM operational_events "
+                "WHERE alertable = 1 AND event_type = ? "
+                "ORDER BY occurred_at DESC, event_id LIMIT ? OFFSET ?"
+            )
+            parameters = (event_type, limit, offset)
+        elif event_type is None:
+            statement = (
+                "SELECT * FROM operational_events "
+                "WHERE alertable = 1 AND severity = ? "
+                "ORDER BY occurred_at DESC, event_id LIMIT ? OFFSET ?"
+            )
+            parameters = (severity, limit, offset)
+        else:
+            statement = (
+                "SELECT * FROM operational_events "
+                "WHERE alertable = 1 AND event_type = ? AND severity = ? "
+                "ORDER BY occurred_at DESC, event_id LIMIT ? OFFSET ?"
+            )
+            parameters = (event_type, severity, limit, offset)
+        with self._lock:
+            rows = self._connection.execute(statement, parameters).fetchall()
+        return tuple(self._operational_event_from_row(row) for row in rows)
 
     def record_runtime_failure(
         self, *, event_type: str, summary: str, occurred_at: datetime
@@ -2290,17 +2369,7 @@ class SQLiteStore:
             ).fetchone()
         if row is None:  # pragma: no cover - transaction invariant
             raise RuntimeError("runtime failure event was not recorded")
-        return OperationalEventRecord(
-            event_id=row["event_id"],
-            event_type=row["event_type"],
-            severity=row["severity"],
-            alertable=bool(row["alertable"]),
-            system_id=row["system_id"],
-            action_id=row["action_id"],
-            error_class=row["error_class"],
-            redacted_summary=row["redacted_summary"],
-            occurred_at=_dt(row["occurred_at"]),  # type: ignore[arg-type]
-        )
+        return self._operational_event_from_row(row)
 
     def _guard_cancel(
         self, connection: sqlite3.Connection, *, action_id: str, reason: str
