@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
+import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import closing, contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -151,6 +153,46 @@ def _canonical_config_id(value: str) -> str:
             "config_id may contain only ASCII letters, digits, periods, underscores, and hyphens"
         )
     return normalized
+
+
+def backup_sqlite_database(source_path: str | Path, destination_path: str | Path) -> Path:
+    """Publish one validated online SQLite snapshot without overwriting a path."""
+
+    source = Path(source_path).resolve(strict=True)
+    if not source.is_file():
+        raise ValueError("backup source must be a SQLite file")
+    destination = Path(destination_path).resolve(strict=False)
+    if destination == source:
+        raise ValueError("backup destination must differ from the source database")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if os.path.lexists(destination):
+        raise FileExistsError(f"backup destination already exists: {destination}")
+
+    with tempfile.NamedTemporaryFile(
+        prefix=".rookery-backup-",
+        suffix=".sqlite3.tmp",
+        dir=destination.parent,
+        delete=False,
+    ) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        source_uri = f"{source.as_uri()}?mode=ro"
+        with (
+            closing(sqlite3.connect(source_uri, uri=True)) as source_connection,
+            closing(sqlite3.connect(temporary_path)) as destination_connection,
+        ):
+            source_connection.execute("PRAGMA query_only = ON")
+            source_connection.execute("PRAGMA busy_timeout = 5000")
+            source_connection.backup(destination_connection)
+            integrity = destination_connection.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise RuntimeError("backup failed its SQLite integrity check")
+        os.link(temporary_path, destination)
+    except sqlite3.Error as exc:
+        raise RuntimeError("could not create a consistent SQLite backup") from exc
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return destination
 
 
 def _utc_text(value: datetime) -> str:

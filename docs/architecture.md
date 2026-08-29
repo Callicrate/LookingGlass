@@ -1690,7 +1690,7 @@ Exit condition: the same CLI-backed worker passes contract and live tests for ev
 
 - Complete size, encryption, redaction, backup, and local-access controls for stored content.
 - Add alert retention, compaction, and operator policy around the implemented durable UI projection.
-- Add projection replay, poison-item handling, adapter compatibility rollout, backup, and operator tooling.
+- Add projection replay, adapter compatibility rollout, restore, and broader operator tooling.
 
 ### Rollback
 

@@ -18,7 +18,7 @@ from .models import (
     StoredAction,
     SystemRecord,
 )
-from .sqlite import SQLiteStore
+from .sqlite import SQLiteStore, backup_sqlite_database
 
 __all__ = [
     "ActionActivityRecord",
@@ -32,4 +32,5 @@ __all__ = [
     "SQLiteStore",
     "StoredAction",
     "SystemRecord",
+    "backup_sqlite_database",
 ]

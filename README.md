@@ -104,10 +104,12 @@ Workspace content artifact persistence remains disabled in the composed applicat
 | `async-api-view init` | Apply SQLite migrations and idempotently register configured systems/scopes. |
 | `async-api-view doctor` | Verify the existing Databricks CLI compatibility surface. |
 | `async-api-view run-once` | Drain currently eligible local coordinator and worker activity, then stop. |
+| `async-api-view backup --output <path>` | Create a consistent standalone SQLite snapshot without overwriting an existing path. |
 | `async-api-view serve` | Run the loopback UI, coordinator, and Databricks worker in one process. |
 
 Pass `--config <path>` before the subcommand.
 Use `--log-level DEBUG`, `INFO`, `WARNING`, or `ERROR` when needed.
+`backup` uses SQLite's online snapshot operation, so it includes committed WAL state while `serve` is running; the completed copy is integrity-checked before it appears at the requested path.
 
 ## Verify
 

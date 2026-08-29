@@ -27,7 +27,8 @@ from async_api_view.contracts import (
     TargetRef,
     UpdateMode,
 )
-from async_api_view.storage import SQLiteStore
+from async_api_view.storage import SQLiteStore, backup_sqlite_database
+from async_api_view.storage import sqlite as sqlite_storage
 from async_api_view.storage.sqlite import _redact
 
 NOW = datetime(2026, 8, 24, 12, tzinfo=UTC)
@@ -79,6 +80,73 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
         ).fetchall()
         assert any("ix_relationships_subject_predicate" in row[3] for row in child_plan)
         assert not any("TEMP B-TREE" in row[3] for row in child_plan)
+
+
+def test_online_backup_captures_live_wal_and_never_overwrites(tmp_path) -> None:
+    source = tmp_path / "state.sqlite3"
+    destination = tmp_path / "backups" / "state.sqlite3"
+    with SQLiteStore(source) as store:
+        store._connection.execute("PRAGMA wal_autocheckpoint = 0")
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local",
+            profile="DEFAULT",
+            workspace_root="/Shared",
+            now=NOW,
+        )
+        assert Path(f"{source}-wal").is_file()
+
+        published = backup_sqlite_database(source, destination)
+
+        assert published == destination.resolve()
+        assert store.get_system(seeded.system.system_id) is not None
+
+    with sqlite3.connect(destination) as backup:
+        assert backup.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert (
+            backup.execute(
+                "SELECT display_name FROM systems WHERE system_id = ?",
+                (seeded.system.system_id,),
+            ).fetchone()[0]
+            == "local"
+        )
+    original = destination.read_bytes()
+    with pytest.raises(FileExistsError, match="already exists"):
+        backup_sqlite_database(source, destination)
+    assert destination.read_bytes() == original
+    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+
+
+def test_backup_publication_race_preserves_competing_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "state.sqlite3"
+    destination = tmp_path / "backups" / "state.sqlite3"
+    with SQLiteStore(source):
+        pass
+
+    def lose_publication_race(_source: Path, contested: Path) -> None:
+        contested.write_bytes(b"competing backup")
+        raise FileExistsError("destination appeared during publication")
+
+    monkeypatch.setattr(sqlite_storage.os, "link", lose_publication_race)
+
+    with pytest.raises(FileExistsError, match="destination appeared"):
+        backup_sqlite_database(source, destination)
+
+    assert destination.read_bytes() == b"competing backup"
+    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+
+
+def test_backup_wraps_malformed_source_and_cleans_temporary_file(tmp_path) -> None:
+    source = tmp_path / "not-sqlite.sqlite3"
+    destination = tmp_path / "backups" / "state.sqlite3"
+    source.write_bytes(b"not a SQLite database")
+
+    with pytest.raises(RuntimeError, match="consistent SQLite backup"):
+        backup_sqlite_database(source, destination)
+
+    assert not destination.exists()
+    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
 
 
 @pytest.mark.parametrize(

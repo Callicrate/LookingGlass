@@ -1,4 +1,5 @@
 import secrets
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,6 +36,26 @@ def test_init_rejects_missing_config(tmp_path: Path) -> None:
     result = cli.main(["--config", str(tmp_path / "missing.toml"), "init"])
 
     assert result == 2
+
+
+def test_backup_command_creates_snapshot_and_refuses_overwrite(tmp_path: Path) -> None:
+    database = tmp_path / "state.sqlite3"
+    output = tmp_path / "snapshots" / "state.sqlite3"
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[app]\ndatabase_path = "{database.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    assert cli.main(["--config", str(config), "init"]) == 0
+
+    created = cli.main(["--config", str(config), "backup", "--output", str(output)])
+    refused = cli.main(["--config", str(config), "backup", "--output", str(output)])
+
+    assert created == 0
+    assert refused == 2
+    assert output.is_file()
+    with sqlite3.connect(output) as snapshot:
+        assert snapshot.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
 def test_serve_closes_runtime_store_when_server_start_fails(

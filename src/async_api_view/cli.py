@@ -14,6 +14,7 @@ import uvicorn
 from async_api_view.adapters import CliRunner
 from async_api_view.composition import ApplicationRuntime, build_runtime
 from async_api_view.config import ConfigError, ProjectSettings, load_settings
+from async_api_view.storage import backup_sqlite_database
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,16 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "run-once",
         help="Drain currently eligible local coordinator and adapter work, then stop.",
+    )
+    backup = subparsers.add_parser(
+        "backup",
+        help="Create a consistent no-overwrite snapshot of the local database.",
+    )
+    backup.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="New SQLite snapshot path; existing paths are never overwritten.",
     )
     serve = subparsers.add_parser(
         "serve", help="Run the loopback dashboard and background workers."
@@ -141,6 +152,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 asyncio.run(_run_once(runtime))
             finally:
                 runtime.store.close()
+        elif args.command == "backup":
+            destination = backup_sqlite_database(settings.app.database_path, args.output)
+            logger.info("Created consistent SQLite backup at %s", destination)
         elif args.command == "serve":
             runtime = build_runtime(settings)
             try:
