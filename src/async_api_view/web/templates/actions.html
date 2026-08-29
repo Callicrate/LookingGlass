@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Bounded local history of durable adapter actions.">
+  <title>Action activity · Async API View</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to action activity</a>
+  <header class="topbar">
+    <div><p class="eyebrow">Local operations</p><h1>Action activity</h1></div>
+    <a class="back-link" href="/">← Cached state</a>
+  </header>
+  <main id="main">
+    <section aria-labelledby="activity-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">Durable worker history</p><h2 id="activity-heading">Adapter actions</h2></div>
+        <span class="count">{% if view.total %}{{ view.page_start }}-{{ view.page_end }} of {{ view.total }}{% else %}0{% endif %} actions</span>
+      </div>
+      <form class="activity-toolbar" method="get" action="/actions">
+        <label for="action-state">State
+          <select id="action-state" name="state">
+            <option value="">All states</option>
+            {% for state in ['ready', 'leased', 'running', 'retry_wait', 'satisfied', 'succeeded', 'partial', 'failed', 'cancelled'] %}
+            <option value="{{ state }}" {% if view.state_filter == state %}selected{% endif %}>{{ state|replace('_', ' ')|capitalize }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label for="action-system">System
+          <select id="action-system" name="system">
+            <option value="">All systems</option>
+            {% for system in view.systems %}<option value="{{ system.system_id|display }}" {% if view.system_filter == system.system_id %}selected{% endif %}>{{ system.name|display }}</option>{% endfor %}
+          </select>
+        </label>
+        <button type="submit">Filter</button>
+        {% if view.state_filter or view.system_filter %}<a href="/actions">Clear</a>{% endif %}
+      </form>
+      <form class="activity-lookup" method="get" action="/actions">
+        <label for="action-id">Find exact action</label>
+        <input id="action-id" name="action" value="{{ view.action_filter|display }}" maxlength="36" placeholder="Action UUID">
+        <button type="submit">Find</button>
+        {% if view.action_filter %}<a href="/actions">Clear</a>{% endif %}
+      </form>
+      {% if view.actions %}<div class="activity-list">
+        {% for action in view.actions %}
+        <article class="activity-row" id="action-{{ action.action_id|display }}">
+          <div class="scope-title">
+            <div><strong>{{ action.capability_key|display }}</strong><span class="subtle">{{ action.system_name|display }}</span></div>
+            <span class="badge badge--{{ action.state|display }}">{{ action.state|display|replace('_', ' ') }}</span>
+          </div>
+          <dl class="facts facts--wide">
+            <div><dt>Action</dt><dd><code>{{ action.action_id|display }}</code></dd></div>
+            <div><dt>Target</dt><dd>{{ action.target_kind|display|replace('_', ' ') }} · <code>{{ action.target_id|display }}</code></dd></div>
+            <div><dt>Created</dt><dd><time>{{ action.created_at|timestamp }}</time></dd></div>
+            <div><dt>Started</dt><dd><time>{{ action.started_at|timestamp }}</time></dd></div>
+            <div><dt>Completed</dt><dd><time>{{ action.completed_at|timestamp }}</time></dd></div>
+            {% if action.retry_at %}<div><dt>Retry at</dt><dd><time>{{ action.retry_at|timestamp }}</time></dd></div>{% endif %}
+            {% if action.error_class %}<div><dt>Error class</dt><dd class="failure">{{ action.error_class|display }}</dd></div>{% endif %}
+            {% if action.diagnostic %}<div><dt>Diagnostic</dt><dd class="failure">{{ action.diagnostic|display }}</dd></div>{% endif %}
+          </dl>
+        </article>
+        {% endfor %}
+      </div>
+      {% if view.page_count > 1 %}<nav class="pagination" aria-label="Action activity pages">
+        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← Previous</a>{% else %}<span></span>{% endif %}
+        <span>Page {{ view.page }} of {{ view.page_count }}</span>
+        {% if view.next_page_url %}<a href="{{ view.next_page_url }}">Next →</a>{% else %}<span></span>{% endif %}
+      </nav>{% endif %}
+      {% else %}<div class="empty-state">
+        <strong>{% if view.action_filter %}Action not found{% elif view.state_filter or view.system_filter %}No matching actions{% else %}No actions recorded{% endif %}</strong>
+        <p>{% if view.action_filter %}The local action ID is unknown or no longer present.{% elif view.state_filter or view.system_filter %}Try different state or system filters.{% else %}Requesting a registered refresh will create durable action activity here.{% endif %}</p>
+      </div>{% endif %}
+    </section>
+  </main>
+  <footer>Action records are local evidence. They do not imply that cached remote state is current.</footer>
+</body>
+</html>

@@ -82,6 +82,22 @@ class StoredAction:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionActivityRecord:
+    action_id: str
+    system_id: str
+    capability_key: str
+    target_kind: str
+    target_id: str
+    state: str
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    retry_at: datetime | None
+    error_class: str | None
+    redacted_diagnostic: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class OperationalEventRecord:
     event_id: str
     event_type: str

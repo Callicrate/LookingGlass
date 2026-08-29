@@ -11,6 +11,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from async_api_view.web import (
+    ActionActivityView,
+    ActionHistoryQuery,
+    ActionHistoryView,
+    ActionSystemOption,
     ActivityView,
     AlertHistoryQuery,
     AlertHistoryView,
@@ -35,6 +39,8 @@ from async_api_view.web.models import display_text
 NOW = datetime(2026, 8, 24, 14, 35, 9, tzinfo=UTC)
 DETAIL_ID = "11111111-1111-4111-8111-111111111111"
 CHILD_ID = "33333333-3333-4333-8333-333333333333"
+ACTION_ID = "22222222-2222-4222-8222-222222222222"
+SYSTEM_ID = "44444444-4444-4444-8444-444444444444"
 OPTION = RefreshOption(
     system_id="system-1",
     target_kind="configured_scope",
@@ -60,15 +66,18 @@ class FakeBackend:
     intent_view: IntentView | None = None
     object_view: ObjectDetailView | None = None
     alert_view: AlertHistoryView = field(default_factory=AlertHistoryView)
+    action_view: ActionHistoryView = field(default_factory=ActionHistoryView)
     intent_id: str = "intent-1"
     dashboard_error: Exception | None = None
     intent_error: Exception | None = None
     object_error: Exception | None = None
     alert_error: Exception | None = None
+    action_error: Exception | None = None
     submitted: list[RefreshRequest] = field(default_factory=list)
     dashboard_queries: list[DashboardQuery] = field(default_factory=list)
     object_queries: list[tuple[str, ObjectDetailQuery]] = field(default_factory=list)
     alert_queries: list[AlertHistoryQuery] = field(default_factory=list)
+    action_queries: list[ActionHistoryQuery] = field(default_factory=list)
 
     async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView:
         if self.dashboard_error:
@@ -138,6 +147,19 @@ class FakeBackend:
             severity_filter=normalized_query.severity,
         )
 
+    async def action_history(self, query: ActionHistoryQuery | None = None) -> ActionHistoryView:
+        if self.action_error:
+            raise self.action_error
+        normalized_query = query or ActionHistoryQuery()
+        self.action_queries.append(normalized_query)
+        return replace(
+            self.action_view,
+            page=normalized_query.page,
+            state_filter=normalized_query.state,
+            system_filter=normalized_query.system_id,
+            action_filter=normalized_query.action_id,
+        )
+
 
 def authenticated_client(app: FastAPI) -> TestClient:
     client = TestClient(app, base_url="https://testserver")
@@ -168,6 +190,7 @@ def test_local_access_denies_every_protected_surface_before_backend_work() -> No
     responses = (
         client.get("/"),
         client.get("/alerts"),
+        client.get("/actions"),
         client.get(f"/objects/{DETAIL_ID}"),
         client.get("/intents/intent-1"),
         client.get("/api/intents/intent-1"),
@@ -181,6 +204,7 @@ def test_local_access_denies_every_protected_surface_before_backend_work() -> No
     assert backend.dashboard_queries == []
     assert backend.object_queries == []
     assert backend.alert_queries == []
+    assert backend.action_queries == []
     assert backend.submitted == []
 
 
@@ -400,6 +424,7 @@ def ready_alert_history() -> AlertHistoryView:
                 occurred_at=NOW,
                 system_name="Local runtime",
                 error_class="unknown_adapter_failure",
+                action_id=ACTION_ID,
             ),
         ),
         total=51,
@@ -412,6 +437,34 @@ def ready_alert_history() -> AlertHistoryView:
     )
 
 
+def ready_action_history() -> ActionHistoryView:
+    return ActionHistoryView(
+        actions=(
+            ActionActivityView(
+                action_id=ACTION_ID,
+                system_name="Data workspace",
+                capability_key="databricks.workspace.metadata.read",
+                target_kind="object",
+                target_id=DETAIL_ID,
+                state="retry_wait",
+                created_at=NOW,
+                started_at=NOW,
+                retry_at="2026-08-24T14:40:09+00:00",
+                error_class="downstream_rate_limit",
+                diagnostic='<script>alert("secret")</script>',
+            ),
+        ),
+        systems=(ActionSystemOption(system_id=SYSTEM_ID, name="Data workspace"),),
+        total=51,
+        page=1,
+        page_count=2,
+        page_start=1,
+        page_end=50,
+        next_page_url="/actions?page=2",
+        loaded_at=NOW,
+    )
+
+
 def test_empty_dashboard_explains_unknown_state() -> None:
     response = client_for(FakeBackend()).get("/")
 
@@ -420,6 +473,8 @@ def test_empty_dashboard_explains_unknown_state() -> None:
     assert "No cached objects" in response.text
     assert "Refresh unsupported" in response.text
     assert "View history" in response.text
+    assert "View activity" in response.text
+    assert "Refresh options" in response.text
 
 
 def test_display_text_replaces_terminal_and_bidi_controls() -> None:
@@ -540,6 +595,7 @@ def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
                 occurred_at=NOW,
                 system_name="Data workspace",
                 error_class="connection_timeout",
+                action_id=ACTION_ID,
             ),
         ),
     )
@@ -551,6 +607,7 @@ def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
     assert "View history" in response.text
     assert "refresh.action.failed" in response.text
     assert "connection_timeout" in response.text
+    assert f"/actions?action={ACTION_ID}" in response.text
     assert '<script>alert("x")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
 
@@ -567,6 +624,7 @@ def test_alert_history_shows_filters_paging_and_escaped_summaries() -> None:
     assert "queue.coordinator.failed" in response.text
     assert "unknown_adapter_failure" in response.text
     assert "/alerts?page=2" in response.text
+    assert f"/actions?action={ACTION_ID}" in response.text
     assert '<script>alert("x")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
     assert backend.alert_queries == [
@@ -613,6 +671,52 @@ def test_alert_history_default_backend_reports_unavailable() -> None:
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Alert history is unavailable"}
+
+
+def test_action_history_shows_filters_paging_and_escaped_diagnostics() -> None:
+    backend = FakeBackend(action_view=ready_action_history())
+
+    response = client_for(backend).get(f"/actions?state=retry_wait&system={SYSTEM_ID}")
+
+    assert response.status_code == 200
+    assert "Action activity" in response.text
+    assert "databricks.workspace.metadata.read" in response.text
+    assert "downstream_rate_limit" in response.text
+    assert "/actions?page=2" in response.text
+    assert '<script>alert("secret")</script>' not in response.text
+    assert "&lt;script&gt;alert" in response.text
+    assert backend.action_queries == [ActionHistoryQuery(state="retry_wait", system_id=SYSTEM_ID)]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?page=0",
+        "?page=10001",
+        "?state=unknown",
+        "?system=not-a-uuid",
+        "?action=not-a-uuid",
+        f"?action={ACTION_ID}&state=failed",
+        "?state=ready&state=failed",
+        "?unknown=value",
+    ],
+)
+def test_action_history_rejects_invalid_query_before_backend(query: str) -> None:
+    backend = FakeBackend(action_view=ready_action_history())
+
+    response = client_for(backend).get(f"/actions{query}")
+
+    assert response.status_code == 400
+    assert backend.action_queries == []
+
+
+def test_action_history_returns_safe_unavailable_response() -> None:
+    response = client_for(FakeBackend(action_error=RuntimeError("secret profile token"))).get(
+        "/actions"
+    )
+
+    assert response.status_code == 503
+    assert "secret profile token" not in response.text
 
 
 def test_remote_markup_is_escaped() -> None:

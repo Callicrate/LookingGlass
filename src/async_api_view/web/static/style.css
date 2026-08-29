@@ -96,6 +96,13 @@ td { max-width: 300px; padding: 10px 11px; border-top: 1px solid var(--line); ve
 .alert-toolbar label { display: grid; gap: 4px; color: var(--muted); font-size: 0.78rem; font-weight: 650; }
 .alert-toolbar input, .alert-toolbar select { min-height: 38px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font: inherit; }
 .alert-toolbar input:focus-visible, .alert-toolbar select:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 55%, transparent); outline-offset: 2px; }
+.activity-toolbar { display: grid; grid-template-columns: minmax(160px, 0.35fr) minmax(220px, 1fr) auto auto; align-items: end; gap: 10px; margin-bottom: 10px; }
+.activity-toolbar label, .activity-lookup label { display: grid; gap: 4px; color: var(--muted); font-size: 0.78rem; font-weight: 650; }
+.activity-toolbar select, .activity-lookup input { min-height: 38px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font: inherit; }
+.activity-toolbar select:focus-visible, .activity-lookup input:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 55%, transparent); outline-offset: 2px; }
+.activity-lookup { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto; align-items: end; gap: 10px; margin-bottom: 10px; }
+.activity-list { display: grid; gap: 8px; }
+.activity-row { padding: 14px 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
 .relationship-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 8px; }
 .relationship-row { display: grid; gap: 3px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); text-decoration: none; }
 .relationship-row:hover { border-color: #9db8b1; background: #fbfdfc; }
@@ -130,6 +137,7 @@ footer { padding: 16px 24px 28px; color: var(--muted); text-align: center; font-
   .notice a { margin-left: 0; }
   .alert-row { grid-template-columns: 1fr; }
   .alert-toolbar { grid-template-columns: 1fr; align-items: stretch; }
+  .activity-toolbar, .activity-lookup { grid-template-columns: 1fr; align-items: stretch; }
   .refresh-row { grid-template-columns: 1fr; }
   .refresh-row button { width: 100%; }
   .facts div, .facts--wide div { grid-template-columns: 1fr; gap: 1px; }

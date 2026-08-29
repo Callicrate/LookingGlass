@@ -40,8 +40,18 @@ from async_api_view.contracts import (
     TargetRef,
 )
 from async_api_view.ingestion import SQLiteObservationIngestor
-from async_api_view.storage import OperationalEventRecord, SQLiteStore, StoredAction, SystemRecord
+from async_api_view.storage import (
+    ActionActivityRecord,
+    OperationalEventRecord,
+    SQLiteStore,
+    StoredAction,
+    SystemRecord,
+)
 from async_api_view.web import (
+    ActionActivityView,
+    ActionHistoryQuery,
+    ActionHistoryView,
+    ActionSystemOption,
     ActivityView,
     AlertHistoryQuery,
     AlertHistoryView,
@@ -326,6 +336,25 @@ class SQLiteWebBackend:
             action_id=event.action_id,
         )
 
+    @staticmethod
+    def _action_activity_view(
+        action: ActionActivityRecord, system_names: Mapping[str, str]
+    ) -> ActionActivityView:
+        return ActionActivityView(
+            action_id=action.action_id,
+            system_name=system_names.get(action.system_id, "Unknown system"),
+            capability_key=action.capability_key,
+            target_kind=action.target_kind,
+            target_id=action.target_id,
+            state=action.state,
+            created_at=action.created_at,
+            started_at=action.started_at,
+            completed_at=action.completed_at,
+            retry_at=action.retry_at,
+            error_class=action.error_class,
+            diagnostic=action.redacted_diagnostic,
+        )
+
     def _refresh_options(
         self,
         *,
@@ -585,6 +614,64 @@ class SQLiteWebBackend:
             parameters["page"] = page
         encoded = urlencode(parameters)
         return f"/alerts?{encoded}" if encoded else "/alerts"
+
+    @staticmethod
+    def _action_page_url(query: ActionHistoryQuery, page: int) -> str:
+        parameters: dict[str, str | int] = {}
+        if query.state:
+            parameters["state"] = query.state
+        if query.system_id:
+            parameters["system"] = query.system_id
+        if query.action_id:
+            parameters["action"] = query.action_id
+        if page > 1:
+            parameters["page"] = page
+        encoded = urlencode(parameters)
+        return f"/actions?{encoded}" if encoded else "/actions"
+
+    async def action_history(self, query: ActionHistoryQuery | None = None) -> ActionHistoryView:
+        query = query or ActionHistoryQuery()
+        system_id = query.system_id or None
+        state = query.state or None
+        action_id = query.action_id or None
+        total = self._store.count_action_activity(
+            system_id=system_id,
+            state=state,
+            action_id=action_id,
+        )
+        page_count = max(1, (total + query.page_size - 1) // query.page_size)
+        page = min(query.page, page_count)
+        offset = (page - 1) * query.page_size
+        systems = self._store.list_systems()
+        system_names = {system.system_id: system.display_name for system in systems}
+        actions = tuple(
+            self._action_activity_view(action, system_names)
+            for action in self._store.list_action_activity_page(
+                offset=offset,
+                limit=query.page_size,
+                system_id=system_id,
+                state=state,
+                action_id=action_id,
+            )
+        )
+        return ActionHistoryView(
+            actions=actions,
+            systems=tuple(
+                ActionSystemOption(system_id=system.system_id, name=system.display_name)
+                for system in systems
+            ),
+            total=total,
+            page=page,
+            page_count=page_count,
+            page_start=offset + 1 if actions else 0,
+            page_end=offset + len(actions),
+            state_filter=query.state,
+            system_filter=query.system_id,
+            action_filter=query.action_id,
+            previous_page_url=(self._action_page_url(query, page - 1) if page > 1 else None),
+            next_page_url=(self._action_page_url(query, page + 1) if page < page_count else None),
+            loaded_at=datetime.now(UTC),
+        )
 
     async def alert_history(self, query: AlertHistoryQuery | None = None) -> AlertHistoryView:
         query = query or AlertHistoryQuery()

@@ -7,12 +7,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol
 from unicodedata import category
+from uuid import UUID
 
 MAX_DISPLAY_LENGTH = 512
 DEFAULT_OBJECT_PAGE_SIZE = 50
 MAX_OBJECT_QUERY_LENGTH = 128
 MAX_OBJECT_PAGE = 1_000_000
 MAX_ALERT_PAGE = 10_000
+MAX_ACTION_PAGE = 10_000
 _BIDI_CONTROLS = frozenset(
     {
         "\u061c",
@@ -31,6 +33,20 @@ _BIDI_CONTROLS = frozenset(
 )
 _CONTRACT_KEY = re.compile(r"[a-z][a-z0-9_.-]{0,127}")
 _ALERT_SEVERITIES = frozenset({"", "info", "warning", "error", "critical"})
+_ACTION_STATES = frozenset(
+    {
+        "",
+        "ready",
+        "leased",
+        "running",
+        "retry_wait",
+        "satisfied",
+        "succeeded",
+        "partial",
+        "failed",
+        "cancelled",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +97,34 @@ class AlertHistoryQuery:
             raise ValueError("alert event type is invalid")
         if self.severity not in _ALERT_SEVERITIES:
             raise ValueError("alert severity is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ActionHistoryQuery:
+    page: int = 1
+    page_size: int = DEFAULT_OBJECT_PAGE_SIZE
+    state: str = ""
+    system_id: str = ""
+    action_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.page <= MAX_ACTION_PAGE:
+            raise ValueError(f"action page must be between 1 and {MAX_ACTION_PAGE}")
+        if not 1 <= self.page_size <= 100:
+            raise ValueError("action page size must be between 1 and 100")
+        if self.state not in _ACTION_STATES:
+            raise ValueError("action state is invalid")
+        for field_name in ("system_id", "action_id"):
+            value = getattr(self, field_name)
+            if not value:
+                continue
+            try:
+                normalized = str(UUID(value))
+            except (AttributeError, ValueError) as exc:
+                raise ValueError(f"{field_name} is invalid") from exc
+            object.__setattr__(self, field_name, normalized)
+        if self.action_id and (self.system_id or self.state):
+            raise ValueError("action ID cannot be combined with activity filters")
 
 
 def display_text(value: object | None, *, limit: int = MAX_DISPLAY_LENGTH) -> str:
@@ -228,6 +272,45 @@ class AlertHistoryView:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionSystemOption:
+    system_id: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActionActivityView:
+    action_id: str
+    system_name: str
+    capability_key: str
+    target_kind: str
+    target_id: str
+    state: str
+    created_at: datetime | str | None
+    started_at: datetime | str | None = None
+    completed_at: datetime | str | None = None
+    retry_at: datetime | str | None = None
+    error_class: str | None = None
+    diagnostic: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActionHistoryView:
+    actions: tuple[ActionActivityView, ...] = ()
+    systems: tuple[ActionSystemOption, ...] = ()
+    total: int = 0
+    page: int = 1
+    page_count: int = 1
+    page_start: int = 0
+    page_end: int = 0
+    state_filter: str = ""
+    system_filter: str = ""
+    action_filter: str = ""
+    previous_page_url: str | None = None
+    next_page_url: str | None = None
+    loaded_at: datetime | str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SystemView:
     system_id: str
     name: str
@@ -296,6 +379,10 @@ class WebBackend(Protocol):
 
     async def alert_history(self, query: AlertHistoryQuery | None = None) -> AlertHistoryView: ...
 
+    async def action_history(
+        self, query: ActionHistoryQuery | None = None
+    ) -> ActionHistoryView: ...
+
     async def submit_refresh(self, request: RefreshRequest) -> str: ...
 
     async def intent(self, intent_id: str) -> IntentView | None: ...
@@ -326,6 +413,10 @@ class UnavailableBackend:
         return None
 
     async def alert_history(self, query: AlertHistoryQuery | None = None) -> AlertHistoryView:
+        del query
+        raise RuntimeError("local state services unavailable")
+
+    async def action_history(self, query: ActionHistoryQuery | None = None) -> ActionHistoryView:
         del query
         raise RuntimeError("local state services unavailable")
 

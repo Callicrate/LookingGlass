@@ -36,6 +36,7 @@
             <strong>{{ alert.event_type|display }}</strong>
             <span class="subtle">{{ alert.system_name|display }} · <time>{{ alert.occurred_at|timestamp }}</time>{% if alert.error_class %} · {{ alert.error_class|display }}{% endif %}</span>
             <span>{{ alert.summary|display }}</span>
+            {% if alert.action_id %}<a href="/actions?action={{ alert.action_id|display }}">View action →</a>{% endif %}
           </div>
         </article>
         {% endfor %}

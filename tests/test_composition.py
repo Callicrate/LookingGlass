@@ -13,8 +13,14 @@ from async_api_view.application import SystemBootstrapService
 from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
 from async_api_view.contracts import PresenceState, RemoteObject
-from async_api_view.storage import SQLiteStore, StoredAction
-from async_api_view.web import AlertHistoryQuery, DashboardQuery, ObjectDetailQuery, RefreshRequest
+from async_api_view.storage import ActionActivityRecord, SQLiteStore, StoredAction
+from async_api_view.web import (
+    ActionHistoryQuery,
+    AlertHistoryQuery,
+    DashboardQuery,
+    ObjectDetailQuery,
+    RefreshRequest,
+)
 
 
 @pytest.fixture
@@ -804,6 +810,61 @@ async def test_alert_history_pages_and_filters_durable_events(tmp_path: Path) ->
     assert filtered.previous_page_url == ("/alerts?type=queue.coordinator.failed&severity=error")
     assert filtered.next_page_url is None
     assert {alert.event_type for alert in filtered.alerts} == {"queue.coordinator.failed"}
+    runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_action_history_maps_bounded_pages_and_preserves_filters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    system = runtime.store.list_systems()[0]
+    created_at = datetime(2026, 8, 28, tzinfo=UTC)
+    records = tuple(
+        ActionActivityRecord(
+            action_id=str(uuid4()),
+            system_id=system.system_id,
+            capability_key="databricks.workspace.metadata.read",
+            target_kind="object",
+            target_id=str(uuid4()),
+            state="failed",
+            created_at=created_at + timedelta(seconds=index),
+            started_at=created_at + timedelta(seconds=index),
+            completed_at=created_at + timedelta(seconds=index + 1),
+            retry_at=None,
+            error_class="connection_timeout",
+            redacted_diagnostic="redacted failure",
+        )
+        for index in range(25)
+    )
+
+    monkeypatch.setattr(runtime.store, "count_action_activity", lambda **_filters: 75)
+
+    def action_page(**filters: object) -> tuple[ActionActivityRecord, ...]:
+        assert filters == {
+            "offset": 50,
+            "limit": 50,
+            "system_id": system.system_id,
+            "state": "failed",
+            "action_id": None,
+        }
+        return records
+
+    monkeypatch.setattr(runtime.store, "list_action_activity_page", action_page)
+
+    view = await runtime.backend.action_history(
+        ActionHistoryQuery(page=2, state="failed", system_id=system.system_id)
+    )
+
+    assert view.total == 75
+    assert len(view.actions) == 25
+    assert view.page_start == 51
+    assert view.page_end == 75
+    assert view.actions[0].system_name == system.display_name
+    assert view.actions[0].diagnostic == "redacted failure"
+    assert view.previous_page_url == f"/actions?state=failed&system={system.system_id}"
+    assert view.next_page_url is None
+    assert view.systems[0].system_id == system.system_id
     runtime.store.close()
 
 

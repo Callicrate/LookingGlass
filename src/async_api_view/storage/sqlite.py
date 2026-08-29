@@ -69,6 +69,7 @@ from async_api_view.contracts.defaults import V1_TYPE_DEFINITION_BY_KEY
 from async_api_view.core import decide_refresh, resolve_refresh_interval, scope_covers
 
 from .models import (
+    ActionActivityRecord,
     ConfiguredScopeRecord,
     IntentScopeRecord,
     IntentScopeWork,
@@ -1743,6 +1744,121 @@ class SQLiteStore:
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._stored_action_from_row(row) for row in rows)
+
+    @staticmethod
+    def _validate_action_activity_filters(
+        *,
+        system_id: str | None,
+        state: str | None,
+        action_id: str | None,
+    ) -> tuple[str | None, str | None, str | None]:
+        normalized_system = require_uuid(system_id, "system_id") if system_id else None
+        normalized_action = require_uuid(action_id, "action_id") if action_id else None
+        if state is not None:
+            try:
+                ActionState(state)
+            except ValueError as exc:
+                raise ValueError("action state is not registered") from exc
+        if normalized_action is not None and (normalized_system is not None or state is not None):
+            raise ValueError("action ID cannot be combined with activity filters")
+        return normalized_system, state, normalized_action
+
+    @staticmethod
+    def _action_activity_from_row(row: sqlite3.Row) -> ActionActivityRecord:
+        return ActionActivityRecord(
+            action_id=row["action_id"],
+            system_id=row["system_id"],
+            capability_key=row["capability_key"],
+            target_kind=row["target_kind"],
+            target_id=row["target_id"],
+            state=row["state"],
+            created_at=_dt(row["record_created_at"]),  # type: ignore[arg-type]
+            started_at=_dt(row["started_at"]),
+            completed_at=_dt(row["completed_at"]),
+            retry_at=_dt(row["retry_at"]),
+            error_class=row["error_class"],
+            redacted_diagnostic=row["redacted_diagnostic"],
+        )
+
+    def count_action_activity(
+        self,
+        *,
+        system_id: str | None = None,
+        state: str | None = None,
+        action_id: str | None = None,
+    ) -> int:
+        system_id, state, action_id = self._validate_action_activity_filters(
+            system_id=system_id,
+            state=state,
+            action_id=action_id,
+        )
+        if action_id is not None:
+            statement = "SELECT COUNT(*) FROM adapter_actions WHERE action_id = ?"
+            parameters: tuple[object, ...] = (action_id,)
+        elif system_id is None and state is None:
+            statement = "SELECT COUNT(*) FROM adapter_actions"
+            parameters = ()
+        elif system_id is not None and state is None:
+            statement = "SELECT COUNT(*) FROM adapter_actions WHERE system_id = ?"
+            parameters = (system_id,)
+        elif system_id is None:
+            statement = "SELECT COUNT(*) FROM adapter_actions WHERE state = ?"
+            parameters = (state,)
+        else:
+            statement = "SELECT COUNT(*) FROM adapter_actions WHERE system_id = ? AND state = ?"
+            parameters = (system_id, state)
+        with self._lock:
+            row = self._connection.execute(statement, parameters).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def list_action_activity_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        system_id: str | None = None,
+        state: str | None = None,
+        action_id: str | None = None,
+    ) -> tuple[ActionActivityRecord, ...]:
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("action offset must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("action limit must be between 1 and 100")
+        system_id, state, action_id = self._validate_action_activity_filters(
+            system_id=system_id,
+            state=state,
+            action_id=action_id,
+        )
+        if action_id is not None:
+            statement = "SELECT * FROM adapter_actions WHERE action_id = ? LIMIT ? OFFSET ?"
+            parameters: tuple[object, ...] = (action_id, limit, offset)
+        elif system_id is None and state is None:
+            statement = (
+                "SELECT * FROM adapter_actions "
+                "ORDER BY record_created_at DESC, action_id LIMIT ? OFFSET ?"
+            )
+            parameters = (limit, offset)
+        elif system_id is not None and state is None:
+            statement = (
+                "SELECT * FROM adapter_actions WHERE system_id = ? "
+                "ORDER BY record_created_at DESC, action_id LIMIT ? OFFSET ?"
+            )
+            parameters = (system_id, limit, offset)
+        elif system_id is None:
+            statement = (
+                "SELECT * FROM adapter_actions WHERE state = ? "
+                "ORDER BY record_created_at DESC, action_id LIMIT ? OFFSET ?"
+            )
+            parameters = (state, limit, offset)
+        else:
+            statement = (
+                "SELECT * FROM adapter_actions WHERE system_id = ? AND state = ? "
+                "ORDER BY record_created_at DESC, action_id LIMIT ? OFFSET ?"
+            )
+            parameters = (system_id, state, limit, offset)
+        with self._lock:
+            rows = self._connection.execute(statement, parameters).fetchall()
+        return tuple(self._action_activity_from_row(row) for row in rows)
 
     def list_dashboard_actions(self) -> tuple[StoredAction, ...]:
         """Return active actions plus the latest recorded action for each system."""

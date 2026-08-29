@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 23:50 ET
+Updated: 2026-08-29 00:17 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 209 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
-- Runtime surface: 4 CLI commands and 9 HTTP routes, verified from source.
-- Version control: local `main` includes the verified local-caller authorization, metadata-credit, relationship-reconciliation, compatibility cleanup, and rejected-item atomicity fixes; completed batches are committed with focused messages.
-- Active review round: run the next residual-risk review and keep the hourly Murmuration tending checkpoint.
-- Next progress report due: 2026-08-29 00:12 ET.
+- Latest checks: 221 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Runtime surface: 4 CLI commands and 10 HTTP routes, verified from source.
+- Version control: local `main` contains the verified bounded action-activity slice and all prior correctness fixes; completed batches are committed with focused messages.
+- Active review round: isolate browser sessions on a process-unique `*.localhost` host, then expose bounded action-attempt detail.
+- Next progress report due: 2026-08-29 01:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -44,6 +44,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
 - [ ] Tend Murmuration about hourly; the latest pass was read-only because the native project profile is not provisioned.
+- [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
+- [ ] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 
 ## Evidence and decisions
 
@@ -118,6 +120,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Savepoint use is limited to late-rejection paths so the 502-object regression remains fast; the full 209-test suite completes in about nine seconds and storage branch coverage is 84%.
 - Independent storage review found no blocker, confirmed nested savepoints remain atomic under `BEGIN IMMEDIATE`, and verified coverage/reconciliation stay suppressed when any item is rejected.
 - Murmuration project identity is now intentionally tracked in `.murmuration/project.toml`; the 23:46 tending pass found no project-specific forum context and could not write because the native identity profile is not provisioned. BookStack remained credential-gated.
+- Bounded action activity now uses 50-row pages, a 10,000-page ceiling, exact action lookup, state/system filters, static SQL, four dedicated recency indexes, and no per-action scope reads.
+- Alerts with an action ID now link into exact local action discovery; diagnostics stay redacted and escaped, while connection bindings, profiles, payloads, and raw commands remain absent.
+- The dashboard's former `Actions` tile counted current refresh controls; it is now truthfully labeled `Refresh options`.
+- The action slice passes 221 tests at 86% branch coverage; migration `0008` is applied locally with SQLite integrity `ok` and zero foreign-key violations, and both migration and template are packaged.
+- Desktop and 390px mobile action-page QA passed with real failed/retry rows, functional state filtering, no console or network errors, and Lighthouse 100 in every audited category.
+- A fresh review demonstrated that the host-only `rookery_session` cookie is shared across ports for `127.0.0.1`; a local service receiving it can replay the bearer to Rookery. A process-unique `*.localhost` browser host is the selected repair.
 
 ## Risks / watch list
 

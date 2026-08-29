@@ -17,6 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .auth import SESSION_COOKIE, LocalCallerAuthorizer, LocalSession
 from .models import (
+    ActionHistoryQuery,
     AlertHistoryQuery,
     DashboardQuery,
     DashboardView,
@@ -145,6 +146,23 @@ def _alert_history_query(request: Request) -> AlertHistoryQuery:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid alert query") from exc
+
+
+def _action_history_query(request: Request) -> ActionHistoryQuery:
+    values = list(request.query_params.multi_items())
+    if any(name not in {"page", "state", "system", "action"} for name, _value in values):
+        raise HTTPException(status_code=400, detail="Unexpected action query parameter")
+    if len({name for name, _value in values}) != len(values):
+        raise HTTPException(status_code=400, detail="Duplicate action query parameter")
+    try:
+        return ActionHistoryQuery(
+            page=int(request.query_params.get("page", "1")),
+            state=request.query_params.get("state", ""),
+            system_id=request.query_params.get("system", ""),
+            action_id=request.query_params.get("action", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid action query") from exc
 
 
 async def _parse_refresh_form(request: Request, csrf_token: str) -> RefreshRequest:
@@ -339,6 +357,16 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Alert history is unavailable") from exc
         content = templates.get_template("alerts.html").render(request=request, view=view)
+        return HTMLResponse(content)
+
+    @app.get("/actions", response_class=HTMLResponse)
+    async def action_history(request: Request) -> HTMLResponse:
+        query = _action_history_query(request)
+        try:
+            view = await app.state.backend.action_history(query)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Action activity is unavailable") from exc
+        content = templates.get_template("actions.html").render(request=request, view=view)
         return HTMLResponse(content)
 
     @app.get("/objects/{object_id}", response_class=HTMLResponse)

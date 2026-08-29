@@ -57,6 +57,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0005_operational_event_recency",
             "0006_relationship_navigation",
             "0007_operational_event_filters",
+            "0008_action_activity",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -136,6 +137,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0005_operational_event_recency",
         "0006_relationship_navigation",
         "0007_operational_event_filters",
+        "0008_action_activity",
     )
     assert versions == (expected,) * workers
 
@@ -232,6 +234,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0005_operational_event_recency",
             "0006_relationship_navigation",
             "0007_operational_event_filters",
+            "0008_action_activity",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -471,6 +474,110 @@ def test_expired_running_lease_reopens_with_new_authority_and_preserves_start(tm
             )
         )
         assert reopened.get_stored_action(action.action_id).started_at == NOW
+
+
+def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+    )
+    action_ids: list[str] = []
+    for index, state in enumerate(("failed", "succeeded", "failed")):
+        action = AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="databricks.workspace.children.read",
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+        run(store.enqueue(action))
+        action_ids.append(action.action_id)
+        occurred_at = NOW + timedelta(minutes=index)
+        store._connection.execute(
+            """
+            UPDATE adapter_actions
+            SET state = ?, record_created_at = ?, completed_at = ?,
+                error_class = ?, redacted_diagnostic = ?
+            WHERE action_id = ?
+            """,
+            (
+                state,
+                occurred_at.isoformat().replace("+00:00", "Z"),
+                occurred_at.isoformat().replace("+00:00", "Z"),
+                "connection_timeout" if state == "failed" else None,
+                "redacted failure" if state == "failed" else None,
+                action.action_id,
+            ),
+        )
+
+    assert store.count_action_activity() == 3
+    assert store.count_action_activity(state="failed") == 2
+    assert store.count_action_activity(system_id=seeded.system.system_id) == 3
+    assert store.count_action_activity(system_id=seeded.system.system_id, state="failed") == 2
+    assert store.count_action_activity(action_id=action_ids[1]) == 1
+    assert [item.action_id for item in store.list_action_activity_page(offset=0, limit=2)] == [
+        action_ids[2],
+        action_ids[1],
+    ]
+    assert all(
+        item.state == "failed"
+        for item in store.list_action_activity_page(offset=0, limit=10, state="failed")
+    )
+    assert (
+        store.list_action_activity_page(offset=0, limit=10, action_id=action_ids[1])[0].state
+        == "succeeded"
+    )
+
+    with pytest.raises(ValueError, match="offset"):
+        store.list_action_activity_page(offset=-1, limit=10)
+    with pytest.raises(ValueError, match="limit"):
+        store.list_action_activity_page(offset=0, limit=101)
+    with pytest.raises(ValueError, match="state"):
+        store.count_action_activity(state="unknown")
+    with pytest.raises(ValueError, match="combined"):
+        store.count_action_activity(action_id=action_ids[0], state="failed")
+
+    plans = {
+        "ix_adapter_actions_recency": (
+            "SELECT * FROM adapter_actions "
+            "ORDER BY record_created_at DESC, action_id LIMIT ? OFFSET ?",
+            (10, 0),
+        ),
+        "ix_adapter_actions_state_recency": (
+            "SELECT * FROM adapter_actions WHERE state = ? "
+            "ORDER BY record_created_at DESC, action_id LIMIT ? OFFSET ?",
+            ("failed", 10, 0),
+        ),
+        "ix_adapter_actions_system_recency": (
+            "SELECT * FROM adapter_actions WHERE system_id = ? "
+            "ORDER BY record_created_at DESC, action_id LIMIT ? OFFSET ?",
+            (seeded.system.system_id, 10, 0),
+        ),
+        "ix_adapter_actions_system_state_recency": (
+            "SELECT * FROM adapter_actions WHERE system_id = ? AND state = ? "
+            "ORDER BY record_created_at DESC, action_id LIMIT ? OFFSET ?",
+            (seeded.system.system_id, "failed", 10, 0),
+        ),
+    }
+    for expected_index, (statement, parameters) in plans.items():
+        plan = store._connection.execute(
+            f"EXPLAIN QUERY PLAN {statement}",
+            parameters,
+        ).fetchall()
+        assert any(expected_index in row[3] for row in plan)
+        assert not any("TEMP B-TREE" in row[3] for row in plan)
 
 
 def test_runtime_failure_is_bounded_and_diagnostics_redact_json_and_home_paths(tmp_path) -> None:
