@@ -608,6 +608,9 @@ def test_empty_dashboard_explains_unknown_state() -> None:
     assert "View history" in response.text
     assert "View activity" in response.text
     assert "Refresh options" in response.text
+    assert "<title>Remote state · Rookery</title>" in response.text
+    assert "Rookery · local operational view" in response.text
+    assert "Async API View" not in response.text
 
 
 def test_display_text_replaces_terminal_and_bidi_controls() -> None:

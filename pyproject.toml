@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "async-api-view"
 version = "0.1.0"
-description = "Local canonical state and refresh service for remote systems"
+description = "Rookery local canonical state and refresh service for remote systems"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [

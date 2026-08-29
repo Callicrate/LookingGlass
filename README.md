@@ -1,6 +1,7 @@
-# Async API View
+# Rookery
 
-Async API View keeps a local, inspectable cache of remote-system state and refreshes it through controlled API-specific workers.
+Rookery keeps a local, inspectable cache of remote-system state and refreshes it through controlled API-specific workers.
+The installable package and compatibility CLI remain named `async-api-view`.
 The first adapter uses the existing Databricks CLI.
 
 ## Contents
