@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 21:33 ET
+Updated: 2026-08-28 21:37 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 171 tests passed warning-free; Ruff format, lint, lock validation, and the 80% branch-coverage gate passed.
+- Latest checks: 176 tests passed warning-free; Ruff format, standard/security lint, lock validation, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
 - Version control: local `main` is clean; every completed implementation batch is committed with focused messages.
 - Active review round: fresh residual-risk audit, package smoke validation, and low-coverage boundary triage.
@@ -59,7 +59,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Desktop and 390px mobile QA passed with no console errors; Lighthouse accessibility, best practices, and agentic browsing scored 100 on both device profiles.
 - The dashboard now renders the latest ten durable alertable failures with system, time, canonical class, and escaped redacted summary.
 - Alert recency uses a dedicated SQLite index verified by `EXPLAIN QUERY PLAN`; the exact full-history count was removed to preserve bounded dashboard work.
-- Aggregate branch coverage is 82% with an enforced 80% CI floor; statement coverage remains about 90%.
+- Aggregate branch coverage is 83% with an enforced 80% CI floor; statement coverage remains about 91%.
 - Composition failures now close their opened SQLite store before propagating the original startup error.
 - `serve` now closes its runtime store even when Uvicorn fails before lifespan startup; the independent review found no blocker.
 - The latest locked runtime dependency audit reports no known vulnerabilities; the unpublished local package is the only expected skip.
@@ -71,6 +71,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The installed Databricks CLI compatibility doctor still passes without authentication or inventory probing.
 - CI now runs Ruff's source security rules in addition to the normal lint suite; all SQL construction is static and all values remain bound parameters.
 - The second structured critical-review report is schema-valid in `.local/review-round2/` and records four resolved findings plus the live-validation gate.
+- Direct runner tests prove manually assembled wrong subcommands, extra flags, unsafe profiles, missing fixed flags, and traversal paths are rejected before subprocess creation; adapter branch coverage rose from 69% to 74%.
 
 ## Risks / watch list
 

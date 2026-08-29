@@ -15,6 +15,8 @@ from async_api_view.adapters.databricks import (
     MAX_COLLECTION_ITEMS,
     MAX_TABLE_COLUMNS,
     CliExecution,
+    CliInvocation,
+    CliRunner,
     CommandRejected,
     DatabricksCommandRegistry,
     DatabricksWorker,
@@ -177,6 +179,56 @@ def test_registry_is_closed_and_exact(
         )
     with pytest.raises(CommandRejected):
         DatabricksCommandRegistry.build(capability_key=capability, profile="--debug", target=target)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        CliInvocation(
+            "databricks.uc.catalogs.read",
+            ("databricks", "api", "get", "--profile", "local", "--output", "json"),
+        ),
+        CliInvocation(
+            "databricks.uc.catalogs.read",
+            ("databricks", "catalogs", "list", "--debug", "--profile", "local", "--output", "json"),
+        ),
+        CliInvocation(
+            "databricks.uc.catalogs.read",
+            ("databricks", "catalogs", "list", "--profile", "--debug", "--output", "json"),
+        ),
+        CliInvocation(
+            "databricks.workspace.children.read",
+            (
+                "databricks",
+                "workspace",
+                "list",
+                "/Shared/../secret",
+                "--profile",
+                "local",
+                "--output",
+                "json",
+            ),
+        ),
+        CliInvocation(
+            "databricks.workspace.children.read",
+            ("databricks", "workspace", "list", "/Shared", "--output", "json"),
+        ),
+    ],
+)
+async def test_runner_rejects_manual_invocation_before_process_creation(
+    invocation: CliInvocation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    runner._resolved_executable = "C:\\trusted\\databricks.exe"
+
+    async def unexpected_process(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invalid invocation reached process creation")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_process)
+
+    with pytest.raises(CommandRejected):
+        await runner.run(invocation, correlation_id="test")
 
 
 @pytest.mark.parametrize(
