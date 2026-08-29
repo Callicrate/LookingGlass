@@ -1596,6 +1596,7 @@ Every adapter MUST pass a shared conformance suite proving:
 
 - The Databricks API worker is the first live adapter tested through the complete generic refresh path.
 - Every downstream invocation uses the Databricks CLI with structured arguments and no shell command string.
+- The pinned CLI's iterator renderer exhausts list pagination before emitting JSON; any continuation-token envelope is rejected as incomplete rather than credited.
 - The CLI runner rejects `databricks api`, unregistered command groups/subcommands, arbitrary endpoints, and free-form flags.
 - Startup fails clearly when the CLI version or a required `workspace`, `catalogs`, `schemas`, `tables`, or `volumes` command group is incompatible.
 - Profile selection and JSON output are passed as structured arguments and are redacted from persisted diagnostics.

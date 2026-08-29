@@ -560,6 +560,17 @@ def test_list_normalization_accepts_envelopes_and_top_level_arrays(
     assert "storage_location" not in str(array.batch.to_dict())
 
 
+def test_list_normalization_rejects_incomplete_pagination_envelope() -> None:
+    with pytest.raises(InvalidDownstreamResponse, match="incomplete paginated collection"):
+        normalize(
+            action=_action("databricks.uc.catalogs.read"),
+            binding=_binding(),
+            target=ResolvedTarget(),
+            stdout=b'{"catalogs":[{"name":"first"}],"next_page_token":"next"}',
+            observed_at=datetime.now(UTC),
+        )
+
+
 @pytest.mark.parametrize(
     ("capability", "facet", "target"),
     [

@@ -561,6 +561,11 @@ def _items(
     if not isinstance(payload, Mapping):
         value = payload
     else:
+        next_page_token = payload.get("next_page_token")
+        if next_page_token is not None and next_page_token != "":
+            raise InvalidDownstreamResponse(
+                "Databricks CLI returned an incomplete paginated collection"
+            )
         value: Any = None
         for key in keys:
             if key in payload:
