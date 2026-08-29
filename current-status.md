@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 04:43 ET
+Updated: 2026-08-29 04:52 ET
 
 ## Goal
 
@@ -75,6 +75,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Return open intent pages to the unlock flow when browser authorization expires.
 - [x] Preserve typed Workspace object/resource identity without unsafe legacy merging.
 - [x] Cover coordinator authority rejection across disabled, unknown, absent, and mismatched targets.
+- [x] Fail closed if a future Databricks CLI emits an incomplete continuation-token envelope.
 
 ## Evidence and decisions
 
@@ -226,6 +227,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - New Workspace identities retain typed `object_id`/`resource_id` namespaces; metadata responses must match the exact typed witness, while legitimate dual IDs remain independent.
 - Historical untyped Workspace identities are never auto-merged because their witness type cannot be proven; symmetric collision regressions preserve legacy UUID/cache and fail closed as separate typed objects.
 - Seven coordinator authority regressions raised coordinator branch coverage from 73% to 86% while proving invalid local authority never admits an action.
+- Official Databricks CLI v0.298 source confirms list commands use `RenderIterator` to exhaust pages into one JSON array; Rookery now rejects any non-empty continuation-token envelope instead of silently ingesting page one.
 
 ## Risks / watch list
 
