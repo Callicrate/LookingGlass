@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 03:27 ET
+Updated: 2026-08-29 03:31 ET
 
 ## Goal
 
@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 261 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: reconcile current documentation and roadmap claims against the 260-test implementation, then continue residual-risk review.
+- Active review round: continue residual-risk review after documentation truth and protected-web failure semantics were independently cleared.
 - Next progress report due: 2026-08-29 04:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -202,6 +202,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Each newly persisted failed attempt now creates one idempotent warning event linked to its system, action, and attempt; retries remain non-alertable while terminal failure remains the sole alertable action event.
 - Operational-event replay tests prove duplicate attempt writes cannot duplicate history or mutate retry state, and all diagnostics remain redacted.
 - README and architecture now state that Workspace content is parser/future-contract work only; the executable worker rejects it before target resolution or CLI execution.
+- Protected dashboard, object, alert, action, and intent routes independently cleared authorization ordering, input validation, 404/503 distinctions, safe backend-failure responses, escaping, and security-header coverage.
 
 ## Risks / watch list
 
