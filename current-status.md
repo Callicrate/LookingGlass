@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 02:06 ET
+Updated: 2026-08-29 02:08 ET
 
 ## Goal
 
@@ -168,6 +168,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Regression coverage proves older canonical evidence cannot resurrect a newer absence while later canonical evidence restores operational presence; independent review found no blocker at 241 tests.
 - Dashboard system activity now reads one raw latest action summary per system through indexed correlated lookups, avoiding full contract reconstruction, malformed deadline/scope failures, and per-action scope reads.
 - The exact current Windows and Ubuntu/WSL CI sequences both pass 241 tests at 86% branch coverage; the ignored Windows environment was restored from the lockfile after WSL validation.
+- CI now validates `uv.lock` and builds the wheel/source distribution on both Windows and Ubuntu, extending the matrix to cover packaged migrations and templates rather than stopping after tests.
 
 ## Risks / watch list
 

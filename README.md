@@ -117,6 +117,7 @@ uv run ruff check src --select S
 uv run coverage run -m pytest -q
 uv run coverage report
 uv lock --check
+uv build
 ```
 
 The default test suite uses fake CLI results and does not contact Databricks.
