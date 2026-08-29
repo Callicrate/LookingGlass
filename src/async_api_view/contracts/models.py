@@ -385,13 +385,28 @@ class ActionAttempt(JSONDTO):
     def __post_init__(self) -> None:
         _set_uuid(self, "attempt_id")
         _set_uuid(self, "action_id")
-        if self.ordinal < 1:
-            raise ValueError("ordinal must be at least one")
+        if isinstance(self.ordinal, bool) or not isinstance(self.ordinal, int) or self.ordinal < 1:
+            raise ValueError("ordinal must be a positive integer")
+        if self.outcome is not None and not isinstance(self.outcome, ActionOutcome):
+            raise ValueError("outcome must be an ActionOutcome")
+        if self.error_class is not None and not isinstance(self.error_class, ErrorClass):
+            raise ValueError("error_class must be an ErrorClass")
         _set_utc(self, "started_at")
         _set_optional_utc(self, "ended_at")
         _set_optional_utc(self, "retry_at")
         if self.ended_at is not None and self.ended_at < self.started_at:
             raise ValueError("ended_at must not precede started_at")
+        if self.outcome is not None and self.ended_at is None:
+            raise ValueError("a completed attempt requires ended_at")
+        if self.outcome is ActionOutcome.FAILED and self.error_class is None:
+            raise ValueError("a failed attempt requires an error_class")
+        if self.error_class is not None and self.outcome is not ActionOutcome.FAILED:
+            raise ValueError("only a failed attempt may carry an error_class")
+        if self.retry_at is not None:
+            if self.outcome is not ActionOutcome.FAILED or self.ended_at is None:
+                raise ValueError("a retry requires an ended failed attempt")
+            if self.retry_at <= self.ended_at:
+                raise ValueError("retry_at must follow ended_at")
         if self.redacted_diagnostic is not None:
             require_text(self.redacted_diagnostic, "redacted_diagnostic", max_length=4096)
 
@@ -407,10 +422,18 @@ class ActionCompletion(JSONDTO):
 
     def __post_init__(self) -> None:
         _set_uuid(self, "action_id")
+        if not isinstance(self.outcome, ActionOutcome):
+            raise ValueError("outcome must be an ActionOutcome")
+        if self.error_class is not None and not isinstance(self.error_class, ErrorClass):
+            raise ValueError("error_class must be an ErrorClass")
         _set_utc(self, "completed_at")
         _set_optional_utc(self, "retry_at")
+        if self.retry_at is not None:
+            raise ValueError("a terminal action completion cannot schedule a retry")
         if self.outcome is ActionOutcome.FAILED and self.error_class is None:
             raise ValueError("a failed action requires an error_class")
+        if self.error_class is not None and self.outcome is not ActionOutcome.FAILED:
+            raise ValueError("only a failed action may carry an error_class")
         if self.redacted_diagnostic is not None:
             require_text(self.redacted_diagnostic, "redacted_diagnostic", max_length=4096)
 

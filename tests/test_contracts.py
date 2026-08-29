@@ -9,12 +9,15 @@ import pytest
 from async_api_view.contracts import (
     CONTRACT_VERSION,
     V1_TYPE_DEFINITION_BY_KEY,
+    ActionAttempt,
+    ActionCompletion,
     ActionLease,
     ActionLifecyclePort,
     ActionOutcome,
     AdapterAction,
     CollectionCoverage,
     CoverageDeclaration,
+    ErrorClass,
     FacetObservation,
     FieldCoverage,
     ObjectLocator,
@@ -167,6 +170,113 @@ def test_action_lifecycle_writes_require_keyword_only_lease_authority() -> None:
         assert "lease_id" in parameters
         assert parameters["lease_id"].kind is Parameter.KEYWORD_ONLY
         assert parameters["lease_id"].annotation == "str"
+
+
+def test_action_attempt_rejects_invalid_terminal_and_retry_combinations() -> None:
+    attempt_id = uuid4()
+    action_id = uuid4()
+    ended_at = NOW + timedelta(seconds=1)
+
+    with pytest.raises(ValueError, match="requires ended_at"):
+        ActionAttempt(
+            attempt_id,
+            action_id,
+            1,
+            NOW,
+            outcome=ActionOutcome.SUCCEEDED,
+        )
+    with pytest.raises(ValueError, match="requires an error_class"):
+        ActionAttempt(
+            attempt_id,
+            action_id,
+            1,
+            NOW,
+            ended_at,
+            ActionOutcome.FAILED,
+        )
+    with pytest.raises(ValueError, match="only a failed attempt"):
+        ActionAttempt(
+            attempt_id,
+            action_id,
+            1,
+            NOW,
+            ended_at,
+            ActionOutcome.SUCCEEDED,
+            ErrorClass.CONNECTION_TIMEOUT,
+        )
+    with pytest.raises(ValueError, match="retry_at must follow"):
+        ActionAttempt(
+            attempt_id,
+            action_id,
+            1,
+            NOW,
+            ended_at,
+            ActionOutcome.FAILED,
+            ErrorClass.CONNECTION_TIMEOUT,
+            retry_at=ended_at,
+        )
+    with pytest.raises(ValueError, match="ended failed attempt"):
+        ActionAttempt(
+            attempt_id,
+            action_id,
+            1,
+            NOW,
+            ended_at,
+            ActionOutcome.SUCCEEDED,
+            retry_at=ended_at + timedelta(seconds=1),
+        )
+    with pytest.raises(ValueError, match="ActionOutcome"):
+        ActionAttempt(
+            attempt_id,
+            action_id,
+            1,
+            NOW,
+            ended_at,
+            "failed",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="ErrorClass"):
+        ActionAttempt(
+            attempt_id,
+            action_id,
+            1,
+            NOW,
+            ended_at,
+            ActionOutcome.FAILED,
+            "connection_timeout",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="positive integer"):
+        ActionAttempt(attempt_id, action_id, True, NOW)  # type: ignore[arg-type]
+
+
+def test_action_completion_rejects_primitive_enums_and_non_failure_errors() -> None:
+    with pytest.raises(ValueError, match="ActionOutcome"):
+        ActionCompletion(
+            action_id=uuid4(),
+            outcome="failed",  # type: ignore[arg-type]
+            completed_at=NOW,
+        )
+    with pytest.raises(ValueError, match="ErrorClass"):
+        ActionCompletion(
+            action_id=uuid4(),
+            outcome=ActionOutcome.FAILED,
+            completed_at=NOW,
+            error_class="connection_timeout",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="only a failed action"):
+        ActionCompletion(
+            action_id=uuid4(),
+            outcome=ActionOutcome.SUCCEEDED,
+            completed_at=NOW,
+            error_class=ErrorClass.CONNECTION_TIMEOUT,
+        )
+    with pytest.raises(ValueError, match="cannot schedule a retry"):
+        ActionCompletion(
+            action_id=uuid4(),
+            outcome=ActionOutcome.FAILED,
+            completed_at=NOW,
+            error_class=ErrorClass.CONNECTION_TIMEOUT,
+            retry_at=NOW + timedelta(seconds=1),
+        )
 
 
 @pytest.mark.parametrize("ordinal", [True, 1.5, 0])
