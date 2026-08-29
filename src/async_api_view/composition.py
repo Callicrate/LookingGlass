@@ -815,6 +815,19 @@ def build_runtime(
     """Initialize durable configuration and compose the one-process application."""
     settings.app.database_path.parent.mkdir(parents=True, exist_ok=True)
     store = SQLiteStore(settings.app.database_path)
+    try:
+        return _compose_runtime(settings, store=store, runner=runner)
+    except BaseException:
+        store.close()
+        raise
+
+
+def _compose_runtime(
+    settings: ProjectSettings,
+    *,
+    store: SQLiteStore,
+    runner: CliRunner | None,
+) -> ApplicationRuntime:
     bootstrap = SystemBootstrapService(store)
     configured_system_ids: set[str] = set()
     configured_binding_ids: set[str] = set()

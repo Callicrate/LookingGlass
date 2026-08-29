@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 21:18 ET
+Updated: 2026-08-28 21:19 ET
 
 ## Goal
 
@@ -9,9 +9,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 166 tests passed warning-free; Ruff format, lint, lock validation, and package build passed.
+- Latest checks: 167 tests passed warning-free; Ruff format, lint, and lock validation passed; package build remains green.
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
-- Version control: local `main` history has eight coherent commits ending at `8b779f5`; the next reviewed dashboard/alert commit is ready.
+- Version control: local `main` history has nine coherent commits ending at `45c4642`; the next reviewed quality-gate commit is ready.
 - Active review round: configuration desired-state reconciliation, runtime supervision, bounded dashboard reads, and migration concurrency.
 - Next progress report due: 2026-08-28 22:07 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -35,6 +35,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Reconcile documentation claims with the current implemented surface.
 - [x] Independently review and verify each consequential change set before committing.
 - [x] Surface a bounded recent projection of durable alertable failures.
+- [x] Enforce an aggregate branch-coverage floor in CI.
 - [ ] Add full alert history filtering only if it remains higher value than deeper object navigation.
 
 ## Evidence and decisions
@@ -58,6 +59,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Desktop and 390px mobile QA passed with no console errors; Lighthouse accessibility, best practices, and agentic browsing scored 100 on both device profiles.
 - The dashboard now renders the latest ten durable alertable failures with system, time, canonical class, and escaped redacted summary.
 - Alert recency uses a dedicated SQLite index verified by `EXPLAIN QUERY PLAN`; the exact full-history count was removed to preserve bounded dashboard work.
+- Aggregate branch coverage is 82% with an enforced 80% CI floor; statement coverage remains about 90%.
+- Composition failures now close their opened SQLite store before propagating the original startup error.
 
 ## Risks / watch list
 

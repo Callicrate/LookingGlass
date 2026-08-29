@@ -9,10 +9,11 @@ from uuid import uuid4
 import pytest
 
 from async_api_view.adapters.databricks import CliExecution, CliInvocation, CliRunner
+from async_api_view.application import SystemBootstrapService
 from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
 from async_api_view.contracts import PresenceState, RemoteObject
-from async_api_view.storage import StoredAction
+from async_api_view.storage import SQLiteStore, StoredAction
 from async_api_view.web import DashboardQuery, RefreshRequest
 
 
@@ -470,6 +471,29 @@ def test_workspace_root_change_creates_new_authority_and_pauses_predecessor(
         not scope.enabled for scope in changed.store.list_configured_scopes(system_id=original_id)
     )
     changed.store.close()
+
+
+def test_composition_failure_closes_open_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed = False
+    close = SQLiteStore.close
+
+    def tracked_close(store: SQLiteStore) -> None:
+        nonlocal closed
+        closed = True
+        close(store)
+
+    def fail_bootstrap(_service: SystemBootstrapService, **_kwargs: object) -> None:
+        raise RuntimeError("injected composition failure")
+
+    monkeypatch.setattr(SQLiteStore, "close", tracked_close)
+    monkeypatch.setattr(SystemBootstrapService, "configure_databricks_workspace", fail_bootstrap)
+
+    with pytest.raises(RuntimeError, match="injected composition failure"):
+        build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+
+    assert closed
 
 
 @pytest.mark.anyio

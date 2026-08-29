@@ -26,4 +26,6 @@ jobs:
       - name: Lint
         run: uv run ruff check src tests
       - name: Test
-        run: uv run pytest -q
+        run: |
+          uv run coverage run -m pytest -q
+          uv run coverage report
