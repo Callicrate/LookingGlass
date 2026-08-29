@@ -46,6 +46,10 @@ Check available profiles without printing credential values:
 databricks auth profiles
 ```
 
+Rookery resolves the CLI only from explicit absolute `PATH` entries, launches it from a fresh empty directory beneath a private per-user root, and rejects that root if any ancestor contains a bundle configuration recognized by the supported CLI contract. It removes inherited `DATABRICKS_*` and `BUNDLE_*` variables so ambient authentication or bundle settings cannot override the named profile. Configure the profile in the standard Databricks configuration location; ambient-only credentials and `DATABRICKS_CONFIG_FILE` overrides are intentionally ignored.
+
+`doctor` verifies only the installed CLI version and required command groups. It does not query workspace inventory or verify that the selected profile exists or can authenticate; the first mapped refresh performs that live check.
+
 ## Standalone wheel install
 
 This path needs the wheel, Python 3.12, `uv`, and the Databricks CLI, but no source checkout or `config.example.toml`.
@@ -86,9 +90,7 @@ uv run async-api-view --config config.local.toml init
 uv run async-api-view --config config.local.toml doctor
 ```
 
-`doctor` verifies the installed CLI version and required command groups.
-It does not query workspace inventory or validate the selected profile's authentication.
-It is the fail-fast compatibility check: `serve` performs the same check in its background supervisor so cached pages remain available while compatibility is pending or failing.
+`doctor` is the fail-fast compatibility check: `serve` performs the same check in its background supervisor so cached pages remain available while compatibility is pending or failing.
 
 ### Run
 

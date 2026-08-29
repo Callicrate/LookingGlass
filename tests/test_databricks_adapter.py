@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,6 +23,7 @@ from async_api_view.adapters.databricks import (
     CliOutputLimit,
     CliRunner,
     CliTimeout,
+    CliUnavailable,
     CommandRejected,
     DatabricksCommandRegistry,
     DatabricksWorker,
@@ -249,11 +252,259 @@ async def test_runner_rejects_manual_invocation_before_process_creation(
         await runner.run(invocation, correlation_id="test")
 
 
+def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle_root = tmp_path / "hostile-bundle"
+    bundle_root.mkdir()
+    (bundle_root / "databricks.yml").write_text(
+        "bundle:\n  name: hostile\nworkspace:\n  host: https://ambient.invalid\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(bundle_root)
+    for name in (
+        "DATABRICKS_HOST",
+        "DATABRICKS_TOKEN",
+        "DATABRICKS_CONFIG_FILE",
+        "DATABRICKS_BUNDLE_ROOT",
+        "BUNDLE_VAR_target",
+    ):
+        monkeypatch.setenv(name, "ambient-secret-or-target")
+    monkeypatch.setenv("ROOKERY_TEST_ENV", "preserved")
+    safe_path = tmp_path / "safe-path"
+    safe_path.mkdir()
+    monkeypatch.setenv("PATH", f".{os.pathsep}{safe_path}")
+    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root.mkdir(parents=True)
+    monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
+    spawned: list[tuple[Path, dict[str, str]]] = []
+
+    class EmptyStream:
+        async def read(self, _size: int) -> bytes:
+            return b""
+
+    class CompleteProcess:
+        returncode = 0
+        stdout = EmptyStream()
+        stderr = EmptyStream()
+
+        async def wait(self) -> int:
+            return 0
+
+    async def create_process(*_args: object, **kwargs: object) -> CompleteProcess:
+        working_directory = Path(kwargs["cwd"])  # type: ignore[arg-type]
+        environment = kwargs["env"]  # type: ignore[assignment]
+        assert working_directory != bundle_root
+        assert list(working_directory.iterdir()) == []
+        spawned.append((working_directory, environment))
+        return CompleteProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    runner = CliRunner(executable="databricks")
+    runner._resolved_executable = "C:\\trusted\\databricks.exe"
+
+    async def exercise() -> None:
+        await runner.run_unmapped(CliInvocation("doctor", ("databricks", "--version")))
+        await runner.run(
+            CliInvocation(
+                "databricks.workspace.children.read",
+                (
+                    "databricks",
+                    "workspace",
+                    "list",
+                    "/Shared",
+                    "--profile",
+                    "configured-profile",
+                    "--output",
+                    "json",
+                ),
+            ),
+            correlation_id="test",
+        )
+
+    asyncio.run(exercise())
+
+    assert len(spawned) == 2
+    for working_directory, environment in spawned:
+        assert not working_directory.exists()
+        assert environment["ROOKERY_TEST_ENV"] == "preserved"
+        assert environment["PATH"] == str(safe_path)
+        assert not any(name.upper().startswith(("DATABRICKS_", "BUNDLE_")) for name in environment)
+
+
+@pytest.mark.parametrize("filename", databricks_adapter._BUNDLE_CONFIG_FILENAMES)
+def test_cli_work_root_rejects_every_bundle_configuration_ancestor(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / filename).write_text("bundle:\n  name: hostile\n", encoding="utf-8")
+
+    with pytest.raises(CliUnavailable, match="bundle configuration ancestor"):
+        databricks_adapter._trusted_cli_work_root(home=home)
+
+
+def test_cli_work_root_is_private_and_confined_to_home(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+
+    root = databricks_adapter._trusted_cli_work_root(home=home)
+
+    assert root == (home / ".rookery" / "cli-work").resolve()
+    assert root.is_dir()
+    if os.name != "nt":
+        assert root.parent.stat().st_mode & 0o777 == 0o700
+        assert root.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ownership and DACL regression")
+def test_cli_work_root_replaces_permissive_windows_security(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    state_root = home / ".rookery"
+    work_root = state_root / "cli-work"
+    work_root.mkdir(parents=True)
+    icacls = Path(os.environ["SYSTEMROOT"]) / "System32" / "icacls.exe"
+    for directory in (state_root, work_root):
+        subprocess.run(  # noqa: S603 - absolute Windows system executable
+            (str(icacls), str(directory), "/grant", "*S-1-1-0:(OI)(CI)F", "/Q"),
+            check=True,
+            capture_output=True,
+        )
+
+    root = databricks_adapter._trusted_cli_work_root(home=home)
+
+    assert root == work_root.resolve()
+    powershell = (
+        Path(os.environ["SYSTEMROOT"])
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    owner_script = (
+        "$acl=(New-Object System.IO.DirectoryInfo("
+        "$env:ROOKERY_ACL_TEST_PATH)).GetAccessControl();"
+        "$ownerSid=$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;"
+        "$currentSid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;"
+        "if($ownerSid -ne $currentSid){throw 'Rookery directory owner mismatch'}"
+    )
+    for ordinal, directory in enumerate((state_root, work_root)):
+        saved_acl = tmp_path / f"acl-{ordinal}.txt"
+        subprocess.run(  # noqa: S603 - absolute Windows system executable
+            (str(icacls), str(directory), "/save", str(saved_acl), "/Q"),
+            check=True,
+            capture_output=True,
+        )
+        sddl = saved_acl.read_text(encoding="utf-16-le")
+        assert "D:P" in sddl
+        assert ";;;WD)" not in sddl
+        owner_environment = dict(os.environ)
+        owner_environment["ROOKERY_ACL_TEST_PATH"] = str(directory)
+        owner_result = subprocess.run(  # noqa: S603 - absolute Windows system executable
+            (
+                str(powershell),
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                owner_script,
+            ),
+            check=False,
+            capture_output=True,
+            env=owner_environment,
+            text=True,
+        )
+        assert owner_result.returncode == 0, owner_result.stderr
+
+
+def test_cli_work_root_rejects_redirected_state_directory(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    redirected = home / "redirected"
+    home.mkdir()
+    redirected.mkdir()
+    try:
+        (home / ".rookery").symlink_to(redirected, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    with pytest.raises(CliUnavailable, match="filesystem redirect"):
+        databricks_adapter._trusted_cli_work_root(home=home)
+
+    assert list(redirected.iterdir()) == []
+
+
+def test_cli_resolution_never_searches_current_directory_or_relative_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hostile = tmp_path / "hostile"
+    trusted = tmp_path / "trusted"
+    hostile.mkdir()
+    trusted.mkdir()
+    executable_name = "databricks.exe" if os.name == "nt" else "databricks"
+    for directory in (hostile, trusted):
+        executable = directory / executable_name
+        executable.write_text("placeholder", encoding="utf-8")
+        executable.chmod(0o700)
+    monkeypatch.chdir(hostile)
+    monkeypatch.setenv("PATH", f"{os.pathsep}.{os.pathsep}{trusted}")
+    if os.name == "nt":
+        monkeypatch.setenv("PATHEXT", ".EXE")
+
+    resolved = CliRunner().resolve_executable()
+
+    assert Path(resolved) == (trusted / executable_name).resolve()
+
+
+def test_cli_resolution_rejects_current_directory_only_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable_name = "databricks.exe" if os.name == "nt" else "databricks"
+    executable = tmp_path / executable_name
+    executable.write_text("placeholder", encoding="utf-8")
+    executable.chmod(0o700)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", f"{os.pathsep}.")
+    if os.name == "nt":
+        monkeypatch.setenv("PATHEXT", ".EXE")
+
+    with pytest.raises(CliUnavailable, match="absolute PATH"):
+        CliRunner().resolve_executable()
+
+
+def test_cli_process_creation_failure_is_controlled_and_cleans_workdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root.mkdir(parents=True)
+    monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
+
+    async def fail_process(*_args: object, **_kwargs: object) -> None:
+        raise FileNotFoundError("simulated executable race")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_process)
+    runner = CliRunner()
+    runner._resolved_executable = "C:\\trusted\\databricks.exe"
+
+    with pytest.raises(CliUnavailable, match="process could not start"):
+        asyncio.run(runner.run_unmapped(CliInvocation("doctor", ("databricks", "--version"))))
+
+    assert list(work_root.iterdir()) == []
+
+
 @pytest.mark.parametrize("failure", ["cancel", "timeout", "output_limit"])
 def test_compatibility_check_failures_reap_process_and_readers(
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
+    tmp_path: Path,
 ) -> None:
+    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root.mkdir(parents=True)
+    monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
+
     async def exercise() -> None:
         stopped = asyncio.Event()
         created = asyncio.Event()
@@ -302,11 +553,9 @@ def test_compatibility_check_failures_reap_process_and_readers(
             stdout_cap=1,
             stderr_cap=1,
         )
+        runner._resolved_executable = "C:\\trusted\\databricks.exe"
         task = asyncio.create_task(
-            runner.run_unmapped(
-                CliInvocation("doctor", ("databricks", "--version")),
-                executable="C:\\trusted\\databricks.exe",
-            )
+            runner.run_unmapped(CliInvocation("doctor", ("databricks", "--version")))
         )
         await created.wait()
         await asyncio.sleep(0)

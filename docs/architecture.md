@@ -1236,6 +1236,8 @@ The CLI runner MUST:
 - resolve and invoke the existing `databricks` executable rather than install, vendor, or reimplement it;
 - invoke the executable without a shell command string;
 - pass the profile and JSON-output selection as separate structured arguments;
+- resolve the executable only through explicit absolute `PATH` entries and run from a fresh empty directory beneath a private per-user root whose full ancestor chain contains no CLI-recognized bundle configuration;
+- remove inherited Databricks and bundle override variables so the named profile remains authoritative while ordinary home, trust-store, proxy, and cloud SDK settings remain available;
 - validate the installed CLI version and required command groups at startup;
 - capture stdout, stderr, exit code, timeout, and correlation ID;
 - parse only the expected JSON contract for the pinned capability version;

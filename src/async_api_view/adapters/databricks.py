@@ -11,13 +11,14 @@ import asyncio
 import base64
 import binascii
 import json
+import os
 import re
-import shutil
+import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -65,6 +66,12 @@ MAX_TABLE_COLUMNS = 1_000
 MAX_JSON_DEPTH = 32
 MAX_INGESTION_BATCH_BYTES = 1_000_000
 MAX_INGESTION_BATCH_UNITS = 250
+_BUNDLE_CONFIG_FILENAMES = (
+    "databricks.yml",
+    "databricks.yaml",
+    "bundle.yml",
+    "bundle.yaml",
+)
 
 CAPABILITIES = frozenset(
     {
@@ -397,6 +404,221 @@ async def _terminate_process(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def _absolute_path_entries(value: str) -> tuple[str, ...]:
+    """Return explicit absolute PATH entries without an implicit current directory."""
+
+    entries: list[str] = []
+    for raw_entry in value.split(os.pathsep):
+        entry = (
+            raw_entry[1:-1] if raw_entry.startswith('"') and raw_entry.endswith('"') else raw_entry
+        )
+        entry = os.path.expandvars(entry)
+        if entry and Path(entry).is_absolute():
+            entries.append(entry)
+    return tuple(entries)
+
+
+def _controlled_cli_environment() -> dict[str, str]:
+    """Preserve ordinary process settings while removing Databricks auth overrides."""
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith(("DATABRICKS_", "BUNDLE_"))
+    }
+    for key in tuple(environment):
+        if key.upper() == "PATH":
+            environment[key] = os.pathsep.join(_absolute_path_entries(environment[key]))
+    return environment
+
+
+def _harden_windows_directory_acl(path: Path) -> None:
+    """Replace a Windows directory DACL with one inheritable current-user grant."""
+
+    if os.name != "nt":
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    class SidAndAttributes(ctypes.Structure):
+        _fields_ = (("sid", wintypes.LPVOID), ("attributes", wintypes.DWORD))
+
+    class TokenUser(ctypes.Structure):
+        _fields_ = (("user", SidAndAttributes),)
+
+    token = wintypes.HANDLE()
+    required = wintypes.DWORD()
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    advapi32.OpenProcessToken.argtypes = (
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    )
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.GetLengthSid.argtypes = (wintypes.LPVOID,)
+    advapi32.GetLengthSid.restype = wintypes.DWORD
+    advapi32.InitializeAcl.argtypes = (wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD)
+    advapi32.InitializeAcl.restype = wintypes.BOOL
+    advapi32.AddAccessAllowedAceEx.argtypes = (
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+    )
+    advapi32.AddAccessAllowedAceEx.restype = wintypes.BOOL
+    advapi32.SetNamedSecurityInfoW.argtypes = (
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+    )
+    advapi32.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi32.GetNamedSecurityInfoW.argtypes = (
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.LPVOID),
+    )
+    advapi32.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi32.EqualSid.argtypes = (wintypes.LPVOID, wintypes.LPVOID)
+    advapi32.EqualSid.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = (wintypes.HLOCAL,)
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+
+    def last_error(message: str) -> OSError:
+        code = ctypes.get_last_error()
+        return OSError(code, f"{message}: {ctypes.FormatError(code)}")
+
+    if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
+        raise last_error("could not open the current process token")
+    try:
+        advapi32.GetTokenInformation(token, 1, None, 0, ctypes.byref(required))
+        if required.value == 0:
+            raise last_error("could not size the current user token")
+        token_buffer = ctypes.create_string_buffer(required.value)
+        if not advapi32.GetTokenInformation(
+            token, 1, token_buffer, required.value, ctypes.byref(required)
+        ):
+            raise last_error("could not read the current user token")
+        user_sid = ctypes.cast(token_buffer, ctypes.POINTER(TokenUser)).contents.user.sid
+        sid_length = advapi32.GetLengthSid(user_sid)
+        if sid_length == 0:
+            raise last_error("could not size the current user SID")
+
+        acl_size = 8 + 8 + sid_length
+        acl_buffer = ctypes.create_string_buffer(acl_size)
+        acl = ctypes.cast(acl_buffer, wintypes.LPVOID)
+        if not advapi32.InitializeAcl(acl, acl_size, 2):
+            raise last_error("could not initialize the Rookery directory ACL")
+        if not advapi32.AddAccessAllowedAceEx(acl, 2, 0x3, 0x001F01FF, user_sid):
+            raise last_error("could not grant the current user access to the Rookery directory")
+        result = advapi32.SetNamedSecurityInfoW(
+            str(path),
+            1,
+            0x80000005,
+            user_sid,
+            None,
+            acl,
+            None,
+        )
+        if result != 0:
+            raise OSError(
+                result, f"could not protect the Rookery directory: {ctypes.FormatError(result)}"
+            )
+
+        owner_sid = wintypes.LPVOID()
+        security_descriptor = wintypes.LPVOID()
+        result = advapi32.GetNamedSecurityInfoW(
+            str(path),
+            1,
+            0x00000001,
+            ctypes.byref(owner_sid),
+            None,
+            None,
+            None,
+            ctypes.byref(security_descriptor),
+        )
+        if result != 0:
+            raise OSError(
+                result,
+                f"could not verify the Rookery directory owner: {ctypes.FormatError(result)}",
+            )
+        try:
+            if not advapi32.EqualSid(owner_sid, user_sid):
+                raise OSError("Rookery directory owner does not match the current user")
+        finally:
+            kernel32.LocalFree(security_descriptor)
+    finally:
+        kernel32.CloseHandle(token)
+
+
+def _trusted_cli_work_root(*, home: Path | None = None) -> Path:
+    """Create a private work root without a CLI-recognized bundle ancestor."""
+
+    try:
+        resolved_home = (home or Path.home()).resolve(strict=True)
+        state_root = resolved_home / ".rookery"
+        if state_root.is_symlink() or state_root.is_junction():
+            raise CliUnavailable("Rookery state directory cannot be a filesystem redirect")
+        state_root.mkdir(mode=0o700, exist_ok=True)
+        if os.name == "nt":
+            _harden_windows_directory_acl(state_root)
+        else:
+            state_root.chmod(0o700)
+        requested_root = state_root / "cli-work"
+        if requested_root.is_symlink() or requested_root.is_junction():
+            raise CliUnavailable("Rookery CLI work directory cannot be a filesystem redirect")
+        requested_root.mkdir(mode=0o700, exist_ok=True)
+        resolved_root = requested_root.resolve(strict=True)
+        if not resolved_root.is_dir() or resolved_root != requested_root:
+            raise CliUnavailable("Rookery CLI work directory is not a dedicated user directory")
+        if os.name == "nt":
+            _harden_windows_directory_acl(resolved_root)
+        else:
+            resolved_root.chmod(0o700)
+        for directory in (resolved_root, *resolved_root.parents):
+            if any((directory / filename).exists() for filename in _BUNDLE_CONFIG_FILENAMES):
+                raise CliUnavailable(
+                    "Rookery CLI work directory has a Databricks bundle configuration ancestor"
+                )
+    except OSError as exc:
+        raise CliUnavailable("Rookery CLI work directory is unavailable") from exc
+    return resolved_root
+
+
+def _candidate_executable_names(executable: str) -> tuple[str, ...]:
+    if os.name != "nt" or Path(executable).suffix:
+        return (executable,)
+    return (f"{executable}.COM", f"{executable}.EXE")
+
+
+def _usable_executable(path: Path) -> bool:
+    if os.name == "nt" and path.suffix.upper() not in {".COM", ".EXE"}:
+        return False
+    return path.is_file() and (os.name == "nt" or os.access(path, os.X_OK))
+
+
 class CliRunner:
     """Async structured-argv runner with bounded in-memory process output."""
 
@@ -418,54 +640,98 @@ class CliRunner:
 
     def resolve_executable(self) -> str:
         if self._resolved_executable is None:
-            resolved = shutil.which(self.executable)
-            if resolved is None:
-                raise CliUnavailable("Databricks CLI executable was not found")
-            self._resolved_executable = resolved
+            requested = Path(self.executable)
+            if requested.is_absolute():
+                candidates = (requested,)
+            elif requested.name == self.executable:
+                candidates = tuple(
+                    Path(entry) / name
+                    for entry in _absolute_path_entries(os.environ.get("PATH", ""))
+                    for name in _candidate_executable_names(self.executable)
+                )
+            else:
+                candidates = ()
+            for candidate in candidates:
+                if _usable_executable(candidate):
+                    try:
+                        self._resolved_executable = str(candidate.resolve(strict=True))
+                    except OSError:
+                        continue
+                    else:
+                        break
+            if self._resolved_executable is None:
+                raise CliUnavailable("Databricks CLI executable was not found on an absolute PATH")
         return self._resolved_executable
 
+    async def _execute(
+        self,
+        argv: tuple[str, ...],
+        *,
+        correlation_id: str,
+        timeout_message: str,
+    ) -> CliExecution:
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory(
+            prefix="rookery-databricks-", dir=_trusted_cli_work_root()
+        ) as working_directory:
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=_controlled_cli_environment(),
+                    cwd=working_directory,
+                )
+            except OSError as exc:
+                raise CliUnavailable("Databricks CLI process could not start") from exc
+            stdout_task = asyncio.create_task(_read_limited(process.stdout, self.stdout_cap))
+            stderr_task = asyncio.create_task(_read_limited(process.stderr, self.stderr_cap))
+            wait_task = asyncio.create_task(process.wait())
+            try:
+                stdout, stderr, exit_code = await asyncio.wait_for(
+                    asyncio.gather(stdout_task, stderr_task, wait_task),
+                    timeout=self.timeout_seconds,
+                )
+            except TimeoutError as exc:
+                await _terminate_process(process, stdout_task, stderr_task, wait_task)
+                raise CliTimeout(timeout_message) from exc
+            except CliOutputLimit:
+                await _terminate_process(process, stdout_task, stderr_task, wait_task)
+                raise
+            except asyncio.CancelledError:
+                await _terminate_process(process, stdout_task, stderr_task, wait_task)
+                raise
+        return CliExecution(
+            correlation_id,
+            timedelta(seconds=time.monotonic() - started),
+            exit_code,
+            stdout,
+            stderr,
+        )
+
     async def run(self, invocation: CliInvocation, *, correlation_id: str) -> CliExecution:
-        executable = self.resolve_executable()
         if invocation.argv[0] != self.executable:
             raise CommandRejected("invocation does not use configured executable")
         _validate_observation_invocation(invocation)
+        executable = self.resolve_executable()
         argv = (executable, *invocation.argv[1:])
-        started = time.monotonic()
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        execution = await self._execute(
+            argv,
+            correlation_id=str(correlation_id),
+            timeout_message="Databricks CLI timed out",
         )
-        stdout_task = asyncio.create_task(_read_limited(process.stdout, self.stdout_cap))
-        stderr_task = asyncio.create_task(_read_limited(process.stderr, self.stderr_cap))
-        wait_task = asyncio.create_task(process.wait())
-        try:
-            stdout, stderr, exit_code = await asyncio.wait_for(
-                asyncio.gather(stdout_task, stderr_task, wait_task), timeout=self.timeout_seconds
-            )
-        except TimeoutError as exc:
-            await _terminate_process(process, stdout_task, stderr_task, wait_task)
-            raise CliTimeout("Databricks CLI timed out") from exc
-        except CliOutputLimit:
-            await _terminate_process(process, stdout_task, stderr_task, wait_task)
-            raise
-        except asyncio.CancelledError:
-            await _terminate_process(process, stdout_task, stderr_task, wait_task)
-            raise
-        duration = timedelta(seconds=time.monotonic() - started)
-        execution = CliExecution(str(correlation_id), duration, exit_code, stdout, stderr)
-        if exit_code != 0:
+        if execution.exit_code != 0:
             raise DownstreamFailure(
                 "Databricks CLI exited unsuccessfully",
-                exit_code=exit_code,
-                diagnostic=redact_diagnostic(stderr),
+                exit_code=execution.exit_code,
+                diagnostic=redact_diagnostic(execution.stderr),
             )
         return execution
 
     async def doctor(self) -> None:
         """Verify 0.298-compatible version and required group help surfaces."""
-        executable = self.resolve_executable()
+        self.resolve_executable()
         checks = (
             ("--version",),
             *(
@@ -476,7 +742,7 @@ class CliRunner:
         version_text = ""
         for args in checks:
             invocation = CliInvocation("doctor", (self.executable, *args))
-            result = await self.run_unmapped(invocation, executable=executable)
+            result = await self.run_unmapped(invocation)
             text = (result.stdout + b"\n" + result.stderr).decode("utf-8", "replace")
             if result.exit_code != 0:
                 raise CliIncompatible(f"Databricks CLI does not support {' '.join(args)!r}")
@@ -486,9 +752,7 @@ class CliRunner:
         if matched is None or tuple(int(part) for part in matched.groups()) < MINIMUM_CLI_VERSION:
             raise CliIncompatible("Databricks CLI must be version 0.298 or newer")
 
-    async def run_unmapped(
-        self, invocation: CliInvocation, *, executable: str | None = None
-    ) -> CliExecution:
+    async def run_unmapped(self, invocation: CliInvocation) -> CliExecution:
         """Internal doctor path; public observation calls must use ``run``."""
         if invocation.capability_key != "doctor" or invocation.argv[1:] not in {
             ("--version",),
@@ -499,34 +763,11 @@ class CliRunner:
             ("volumes", "--help"),
         }:
             raise CommandRejected("unregistered Databricks compatibility check")
-        resolved = executable or self.resolve_executable()
-        started = time.monotonic()
-        process = await asyncio.create_subprocess_exec(
-            resolved,
-            *invocation.argv[1:],
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout_task = asyncio.create_task(_read_limited(process.stdout, self.stdout_cap))
-        stderr_task = asyncio.create_task(_read_limited(process.stderr, self.stderr_cap))
-        wait_task = asyncio.create_task(process.wait())
-        try:
-            stdout, stderr, exit_code = await asyncio.wait_for(
-                asyncio.gather(stdout_task, stderr_task, wait_task),
-                timeout=self.timeout_seconds,
-            )
-        except TimeoutError as exc:
-            await _terminate_process(process, stdout_task, stderr_task, wait_task)
-            raise CliTimeout("Databricks CLI compatibility check timed out") from exc
-        except CliOutputLimit:
-            await _terminate_process(process, stdout_task, stderr_task, wait_task)
-            raise
-        except asyncio.CancelledError:
-            await _terminate_process(process, stdout_task, stderr_task, wait_task)
-            raise
-        return CliExecution(
-            "doctor", timedelta(seconds=time.monotonic() - started), exit_code, stdout, stderr
+        resolved = self.resolve_executable()
+        return await self._execute(
+            (resolved, *invocation.argv[1:]),
+            correlation_id="doctor",
+            timeout_message="Databricks CLI compatibility check timed out",
         )
 
 
