@@ -535,22 +535,23 @@ class SQLiteStore:
         desired_scopes = tuple(require_uuid(value, "scope_id") for value in scope_ids)
         timestamp = _utc_text(now or _now())
         with self._immediate_transaction() as connection:
-            system_filter = "SELECT system_id FROM systems WHERE system_kind = ?"
             connection.execute(
                 "UPDATE capability_bindings SET enabled = 0, record_updated_at = ? "
                 "WHERE connection_binding_id IN ("
                 "SELECT binding_id FROM connection_bindings WHERE system_id IN ("
-                f"{system_filter}))",
+                "SELECT system_id FROM systems WHERE system_kind = ?))",
                 (timestamp, system_kind),
             )
             connection.execute(
                 "UPDATE connection_bindings SET enabled = 0, record_updated_at = ? "
-                f"WHERE system_id IN ({system_filter})",
+                "WHERE system_id IN ("
+                "SELECT system_id FROM systems WHERE system_kind = ?)",
                 (timestamp, system_kind),
             )
             connection.execute(
                 "UPDATE configured_scopes SET enabled = 0, record_updated_at = ? "
-                f"WHERE system_id IN ({system_filter})",
+                "WHERE system_id IN ("
+                "SELECT system_id FROM systems WHERE system_kind = ?)",
                 (timestamp, system_kind),
             )
             connection.execute(

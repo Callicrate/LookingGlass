@@ -69,6 +69,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Remote display text now neutralizes ANSI/control and bidi-override characters while preserving ordinary Unicode and ZWJ emoji.
 - The ignored local database upgraded through migration `0005`; `PRAGMA integrity_check` is `ok` with zero foreign-key violations.
 - The installed Databricks CLI compatibility doctor still passes without authentication or inventory probing.
+- CI now runs Ruff's source security rules in addition to the normal lint suite; all SQL construction is static and all values remain bound parameters.
+- The second structured critical-review report is schema-valid in `.local/review-round2/` and records four resolved findings plus the live-validation gate.
 
 ## Risks / watch list
 
