@@ -297,7 +297,7 @@ def _schema_ddl_through(final_version: str) -> tuple[tuple[str, str, str, str], 
             for row in reference.execute(
                 """
                 SELECT type, name, tbl_name, sql FROM sqlite_schema
-                WHERE type IN ('table', 'index')
+                WHERE type IN ('table', 'index', 'trigger')
                   AND name NOT LIKE 'sqlite_%'
                   AND sql IS NOT NULL
                 ORDER BY type, name
@@ -776,7 +776,7 @@ class SQLiteStore:
             for row in self._connection.execute(
                 """
                 SELECT type, name, tbl_name, sql FROM sqlite_schema
-                WHERE type IN ('table', 'index')
+                WHERE type IN ('table', 'index', 'trigger')
                   AND name NOT LIKE 'sqlite_%'
                   AND sql IS NOT NULL
                 """
@@ -2467,20 +2467,24 @@ class SQLiteStore:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT MAX(action.started_at) AS started_at
-                FROM adapter_actions AS action
-                JOIN adapter_action_scopes AS scope ON scope.action_id = action.action_id
-                WHERE scope.system_id = ? AND scope.target_kind = ? AND scope.target_id = ?
-                  AND scope.object_type = ? AND scope.facet = ? AND scope.capability_key IS ?
-                  AND scope.coverage = ?
-                  AND scope.field_mask_json = ? AND action.started_at IS NOT NULL
+                SELECT latest_started_at
+                FROM action_scope_cooldown
+                WHERE system_id = ? AND target_kind = ? AND target_id = ?
+                  AND object_type = ? AND facet = ?
+                  AND capability_key_is_null = ? AND capability_key = ?
+                  AND coverage = ? AND field_mask_json = ?
                 """,
-                columns,
+                (
+                    *columns[:5],
+                    int(columns[5] is None),
+                    columns[5] or "",
+                    *columns[6:],
+                ),
             ).fetchone()
         return ScopePolicyState(
             scope=scope,
             latest_qualifying_observation_at=evidence.observed_at if evidence else None,
-            latest_targeted_action_started_at=_dt(row["started_at"]) if row else None,
+            latest_targeted_action_started_at=_dt(row["latest_started_at"]) if row else None,
         )
 
     def _action_from_row(self, row: sqlite3.Row) -> AdapterAction:
@@ -2655,97 +2659,41 @@ class SQLiteStore:
         object_statement = """
             WITH visible AS (
                 SELECT value AS object_id FROM json_each(?)
-            ),
-            winners AS (
-                SELECT
-                    scope.target_id AS object_id,
-                    scope.facet,
-                    substr(
-                        MAX(
-                            CASE WHEN action.state IN (
-                                'ready', 'leased', 'running', 'retry_wait'
-                            ) THEN '1' ELSE '0' END
-                            || COALESCE(
-                                action.completed_at,
-                                action.started_at,
-                                action.record_created_at
-                            )
-                            || action.action_id
-                        ),
-                        -36
-                    ) AS action_id
-                FROM visible
-                CROSS JOIN adapter_action_scopes AS scope
-                    INDEXED BY ix_adapter_action_scopes_target_facet
-                CROSS JOIN adapter_actions AS action
-                WHERE scope.target_kind = 'object'
-                  AND scope.target_id = visible.object_id
-                  AND action.action_id = scope.action_id
-                GROUP BY scope.target_id, scope.facet
             )
             SELECT
-                action.system_id,
-                winners.object_id,
-                winners.facet,
-                action.action_id,
-                action.state,
-                COALESCE(
-                    action.completed_at,
-                    action.started_at,
-                    action.record_created_at
-                ) AS occurred_at,
-                action.redacted_diagnostic
-            FROM winners
-            JOIN adapter_actions AS action ON action.action_id = winners.action_id
+                status.system_id,
+                status.target_id AS object_id,
+                status.facet,
+                status.action_id,
+                status.state,
+                status.occurred_at,
+                status.redacted_diagnostic
+            FROM visible
+            CROSS JOIN facet_action_status AS status
+                INDEXED BY ix_facet_action_status_target
+            WHERE status.target_kind = 'object'
+              AND status.target_id = visible.object_id
         """
         configured_statement = """
             WITH visible AS (
                 SELECT value AS object_id FROM json_each(?)
-            ),
-            winners AS (
-                SELECT
-                    configured.object_id,
-                    scope.facet,
-                    substr(
-                        MAX(
-                            CASE WHEN action.state IN (
-                                'ready', 'leased', 'running', 'retry_wait'
-                            ) THEN '1' ELSE '0' END
-                            || COALESCE(
-                                action.completed_at,
-                                action.started_at,
-                                action.record_created_at
-                            )
-                            || action.action_id
-                        ),
-                        -36
-                    ) AS action_id
-                FROM visible
-                CROSS JOIN configured_scopes AS configured
-                    INDEXED BY ix_configured_scopes_object
-                CROSS JOIN adapter_action_scopes AS scope
-                    INDEXED BY ix_adapter_action_scopes_target_facet
-                CROSS JOIN adapter_actions AS action
-                WHERE configured.object_id = visible.object_id
-                  AND scope.target_kind = 'configured_scope'
-                  AND scope.target_id = configured.scope_id
-                  AND action.action_id = scope.action_id
-                GROUP BY configured.object_id, scope.facet
             )
             SELECT
-                action.system_id,
-                winners.object_id,
-                winners.facet,
-                action.action_id,
-                action.state,
-                COALESCE(
-                    action.completed_at,
-                    action.started_at,
-                    action.record_created_at
-                ) AS occurred_at,
-                action.redacted_diagnostic
-            FROM winners
-            JOIN adapter_actions AS action ON action.action_id = winners.action_id
+                status.system_id,
+                configured.object_id,
+                status.facet,
+                status.action_id,
+                status.state,
+                status.occurred_at,
+                status.redacted_diagnostic
+            FROM visible
+            CROSS JOIN configured_scopes AS configured
+                INDEXED BY ix_configured_scopes_object
+            CROSS JOIN facet_action_status AS status
+                INDEXED BY ix_facet_action_status_target
+            WHERE configured.object_id = visible.object_id
+              AND status.target_kind = 'configured_scope'
+              AND status.target_id = configured.scope_id
         """
         encoded_ids = json.dumps(normalized_ids)
         with self._lock:

@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 16:23 ET
+Updated: 2026-08-29 16:46 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 398 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 399 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: migration `0018` action-state projections pass the exact full/package gate and await independent million-history/trigger review before commit and real migration.
+- Active review round: migration `0018` action-state projections are independently clear after the exact full gate; no known medium-or-higher finding remains, so fresh residual review resumes after commit and real migration.
 - Next progress report due: 2026-08-29 17:22 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -117,7 +117,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Fence exact-expiry final dispatch and renew the running lease atomically.
 - [x] Preserve Unity Catalog schema/relation/volume identity across rename and recreation.
 - [x] Remove full-backlog sorting and unbounded due promotion from both lease selectors.
-- [ ] Read current cooldown/facet action state without replaying retained action history.
+- [x] Read current cooldown/facet action state without replaying retained action history.
 
 ## Evidence and decisions
 
@@ -210,6 +210,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Fresh final review independently cleared one-million future/due backlogs, 1,001 bounded transactions, 1,000 event-loop yields, exact ordering, caller draining, and real-lease/true-idle semantics.
 - Local migration `0018` backfills and trigger-maintains one exact cooldown anchor plus bounded active/latest-terminal facet candidates; current reads are trace-proven not to access retained action history.
 - Projection DDL validation includes triggers; migration backfill, raw lifecycle transitions, active-over-terminal behavior, cooldown anchors, and 128 focused storage/coordinator/composition tests pass.
+- Conditional correction triggers recompute only affected groups when established timestamps move backward or NULL, while normal forward lifecycle writes stay on bounded incremental paths.
+- Independent million-history review measured projection reads below 1,000 VM instructions (~0.06–0.09 ms) versus 25–27 million (~0.8–0.9 s) for legacy reads; normal updates remained sub-millisecond and bounded.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 15:18 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.

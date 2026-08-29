@@ -75,6 +75,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0015_relationship_coverage_watermarks",
             "0016_projection_received_order",
             "0017_queue_claim_order",
+            "0018_action_state_projections",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -237,7 +238,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 17
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -275,7 +276,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 17
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -287,6 +288,40 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
             check.execute(
                 "SELECT COUNT(*) FROM sqlite_schema WHERE name = ?",
                 ("ux_refresh_overrides_identity",),
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        check.close()
+
+
+def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_path) -> None:
+    path = tmp_path / "missing-projection-trigger.sqlite3"
+    with SQLiteStore(path) as store:
+        system = SystemBootstrapService(store).create_system(
+            display_name="sentinel", system_kind="databricks.workspace", now=NOW
+        )
+        store._connection.execute("DROP TRIGGER trg_action_projection_update")
+
+    with pytest.raises(
+        sqlite3.DatabaseError,
+        match="schema object trg_action_projection_update is incompatible",
+    ):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+        assert (
+            check.execute(
+                "SELECT display_name FROM systems WHERE system_id = ?",
+                (system.system_id,),
+            ).fetchone()[0]
+            == "sentinel"
+        )
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'trg_action_projection_update'"
             ).fetchone()[0]
             == 0
         )
@@ -814,6 +849,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0015_relationship_coverage_watermarks",
         "0016_projection_received_order",
         "0017_queue_claim_order",
+        "0018_action_state_projections",
     )
     assert versions == (expected,) * workers
 
@@ -954,6 +990,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0015_relationship_coverage_watermarks",
             "0016_projection_received_order",
             "0017_queue_claim_order",
+            "0018_action_state_projections",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -1183,8 +1220,17 @@ def test_failed_logical_action_anchors_cooldown_and_creates_one_event(tmp_path) 
     with pytest.raises(ValueError, match="lease"):
         run(store.complete_action(completion, lease_id=lease.lease_id))
 
-    policy = store.scope_policy_state(scope)
+    cooldown_statements: list[str] = []
+    store._connection.set_trace_callback(cooldown_statements.append)
+    try:
+        policy = store.scope_policy_state(scope)
+    finally:
+        store._connection.set_trace_callback(None)
     assert policy.latest_targeted_action_started_at == started_at
+    assert (
+        store._connection.execute("SELECT COUNT(*) FROM action_scope_cooldown").fetchone()[0] == 1
+    )
+    assert not any("adapter_action" in statement for statement in cooldown_statements)
     events = store.list_operational_events(alertable_only=True)
     assert len(events) == 1
     assert events[0].event_type == "refresh.action.failed"
@@ -1358,6 +1404,103 @@ def test_final_start_strictly_fences_expiry_and_renews_running_lease(tmp_path) -
     )
     assert reclaimed is not None and reclaimed.lease_id != renewed_lease.lease_id
     renewed_store.close()
+
+
+def test_action_projection_migration_backfills_history_and_triggers(tmp_path) -> None:
+    path = tmp_path / "action-projection-migration.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+        )
+        action_ids: list[str] = []
+        for index in range(2):
+            action = AdapterAction(
+                action_id=uuid4(),
+                correlation_id=uuid4(),
+                system_id=seeded.system.system_id,
+                connection_binding_id=seeded.connection_binding_id,
+                adapter_key="databricks",
+                adapter_version="1",
+                capability_key="databricks.workspace.children.read",
+                capability_version="1",
+                target=scope.target,
+                requested_scopes=(scope,),
+            )
+            run(store.enqueue(action))
+            action_ids.append(action.action_id)
+            occurred_at = NOW + timedelta(minutes=index)
+            occurred_text = occurred_at.isoformat().replace("+00:00", "Z")
+            store._connection.execute(
+                """
+                UPDATE adapter_actions
+                SET state = 'failed', record_created_at = ?, started_at = ?, completed_at = ?,
+                    redacted_diagnostic = ?
+                WHERE action_id = ?
+                """,
+                (
+                    occurred_text,
+                    occurred_text,
+                    occurred_text,
+                    f"failure {index}",
+                    action.action_id,
+                ),
+            )
+        store._connection.execute("DROP TRIGGER trg_action_scope_projection_insert")
+        store._connection.execute("DROP TRIGGER trg_action_projection_update")
+        store._connection.execute("DROP TRIGGER trg_action_projection_timestamp_correction")
+        store._connection.execute("DROP TABLE facet_action_status")
+        store._connection.execute("DROP TABLE action_scope_cooldown")
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = '0018_action_state_projections'"
+        )
+
+    with SQLiteStore(path) as migrated:
+        policy = migrated.scope_policy_state(scope)
+        assert policy.latest_targeted_action_started_at == NOW + timedelta(minutes=1)
+        status = migrated.list_latest_facet_actions((seeded.workspace_root_object_id,))
+        assert len(status) == 1 and status[0].action_id == action_ids[1]
+        assert status[0].redacted_diagnostic == "failure 1"
+        triggers = {
+            row[0]
+            for row in migrated._connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'trigger'"
+            )
+        }
+        assert triggers >= {
+            "trg_action_scope_projection_insert",
+            "trg_action_projection_update",
+            "trg_action_projection_timestamp_correction",
+        }
+        corrected_at = NOW - timedelta(minutes=1)
+        corrected_text = corrected_at.isoformat().replace("+00:00", "Z")
+        migrated._connection.execute(
+            """
+            UPDATE adapter_actions
+            SET record_created_at = ?, started_at = ?, completed_at = ?
+            WHERE action_id = ?
+            """,
+            (corrected_text, corrected_text, corrected_text, action_ids[1]),
+        )
+        corrected_policy = migrated.scope_policy_state(scope)
+        assert corrected_policy.latest_targeted_action_started_at == NOW
+        corrected_status = migrated.list_latest_facet_actions((seeded.workspace_root_object_id,))
+        assert len(corrected_status) == 1 and corrected_status[0].action_id == action_ids[0]
+        migrated._connection.execute(
+            """
+            UPDATE adapter_actions SET started_at = NULL, completed_at = NULL
+            WHERE action_id = ?
+            """,
+            (action_ids[1],),
+        )
+        null_policy = migrated.scope_policy_state(scope)
+        assert null_policy.latest_targeted_action_started_at == NOW
 
 
 def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path) -> None:
@@ -1759,20 +1902,29 @@ def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> Non
         store.list_action_activity_page(offset=0, limit=10, action_id=action_ids[1])[0].state
         == "succeeded"
     )
-    facet_actions = store.list_latest_facet_actions((seeded.workspace_root_object_id,))
+    facet_statements: list[str] = []
+    store._connection.set_trace_callback(facet_statements.append)
+    try:
+        facet_actions = store.list_latest_facet_actions((seeded.workspace_root_object_id,))
+    finally:
+        store._connection.set_trace_callback(None)
     assert len(facet_actions) == 1
     assert facet_actions[0].object_id == seeded.workspace_root_object_id
     assert facet_actions[0].facet == "membership"
     assert facet_actions[0].action_id == action_ids[2]
     assert facet_actions[0].state == "failed"
     assert facet_actions[0].redacted_diagnostic == "redacted failure"
+    assert store._connection.execute("SELECT COUNT(*) FROM facet_action_status").fetchone()[0] == 1
+    assert not any("adapter_action" in statement for statement in facet_statements)
     store._connection.execute(
         "UPDATE adapter_actions SET state = 'running', completed_at = NULL WHERE action_id = ?",
-        (action_ids[2],),
+        (action_ids[0],),
     )
     refreshing_actions = store.list_latest_facet_actions((seeded.workspace_root_object_id,))
     assert len(refreshing_actions) == 1
+    assert refreshing_actions[0].action_id == action_ids[0]
     assert refreshing_actions[0].state == "running"
+    assert store._connection.execute("SELECT COUNT(*) FROM facet_action_status").fetchone()[0] == 2
     with pytest.raises(ValueError, match="100 object IDs"):
         store.list_latest_facet_actions(tuple(str(uuid4()) for _ in range(101)))
 
