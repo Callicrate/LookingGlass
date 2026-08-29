@@ -439,10 +439,46 @@ def test_fixture_normalization_is_deterministic_and_metadata_only(
             else CollectionCoverage.UNKNOWN
         )
         assert len(first.batch.coverage) == 1
-        assert first.batch.coverage[0].scope == action.requested_scopes[0]
+        assert first.batch.coverage[0].scope == replace(
+            action.requested_scopes[0],
+            capability_key=capability,
+        )
         assert first.batch.coverage[0].completeness is expected_coverage
         assert first.batch.coverage[0].absence_authority == ()
     assert "storage_location" not in str(first.batch.to_dict())
+
+
+def test_legacy_null_action_scope_normalizes_to_selected_capability_authority() -> None:
+    action = _action("databricks.workspace.children.read", "membership")
+    action = replace(
+        action,
+        requested_scopes=(replace(action.requested_scopes[0], capability_key=None),),
+    )
+
+    result = normalize(
+        action=action,
+        binding=_binding(),
+        target=ResolvedTarget(
+            workspace_path="/Shared",
+            workspace_root="/Shared",
+            canonical_object_id=uuid4(),
+            canonical_object_type="folder",
+        ),
+        stdout=b'{"objects":[{"path":"/Shared/a.py","object_type":"FILE"}]}',
+        observed_at=datetime(2026, 8, 29, tzinfo=UTC),
+    )
+
+    assert all(
+        scope.capability_key == action.capability_key
+        for batch in result.batches
+        for item in (*batch.facet_observations, *batch.relationship_observations)
+        for scope in item.authorized_by
+    )
+    assert all(
+        declaration.scope.capability_key == action.capability_key
+        for batch in result.batches
+        for declaration in batch.coverage
+    )
 
 
 @pytest.mark.parametrize(

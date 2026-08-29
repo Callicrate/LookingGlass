@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -119,14 +119,23 @@ class DurableCoordinator:
         if selected is None:
             return self._reject(work, "capability_unavailable")
         binding, capability = selected
+        effective_scope = replace(work.scope, capability_key=capability.capability_key)
+        effective_work = replace(work, scope=effective_scope)
+        legacy_scope = replace(effective_scope, capability_key=None)
         active = self.store.find_active_action(
             connection_binding_id=binding.binding_id,
             capability=capability,
-            scope=work.scope,
+            scope=effective_scope,
         )
+        if active is None and legacy_scope != effective_scope:
+            active = self.store.find_active_action(
+                connection_binding_id=binding.binding_id,
+                capability=capability,
+                scope=legacy_scope,
+            )
         if active is not None:
             action, _created = self.store.admit_or_coalesce(
-                work=work,
+                work=effective_work,
                 binding=binding,
                 capability=capability,
                 now=evaluation_time,
@@ -138,16 +147,65 @@ class DurableCoordinator:
                 action_id=action.action_id,
             )
         try:
-            interval = self.store.effective_interval(work.scope)
+            interval = self.store.effective_interval(effective_scope)
         except ValueError:
             return self._reject(work, "invalid_scope_policy")
-        evidence = self.store.latest_qualifying_observation(work.scope)
+        evidence_candidates = tuple(
+            candidate
+            for candidate in (
+                self.store.latest_qualifying_observation(effective_scope),
+                self.store.latest_legacy_observation_for_capability(
+                    legacy_scope,
+                    connection_binding_id=binding.binding_id,
+                    capability_key=capability.capability_key,
+                ),
+            )
+            if candidate is not None
+        )
+        evidence = max(
+            evidence_candidates,
+            key=lambda candidate: candidate.observed_at,
+            default=None,
+        )
+        if evidence is not None and evidence.scope != effective_scope:
+            evidence = replace(evidence, scope=effective_scope)
+        effective_state = self.store.scope_policy_state(effective_scope)
+        legacy_started_at = self.store.latest_legacy_action_started_at_for_capability(
+            legacy_scope,
+            connection_binding_id=binding.binding_id,
+            capability_key=capability.capability_key,
+        )
+        policy_state = replace(
+            effective_state,
+            latest_qualifying_observation_at=max(
+                (
+                    value
+                    for value in (
+                        effective_state.latest_qualifying_observation_at,
+                        evidence.observed_at if evidence is not None else None,
+                    )
+                    if value is not None
+                ),
+                default=None,
+            ),
+            latest_targeted_action_started_at=max(
+                (
+                    value
+                    for value in (
+                        effective_state.latest_targeted_action_started_at,
+                        legacy_started_at,
+                    )
+                    if value is not None
+                ),
+                default=None,
+            ),
+        )
         decision = decide_refresh(
-            requested_scope=work.scope,
+            requested_scope=effective_scope,
             requested_at=work.intent.requested_at,
             now=evaluation_time,
             minimum_interval=interval,
-            state=self.store.scope_policy_state(work.scope),
+            state=policy_state,
             evidence=evidence,
         )
         if decision.kind.value == "satisfied":
@@ -179,7 +237,7 @@ class DurableCoordinator:
                 eligible_at=decision.eligibility.eligible_at,
             )
         action, created = self.store.admit_or_coalesce(
-            work=work,
+            work=effective_work,
             binding=binding,
             capability=capability,
             now=evaluation_time,

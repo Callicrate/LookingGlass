@@ -19,6 +19,7 @@ import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -2461,6 +2462,99 @@ class SQLiteStore:
                     )
         return None
 
+    def latest_legacy_observation_for_capability(
+        self,
+        scope: RefreshScope,
+        *,
+        connection_binding_id: str,
+        capability_key: str,
+    ) -> QualifyingObservation | None:
+        """Read only action-linked NULL-selector evidence from the selected capability."""
+
+        if scope.capability_key is not None:
+            raise ValueError("legacy observation lookup requires a NULL capability selector")
+        connection_binding_id = require_uuid(
+            connection_binding_id,
+            "connection_binding_id",
+        )
+        capability_key = require_contract_key(capability_key, "capability_key")
+        base = _scope_columns(scope)
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT credit.*
+                FROM refresh_credit AS credit
+                JOIN observation_journal AS journal
+                  ON journal.observation_id = credit.observation_id
+                JOIN observation_batches AS batch
+                  ON batch.batch_id = journal.batch_id AND batch.system_id = credit.system_id
+                 AND batch.connection_binding_id = ?
+                JOIN adapter_actions AS action
+                  ON action.action_id = batch.action_id AND action.capability_key = ?
+                 AND action.connection_binding_id = ?
+                WHERE credit.system_id = ? AND credit.target_kind = ?
+                  AND credit.target_id = ? AND credit.object_type = ?
+                  AND credit.facet = ? AND credit.capability_key IS NULL
+                  AND credit.coverage = ?
+                ORDER BY credit.observed_at DESC, credit.received_at DESC, credit.rowid ASC
+                """,
+                (
+                    connection_binding_id,
+                    capability_key,
+                    connection_binding_id,
+                    *base[:5],
+                    base[6],
+                ),
+            )
+            for row in rows:
+                evidence_scope = _scope_from_row(row)
+                if scope_covers(evidence_scope, scope):
+                    return QualifyingObservation(
+                        observation_id=row["observation_id"],
+                        scope=evidence_scope,
+                        observed_at=_dt(row["observed_at"]),  # type: ignore[arg-type]
+                    )
+        return None
+
+    def latest_legacy_action_started_at_for_capability(
+        self,
+        scope: RefreshScope,
+        *,
+        connection_binding_id: str,
+        capability_key: str,
+    ) -> datetime | None:
+        """Read the rollout cooldown anchor without crossing producer capabilities."""
+
+        if scope.capability_key is not None:
+            raise ValueError("legacy action lookup requires a NULL capability selector")
+        connection_binding_id = require_uuid(
+            connection_binding_id,
+            "connection_binding_id",
+        )
+        capability_key = require_contract_key(capability_key, "capability_key")
+        columns = _scope_columns(scope)
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT MAX(action.started_at) AS started_at
+                FROM adapter_action_scopes AS scope
+                JOIN adapter_actions AS action ON action.action_id = scope.action_id
+                WHERE scope.system_id = ? AND scope.target_kind = ? AND scope.target_id = ?
+                  AND scope.object_type = ? AND scope.facet = ?
+                  AND scope.capability_key IS NULL AND scope.coverage = ?
+                  AND scope.field_mask_json = ? AND action.capability_key = ?
+                  AND action.connection_binding_id = ?
+                  AND action.started_at IS NOT NULL
+                """,
+                (
+                    *columns[:5],
+                    *columns[6:],
+                    capability_key,
+                    connection_binding_id,
+                ),
+            ).fetchone()
+        return _dt(row["started_at"]) if row is not None else None
+
     def scope_policy_state(self, scope: RefreshScope) -> ScopePolicyState:
         evidence = self.latest_qualifying_observation(scope)
         columns = _scope_columns(scope)
@@ -2987,28 +3081,43 @@ class SQLiteStore:
         now: datetime,
     ) -> tuple[AdapterAction, bool]:
         """Atomically elect one active dedupe winner and attach this intent scope."""
+        effective_scope = replace(work.scope, capability_key=capability.capability_key)
+        legacy_scope = replace(effective_scope, capability_key=None)
         dedupe_key = action_dedupe_key(
-            system_id=work.scope.system_id,
+            system_id=effective_scope.system_id,
             connection_binding_id=binding.binding_id,
             capability_key=capability.capability_key,
             capability_version=capability.capability_version,
-            scope=work.scope,
+            scope=effective_scope,
+        )
+        legacy_dedupe_key = (
+            action_dedupe_key(
+                system_id=legacy_scope.system_id,
+                connection_binding_id=binding.binding_id,
+                capability_key=capability.capability_key,
+                capability_version=capability.capability_version,
+                scope=legacy_scope,
+            )
+            if legacy_scope != effective_scope
+            else None
         )
         action = AdapterAction(
             action_id=uuid4(),
             correlation_id=uuid4(),
-            system_id=work.scope.system_id,
+            system_id=effective_scope.system_id,
             connection_binding_id=binding.binding_id,
             adapter_key=binding.adapter_key,
             adapter_version=binding.adapter_version,
             capability_key=capability.capability_key,
             capability_version=capability.capability_version,
-            target=work.scope.target,
-            requested_scopes=(work.scope,),
+            target=effective_scope.target,
+            requested_scopes=(effective_scope,),
             deadline=work.intent.expires_at,
         )
         with self._immediate_transaction() as connection:
             existing = self._active_action_by_dedupe(connection, dedupe_key)
+            if existing is None and legacy_dedupe_key is not None:
+                existing = self._active_action_by_dedupe(connection, legacy_dedupe_key)
             if existing is not None:
                 self._attach_scope_to_action(
                     connection,
@@ -3024,6 +3133,8 @@ class SQLiteStore:
                 )
             except sqlite3.IntegrityError:
                 existing = self._active_action_by_dedupe(connection, dedupe_key)
+                if existing is None and legacy_dedupe_key is not None:
+                    existing = self._active_action_by_dedupe(connection, legacy_dedupe_key)
                 if existing is None:
                     raise
                 self._attach_scope_to_action(
@@ -4028,7 +4139,8 @@ class SQLiteStore:
                 SELECT 1 FROM adapter_action_scopes
                 WHERE action_id = ? AND system_id = ? AND target_kind = ?
                   AND target_id = ? AND object_type = ? AND facet = ?
-                  AND capability_key IS ? AND coverage = ? AND field_mask_json = ?
+                  AND (capability_key IS ? OR capability_key IS NULL)
+                  AND coverage = ? AND field_mask_json = ?
                 """,
                 (batch.action_id, *_scope_columns(scope)),
             ).fetchone()

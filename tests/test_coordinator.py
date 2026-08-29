@@ -12,6 +12,7 @@ from async_api_view.application import DurableCoordinator, SystemBootstrapServic
 from async_api_view.contracts import (
     ActionCompletion,
     ActionOutcome,
+    AdapterAction,
     CollectionCoverage,
     CoverageDeclaration,
     IntentScopeState,
@@ -83,6 +84,297 @@ def test_racing_equivalent_intents_elect_one_active_action(tmp_path) -> None:
     outcomes = run(coordinate())
     assert {outcome.state.value for outcome in outcomes} == {"admitted", "coalesced"}
     assert len(store.list_actions()) == 1
+
+
+def test_generic_and_explicit_capability_scopes_share_one_effective_action(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "effective-capability.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    explicit_scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    generic_scope = replace(explicit_scope, capability_key=None)
+    generic_intent = _intent(generic_scope, NOW)
+    explicit_intent = _intent(explicit_scope, NOW + timedelta(seconds=1))
+    run(store.submit_refresh(generic_intent))
+    run(store.submit_refresh(explicit_intent))
+
+    first = run(
+        DurableCoordinator(store, worker_id="first").run_once(now=NOW + timedelta(seconds=1))
+    )
+    second = run(
+        DurableCoordinator(store, worker_id="second").run_once(now=NOW + timedelta(seconds=1))
+    )
+
+    assert first is not None and first.state.value == "admitted"
+    assert second is not None and second.state.value == "coalesced"
+    actions = store.list_actions()
+    assert len(actions) == 1
+    assert actions[0].action.requested_scopes[0].capability_key == explicit_scope.capability_key
+    assert store.list_intent_scopes(generic_intent.intent_id)[0].scope.capability_key is None
+
+
+def test_explicit_capability_reuses_legacy_generic_cooldown(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "legacy-generic-cooldown.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    explicit_scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    generic_scope = replace(explicit_scope, capability_key=None)
+    legacy_action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.children.read",
+        capability_version="1",
+        target=generic_scope.target,
+        requested_scopes=(generic_scope,),
+    )
+    run(store.enqueue(legacy_action))
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="legacy", now=NOW))
+    assert lease is not None
+    run(
+        store.mark_running(
+            action_id=legacy_action.action_id, lease_id=lease.lease_id, started_at=NOW
+        )
+    )
+    run(
+        store.complete_action(
+            ActionCompletion(
+                action_id=legacy_action.action_id,
+                outcome=ActionOutcome.SUCCEEDED,
+                completed_at=NOW + timedelta(seconds=1),
+            ),
+            lease_id=lease.lease_id,
+        )
+    )
+    explicit_intent = _intent(explicit_scope, NOW + timedelta(seconds=2))
+    run(store.submit_refresh(explicit_intent))
+
+    result = run(
+        DurableCoordinator(store, worker_id="coordinator").run_once(now=NOW + timedelta(seconds=2))
+    )
+
+    assert result is not None and result.state.value == "deferred"
+    assert store.list_intent_scopes(explicit_intent.intent_id)[0].state.value == "deferred"
+    assert len(store.list_actions()) == 1
+
+
+def test_explicit_capability_coalesces_with_legacy_generic_active_action(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "legacy-generic-active.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    explicit_scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    generic_scope = replace(explicit_scope, capability_key=None)
+    legacy_action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.children.read",
+        capability_version="1",
+        target=generic_scope.target,
+        requested_scopes=(generic_scope,),
+    )
+    run(store.enqueue(legacy_action))
+    explicit_intent = _intent(explicit_scope, NOW)
+    run(store.submit_refresh(explicit_intent))
+
+    result = run(DurableCoordinator(store, worker_id="coordinator").run_once(now=NOW))
+
+    assert result is not None and result.state.value == "coalesced"
+    assert result.action_id == legacy_action.action_id
+    assert len(store.list_actions()) == 1
+    assert (
+        store.list_intent_scopes(explicit_intent.intent_id)[0].linked_action_id
+        == legacy_action.action_id
+    )
+
+
+def test_cross_capability_legacy_history_cannot_suppress_selected_refresh(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "cross-capability-legacy.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        enabled_capability_keys=(
+            "databricks.workspace.children.read",
+            "databricks.workspace.metadata.read",
+        ),
+        now=NOW,
+    )
+    explicit_scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.OBJECT, seeded.workspace_root_object_id),
+        object_type="folder",
+        facet="metadata",
+        capability_key="databricks.workspace.metadata.read",
+    )
+    legacy_scope = replace(explicit_scope, capability_key=None)
+    unrelated_action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.children.read",
+        capability_version="1",
+        target=legacy_scope.target,
+        requested_scopes=(legacy_scope,),
+    )
+    run(store.enqueue(unrelated_action))
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="legacy", now=NOW))
+    assert lease is not None
+    run(
+        store.mark_running(
+            action_id=unrelated_action.action_id,
+            lease_id=lease.lease_id,
+            started_at=NOW,
+        )
+    )
+    run(
+        store.complete_action(
+            ActionCompletion(
+                action_id=unrelated_action.action_id,
+                outcome=ActionOutcome.SUCCEEDED,
+                completed_at=NOW + timedelta(seconds=1),
+            ),
+            lease_id=lease.lease_id,
+        )
+    )
+    batch_id = str(uuid4())
+    observation_id = str(uuid4())
+    timestamp = NOW.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    store._connection.execute(
+        """
+        INSERT INTO observation_batches (
+            batch_id, system_id, connection_binding_id, adapter_key, adapter_version,
+            action_id, observed_at, received_at, status, accepted_ids_json,
+            issue_count, batch_digest
+        ) VALUES (?, ?, ?, 'databricks', '1', ?, ?, ?, 'accepted', '[]', 0, ?)
+        """,
+        (
+            batch_id,
+            seeded.system.system_id,
+            seeded.connection_binding_id,
+            unrelated_action.action_id,
+            timestamp,
+            timestamp,
+            "legacy-cross-capability",
+        ),
+    )
+    store._connection.execute(
+        """
+        INSERT INTO observation_journal (
+            observation_id, batch_id, item_kind, item_json, observed_at, received_at
+        ) VALUES (?, ?, 'coverage', '{}', ?, ?)
+        """,
+        (observation_id, batch_id, timestamp, timestamp),
+    )
+    store._connection.execute(
+        """
+        INSERT INTO refresh_credit (
+            credit_id, observation_id, system_id, target_kind, target_id,
+            object_type, facet, coverage, field_mask_json, observed_at,
+            capability_key, received_at
+        ) VALUES (?, ?, ?, 'object', ?, 'folder', 'metadata',
+                  'facet', '[]', ?, NULL, ?)
+        """,
+        (
+            str(uuid4()),
+            observation_id,
+            seeded.system.system_id,
+            seeded.workspace_root_object_id,
+            timestamp,
+            timestamp,
+        ),
+    )
+    explicit_intent = _intent(explicit_scope, NOW + timedelta(seconds=2))
+    run(store.submit_refresh(explicit_intent))
+
+    result = run(
+        DurableCoordinator(store, worker_id="coordinator").run_once(now=NOW + timedelta(seconds=2))
+    )
+
+    assert result is not None and result.state.value == "admitted"
+    assert len(store.list_actions()) == 2
+
+
+def test_legacy_history_cannot_cross_selected_connection_binding(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "cross-binding-legacy.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="PRIMARY", workspace_root="/Shared", now=NOW
+    )
+    explicit_scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    legacy_scope = replace(explicit_scope, capability_key=None)
+    primary_binding = store.list_connection_bindings(system_id=seeded.system.system_id)[0]
+    primary_capability = store.list_capability_bindings(
+        connection_binding_id=primary_binding.binding_id
+    )[0]
+    secondary_binding = replace(
+        primary_binding,
+        binding_id=uuid4(),
+        non_secret_settings={**primary_binding.non_secret_settings, "profile": "SECONDARY"},
+        revision=None,
+    )
+    store.upsert_connection_binding(secondary_binding, now=NOW)
+    secondary_capability = replace(
+        primary_capability,
+        capability_binding_id=uuid4(),
+        connection_binding_id=secondary_binding.binding_id,
+        selection_priority=primary_capability.selection_priority + 100,
+    )
+    store.upsert_capability_binding(secondary_capability, now=NOW)
+    legacy_action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=primary_binding.binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key=primary_capability.capability_key,
+        capability_version=primary_capability.capability_version,
+        target=legacy_scope.target,
+        requested_scopes=(legacy_scope,),
+    )
+    run(store.enqueue(legacy_action))
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="legacy", now=NOW))
+    assert lease is not None
+    run(
+        store.mark_running(
+            action_id=legacy_action.action_id,
+            lease_id=lease.lease_id,
+            started_at=NOW,
+        )
+    )
+    run(
+        store.complete_action(
+            ActionCompletion(
+                action_id=legacy_action.action_id,
+                outcome=ActionOutcome.SUCCEEDED,
+                completed_at=NOW + timedelta(seconds=1),
+            ),
+            lease_id=lease.lease_id,
+        )
+    )
+    explicit_intent = _intent(explicit_scope, NOW + timedelta(seconds=2))
+    run(store.submit_refresh(explicit_intent))
+
+    result = run(
+        DurableCoordinator(store, worker_id="coordinator").run_once(now=NOW + timedelta(seconds=2))
+    )
+
+    assert result is not None and result.state.value == "admitted"
+    assert result.action_id is not None
+    new_action = store.get_stored_action(result.action_id)
+    assert new_action is not None
+    assert new_action.action.connection_binding_id == secondary_binding.binding_id
 
 
 def test_intent_claim_order_preserves_priority_before_fifo(tmp_path) -> None:

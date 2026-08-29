@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 17:24 ET
+Updated: 2026-08-29 17:35 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 399 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 407 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: effective capability-neutral scope identity is repaired locally with focused tests green and independent re-review running; controlled Databricks subprocess environment/cwd isolation is the next medium.
+- Active review round: effective capability-neutral scope identity is independently clear after the full gate; controlled Databricks subprocess environment/cwd isolation is the active medium.
 - Next progress report due: 2026-08-29 18:21 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -118,7 +118,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Preserve Unity Catalog schema/relation/volume identity across rename and recreation.
 - [x] Remove full-backlog sorting and unbounded due promotion from both lease selectors.
 - [x] Read current cooldown/facet action state without replaying retained action history.
-- [ ] Unify generic/explicit capability identity without crossing legacy producer provenance.
+- [x] Unify generic/explicit capability identity without crossing legacy producer provenance.
 - [ ] Isolate Databricks subprocesses from ambient auth/bundle precedence.
 
 ## Evidence and decisions
@@ -217,6 +217,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The real ignored database was backed up to `.local/backups/rookery-20260829-1647-pre-0018.sqlite3`, migrated through `0018`, and reports `ROOK`, integrity `ok`, zero foreign-key violations, three projection triggers, and empty projections matching its empty action history.
 - The exact committed-head Ubuntu/WSL gate now matches Windows at 399 tests, 88% branch coverage, clean locked audit/lint, and 82/61/30 package verification.
 - A post-migration audit reproduced generic/explicit duplicate actions and cooldown bypass; the local repair uses one effective selected scope while retaining the original nullable intent receipt and capability-filtering legacy evidence/cooldown provenance.
+- Independent rollout review cleared same-capability reuse, cross-capability and cross-binding exclusion, explicit action identity, atomic coalescing, and pre-fix active action ingestion with 407 tests green.
 - A security audit found that inherited `DATABRICKS_*` variables and the checkout working directory can override the configured profile through CLI precedence; controlled environment/cwd isolation is queued next.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.

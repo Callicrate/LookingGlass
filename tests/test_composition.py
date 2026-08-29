@@ -351,6 +351,53 @@ async def test_ten_thousand_workspace_children_ingest_in_bounded_batches(
 
 
 @pytest.mark.anyio
+async def test_legacy_null_action_scope_finishes_with_selected_capability_authority(
+    tmp_path: Path,
+) -> None:
+    runner = FakeCliRunner(b'[{"object_id":101,"object_type":"FILE","path":"/legacy.py"}]')
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=refresh.system_id,
+            target_kind=refresh.target_kind,
+            target_id=refresh.target_id,
+            capability_key=refresh.capability_key,
+            facet=refresh.facet,
+        )
+    )
+    admitted = await runtime.coordinator.run_once()
+    assert admitted is not None and admitted.action_id is not None
+    runtime.store._connection.execute(
+        "UPDATE adapter_action_scopes SET capability_key = NULL WHERE action_id = ?",
+        (admitted.action_id,),
+    )
+
+    assert await runtime.worker.run_once()
+
+    action = runtime.store.get_stored_action(admitted.action_id)
+    assert action is not None and action.state.value == "partial"
+    assert any(
+        item.external_key == "workspace:object_id:101" for item in runtime.store.list_objects()
+    )
+    assert (
+        runtime.store._connection.execute(
+            "SELECT COUNT(*) FROM ingestion_issues WHERE action_id = ?",
+            (admitted.action_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_direct_workspace_metadata_refresh_is_accepted_and_credited(
     tmp_path: Path,
 ) -> None:

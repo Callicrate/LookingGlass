@@ -1035,6 +1035,15 @@ def normalize(
     """Validate sanitized JSON and create deterministic canonical evidence."""
     payload = _json_output(stdout)
     observed_at = observed_at.astimezone(UTC)
+    action = replace(
+        action,
+        requested_scopes=tuple(
+            replace(scope, capability_key=action.capability_key)
+            if scope.capability_key is None
+            else scope
+            for scope in action.requested_scopes
+        ),
+    )
 
     def evidence_id(label: str) -> str:
         return _id(action, f"delivery:{delivery_id}:{label}")
