@@ -176,6 +176,10 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
     unavailable = await runtime.backend.dashboard()
     assert unavailable.refresh_options
     assert all(not option.enabled for option in unavailable.refresh_options)
+    assert all(
+        option.disabled_reason == "Refresh worker is unavailable."
+        for option in unavailable.refresh_options
+    )
     runtime.worker_available = True
 
     dashboard = await runtime.backend.dashboard()

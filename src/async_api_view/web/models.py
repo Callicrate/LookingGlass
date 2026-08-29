@@ -167,6 +167,14 @@ class RefreshOption:
     enabled: bool = True
     disabled_reason: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.enabled and self.disabled_reason is not None:
+            raise ValueError("enabled refresh option cannot have a disabled reason")
+        if not self.enabled and (
+            not isinstance(self.disabled_reason, str) or not self.disabled_reason.strip()
+        ):
+            raise ValueError("disabled refresh option requires an accessible reason")
+
 
 @dataclass(frozen=True, slots=True)
 class RefreshRequest:

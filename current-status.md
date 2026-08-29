@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 18:20 ET
+Updated: 2026-08-29 18:38 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 417 tests passed with one platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 88% on Windows and 87% on Ubuntu/WSL.
+- Latest checks: 422 tests passed with one platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 88% on Windows and 87% on Ubuntu/WSL.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: controlled Databricks subprocess environment/cwd/owner/ACL isolation is independently clear after the exact gate; the disabled-refresh accessibility invariant is next.
+- Active review round: controlled Databricks subprocess authority and disabled-refresh accessibility are independently clear after exact cross-platform gates; a fresh residual review is next.
 - Next progress report due: 2026-08-29 19:20 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -120,7 +120,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Read current cooldown/facet action state without replaying retained action history.
 - [x] Unify generic/explicit capability identity without crossing legacy producer provenance.
 - [x] Isolate Databricks subprocesses from ambient auth/bundle precedence.
-- [ ] Require an accessible reason for every disabled refresh option.
+- [x] Require an accessible reason for every disabled refresh option.
 
 ## Evidence and decisions
 
@@ -226,6 +226,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Final focused security re-review cleared current-user ownership establishment/verification, protected DACL replacement, shared setup guidance, mapped/doctor process parity, redirects, cleanup, and realistic ambient precedence with no medium-or-higher finding.
 - The independently cleared subprocess-authority repair is committed as `ad968ec`.
 - A fresh independent browser/security/product review found no medium-or-higher defect across session/origin/host controls, escaping, bounded reads, mobile CSS, or packaged assets; its strongest low polish is a possible dangling disabled-control description when no reason is supplied.
+- Refresh presentation now rejects missing/blank disabled reasons and stale enabled reasons; the composition fallback guarantees a visible explanation before controls are disabled, and both dashboard/object templates have matching-ID render regressions.
+- Independent focused re-review closed the dangling `aria-describedby` finding with no medium-or-higher issue; the exact Windows and Ubuntu/WSL gates now match at 422 passed and one complementary platform skip.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.

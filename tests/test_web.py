@@ -63,6 +63,19 @@ OBJECT_OPTION = RefreshOption(
 )
 
 
+@pytest.mark.parametrize("disabled_reason", [None, "", "   "])
+def test_disabled_refresh_option_requires_accessible_reason(
+    disabled_reason: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="accessible reason"):
+        replace(OPTION, enabled=False, disabled_reason=disabled_reason)
+
+
+def test_enabled_refresh_option_rejects_stale_disabled_reason() -> None:
+    with pytest.raises(ValueError, match="enabled refresh option"):
+        replace(OPTION, disabled_reason="Worker unavailable")
+
+
 @dataclass
 class FakeBackend:
     dashboard_view: DashboardView = field(default_factory=DashboardView)
@@ -731,6 +744,31 @@ def test_object_page_shows_facets_containment_and_refresh_controls() -> None:
     assert "Raw content is not displayed" in response.text
     assert csrf_from(response.text)
     assert backend.object_queries == [(DETAIL_ID, ObjectDetailQuery(object_type="file"))]
+
+
+def test_disabled_refresh_controls_render_matching_accessible_reasons() -> None:
+    reason = "Refresh worker is unavailable."
+    dashboard_option = replace(OPTION, enabled=False, disabled_reason=reason)
+    object_option = replace(
+        OBJECT_OPTION,
+        target_id=DETAIL_ID,
+        enabled=False,
+        disabled_reason=reason,
+    )
+    dashboard = replace(ready_dashboard(), refresh_options=(dashboard_option,))
+    object_detail = replace(ready_object_detail(), refresh_options=(object_option,))
+
+    dashboard_response = client_for(FakeBackend(dashboard_view=dashboard)).get("/")
+    object_response = client_for(FakeBackend(object_view=object_detail)).get(
+        f"/objects/{DETAIL_ID}"
+    )
+
+    assert 'disabled aria-describedby="reason-1"' in dashboard_response.text
+    assert 'id="reason-1"' in dashboard_response.text
+    assert 'disabled aria-describedby="object-reason-1"' in object_response.text
+    assert 'id="object-reason-1"' in object_response.text
+    assert reason in dashboard_response.text
+    assert reason in object_response.text
 
 
 @pytest.mark.parametrize(

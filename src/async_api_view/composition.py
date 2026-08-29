@@ -400,6 +400,8 @@ class SQLiteWebBackend:
     ) -> tuple[RefreshOption, ...]:
         options: list[RefreshOption] = []
         worker_available, worker_error = self._worker_status()
+        if not worker_available and not worker_error:
+            worker_error = "Refresh worker is unavailable."
         bindings_by_system = {
             system.system_id: tuple(
                 binding
