@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 05:17 ET
+Updated: 2026-08-29 05:18 ET
 
 ## Goal
 
@@ -78,6 +78,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Fail closed if a future Databricks CLI emits an incomplete continuation-token envelope.
 - [x] Reject raw nested DTOs, scalar mapping payloads, and boolean/integer coercion at contract construction.
 - [x] Atomically revalidate authority and deadlines at the final remote-start transition.
+- [x] Exclude workspace status/progress, CI, and Murmuration metadata from source distributions.
 
 ## Evidence and decisions
 
@@ -234,6 +235,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Facet payloads and connection settings now require JSON objects rather than arbitrary JSON arrays/scalars, and authority/count/priority fields reject Python's bool-as-int coercion.
 - Final start authorization owns the `leased → running` transition; current API workers can no longer call lifecycle `mark_running` after a stale guard decision.
 - Resolver-time revocation regressions prove system, binding, capability, and newly expired deadlines all stop before process creation with no attempt record.
+- The rebuilt source distribution contains 70 package/source/test/doc entries and excludes `progress/`, `current-status.md`, `.github/`, and `.murmuration/`; the wheel remains unchanged and complete.
 - A fresh multi-process storage/runtime audit cleared transaction, lease recovery, aggregate, configuration reconciliation, backup, and poison-row behavior with 92 focused tests.
 
 ## Risks / watch list
