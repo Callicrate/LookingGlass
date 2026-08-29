@@ -560,6 +560,61 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
         assert reopened.get_stored_action(action.action_id).retry_at is None
 
 
+def test_malformed_action_contract_terminalizes_once_and_queue_progresses(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+
+    def action_for(*, facet: str, capability_key: str) -> AdapterAction:
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet=facet,
+            capability_key=capability_key,
+        )
+        return AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key=capability_key,
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+
+    poisoned = action_for(facet="membership", capability_key="databricks.workspace.children.read")
+    healthy = action_for(facet="metadata", capability_key="databricks.workspace.metadata.read")
+    run(store.enqueue(poisoned))
+    run(store.enqueue(healthy))
+    store._connection.execute(
+        "UPDATE adapter_actions SET deadline = ?, record_created_at = ? WHERE action_id = ?",
+        ("not-a-timestamp", "2026-08-24T12:00:00.000000Z", poisoned.action_id),
+    )
+    store._connection.execute(
+        "UPDATE adapter_actions SET record_created_at = ? WHERE action_id = ?",
+        ("2026-08-24T12:00:01.000000Z", healthy.action_id),
+    )
+
+    next_lease = run(store.lease_next(adapter_key="databricks", worker_id="first", now=NOW))
+    assert next_lease is not None and next_lease.action.action_id == healthy.action_id
+    poisoned_row = store._connection.execute(
+        "SELECT state, error_class FROM adapter_actions WHERE action_id = ?",
+        (poisoned.action_id,),
+    ).fetchone()
+    assert tuple(poisoned_row) == ("failed", "adapter_contract_mismatch")
+    events = store.list_operational_events(alertable_only=True)
+    assert len(events) == 1
+    assert events[0].action_id == poisoned.action_id
+    assert events[0].redacted_summary == "malformed_action_contract"
+
+    assert len(store.list_operational_events(alertable_only=True)) == 1
+
+
 def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(

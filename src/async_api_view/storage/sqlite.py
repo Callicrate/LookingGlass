@@ -2147,23 +2147,34 @@ class SQLiteStore:
         leased_until = now + _DEFAULT_LEASE
         now_text = _utc_text(now)
         with self._immediate_transaction() as connection:
-            row = connection.execute(
-                """
-                SELECT * FROM adapter_actions
-                WHERE adapter_key = ?
-                  AND (
-                      state = 'ready'
-                      OR (state = 'leased' AND leased_until <= ?)
-                      OR (state = 'running' AND leased_until <= ?)
-                      OR (state = 'retry_wait' AND retry_at <= ?)
-                  )
-                ORDER BY record_created_at, action_id
-                LIMIT 1
-                """,
-                (adapter_key, now_text, now_text, now_text),
-            ).fetchone()
-            if row is None:
-                return None
+            while True:
+                row = connection.execute(
+                    """
+                    SELECT * FROM adapter_actions
+                    WHERE adapter_key = ?
+                      AND (
+                          state = 'ready'
+                          OR (state = 'leased' AND leased_until <= ?)
+                          OR (state = 'running' AND leased_until <= ?)
+                          OR (state = 'retry_wait' AND retry_at <= ?)
+                      )
+                    ORDER BY record_created_at, action_id
+                    LIMIT 1
+                    """,
+                    (adapter_key, now_text, now_text, now_text),
+                ).fetchone()
+                if row is None:
+                    return None
+                try:
+                    action = self._action_from_row(row)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    self._terminalize_action_contract_failure(
+                        connection,
+                        action_id=row["action_id"],
+                        now=now,
+                    )
+                    continue
+                break
             result = connection.execute(
                 """
                 UPDATE adapter_actions
@@ -2194,7 +2205,6 @@ class SQLiteStore:
                     (row["action_id"],),
                 ).fetchone()[0]
             )
-            action = self._action_from_row(row)
         return ActionLease(
             action=action,
             lease_id=lease_id,
@@ -2586,6 +2596,59 @@ class SQLiteStore:
         self._refresh_action_parent_aggregates(connection, action_id=action_id)
         return GuardDecision(GuardDisposition.CANCEL, reason)
 
+    def _terminalize_action_contract_failure(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        action_id: str,
+        now: datetime,
+        reason: str = "malformed_action_contract",
+    ) -> GuardDecision:
+        row = connection.execute(
+            "SELECT system_id FROM adapter_actions WHERE action_id = ?", (action_id,)
+        ).fetchone()
+        if row is None:
+            return GuardDecision(GuardDisposition.FAIL, "unknown_action")
+        connection.execute(
+            """
+            UPDATE refresh_intent_scopes
+            SET state = 'rejected', disposition_reason = ?, eligible_at = NULL,
+                lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
+            WHERE intent_scope_id IN (
+                SELECT intent_scope_id FROM action_intent_scopes WHERE action_id = ?
+            ) AND state IN ('admitted', 'coalesced')
+            """,
+            (reason, action_id),
+        )
+        connection.execute(
+            """
+            UPDATE adapter_actions
+            SET state = 'failed', completed_at = ?, lease_id = NULL, lease_worker_id = NULL,
+                leased_until = NULL, retry_at = NULL, error_class = ?, redacted_diagnostic = ?
+            WHERE action_id = ?
+            """,
+            (
+                _utc_text(now),
+                ErrorClass.ADAPTER_CONTRACT_MISMATCH.value,
+                _redact(reason),
+                action_id,
+            ),
+        )
+        self._insert_event(
+            connection,
+            idempotency_key=f"action-{action_id}-terminal-failed",
+            event_type="refresh.action.failed",
+            severity="error",
+            alertable=True,
+            system_id=row["system_id"],
+            action_id=action_id,
+            error_class=ErrorClass.ADAPTER_CONTRACT_MISMATCH.value,
+            summary=reason,
+            occurred_at=now,
+        )
+        self._refresh_action_parent_aggregates(connection, action_id=action_id)
+        return GuardDecision(GuardDisposition.FAIL, reason)
+
     def _guard_expire_action(
         self,
         connection: sqlite3.Connection,
@@ -2684,15 +2747,30 @@ class SQLiteStore:
                 return GuardDecision(GuardDisposition.FAIL, "unknown_action")
             if row["state"] != ActionState.LEASED.value or row["lease_id"] != lease_id:
                 return GuardDecision(GuardDisposition.FAIL, "invalid_action_lease")
-            if _dt(row["leased_until"]) is None or _dt(row["leased_until"]) < now:
-                return GuardDecision(GuardDisposition.FAIL, "expired_action_lease")
-            deadline = _dt(row["deadline"])
-            if deadline is not None and deadline <= now:
-                return self._guard_expire_action(
+            try:
+                leased_until = _dt(row["leased_until"])
+                deadline = _dt(row["deadline"])
+            except (TypeError, ValueError):
+                return self._terminalize_action_contract_failure(
                     connection,
                     action_id=action_id,
                     now=now,
                 )
+            if leased_until is None or leased_until < now:
+                return GuardDecision(GuardDisposition.FAIL, "expired_action_lease")
+            if deadline is not None and deadline <= now:
+                try:
+                    return self._guard_expire_action(
+                        connection,
+                        action_id=action_id,
+                        now=now,
+                    )
+                except (TypeError, ValueError):
+                    return self._terminalize_action_contract_failure(
+                        connection,
+                        action_id=action_id,
+                        now=now,
+                    )
             if not row["system_enabled"]:
                 return self._guard_cancel(connection, action_id=action_id, reason="system_disabled")
             if not row["binding_enabled"]:

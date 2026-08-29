@@ -368,6 +368,62 @@ async def test_expired_action_deadline_never_reaches_cli_runner(tmp_path: Path) 
 
 
 @pytest.mark.anyio
+async def test_malformed_action_deadline_terminalizes_without_cli_call(tmp_path: Path) -> None:
+    runner = FakeCliRunner(b"[]")
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.workspace.children.read"
+        and item.target_kind == "configured_scope"
+    )
+    intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=option.system_id,
+            target_kind=option.target_kind,
+            target_id=option.target_id,
+            capability_key=option.capability_key,
+            facet=option.facet,
+        )
+    )
+    admitted = await runtime.coordinator.run_once()
+    assert admitted is not None and admitted.action_id is not None
+    runtime.store._connection.execute(
+        "UPDATE adapter_actions SET deadline = ? WHERE action_id = ?",
+        ("not-a-timestamp", admitted.action_id),
+    )
+    healthy_option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.uc.catalogs.read"
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=healthy_option.system_id,
+            target_kind=healthy_option.target_kind,
+            target_id=healthy_option.target_id,
+            capability_key=healthy_option.capability_key,
+            facet=healthy_option.facet,
+        )
+    )
+    healthy_admission = await runtime.coordinator.run_once()
+    assert healthy_admission is not None and healthy_admission.action_id is not None
+
+    assert await runtime.worker.run_once()
+
+    assert [call.capability_key for call in runner.calls] == ["databricks.uc.catalogs.read"]
+    action_row = runtime.store._connection.execute(
+        "SELECT state, error_class FROM adapter_actions WHERE action_id = ?",
+        (admitted.action_id,),
+    ).fetchone()
+    assert tuple(action_row) == ("failed", "adapter_contract_mismatch")
+    assert runtime.store.list_intent_scopes(intent_id)[0].state.value == "rejected"
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_dashboard_reads_action_and_object_snapshots_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

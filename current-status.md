@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 01:01 ET
+Updated: 2026-08-29 01:13 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 233 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 235 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` contains the verified action-activity, action-attempt, unique browser-host, durable retry, and deadline-guard slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: harden poison-action handling, then run the next residual-risk review.
-- Next progress report due: 2026-08-29 01:12 ET.
+- Version control: local `main` contains the verified action/activity, browser-host, retry, deadline, and poison-action slices plus all prior correctness fixes; completed batches are committed with focused messages.
+- Active review round: run the next residual-risk review across lifecycle, storage, and product truth.
+- Next progress report due: 2026-08-29 02:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -49,7 +49,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
 - [x] Terminalize expired action deadlines before any remote dispatch.
 - [x] Expose bounded, redacted per-action attempt detail from alerts, activity, and intent receipts.
-- [ ] Terminalize malformed persisted action timestamps once instead of repeatedly faulting the worker.
+- [x] Terminalize malformed persisted action timestamps once instead of repeatedly faulting the worker.
 
 ## Evidence and decisions
 
@@ -146,6 +146,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Activity rows, dashboard/full alerts, initial intent receipts, and polling updates now link to action detail without exposing bindings, command text, profiles, or payloads.
 - Attempt overflow reports `Showing latest 100 of N`; successful lifecycle writes persist `NULL` rather than a false `no diagnostic supplied` failure message.
 - Isolated desktop browser QA rendered a failed-retry-then-success sequence with no console/network errors and Lighthouse 100 in every audited category; the packaged template and full 233-test gate pass at 86% branch coverage.
+- Malformed queued action contracts now terminalize once as `adapter_contract_mismatch`, reject active attached scopes, emit one redacted idempotent failure event, and release dedupe authority before lease mutation.
+- `lease_next` continues selecting inside the same immediate transaction after poison terminalization, so the first call returns the next healthy lease instead of making `run-once` falsely report a drained queue.
+- Storage and composition regressions prove queue progress and that only the healthy capability reaches the runner; independent follow-up cleared the blocker at 235 tests.
 
 ## Risks / watch list
 
