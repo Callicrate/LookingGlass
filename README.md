@@ -47,6 +47,9 @@ Copy-Item -LiteralPath '.\config.example.toml' -Destination '.\config.local.toml
 
 Edit `config.local.toml` and replace `YOUR_PROFILE` with the intended named profile.
 The file stores only the profile name and configured Workspace root, not Databricks credentials or host secrets.
+Keep each `databricks.id` stable when renaming a display name or rotating its profile.
+Legacy entries without `id` remain supported; add the ID before changing the name, profile, or root so startup can adopt the existing cached identity.
+Removing an entry disables its refresh authority but preserves cached facts; changing `workspace_root` creates a new authority boundary and pauses the predecessor.
 
 ```powershell
 uv sync --group dev

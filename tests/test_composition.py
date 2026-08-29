@@ -73,14 +73,22 @@ class BlockingCliRunner(FakeCliRunner):
         raise AssertionError("blocking runner unexpectedly resumed")
 
 
-def settings(tmp_path: Path) -> ProjectSettings:
+def settings(
+    tmp_path: Path,
+    *,
+    config_id: str | None = "test-workspace",
+    name: str = "test-workspace",
+    profile: str = "TEST_PROFILE",
+    workspace_root: str = "/",
+) -> ProjectSettings:
     return ProjectSettings(
         app=AppSettings(database_path=tmp_path / "state.sqlite3"),
         databricks_systems=(
             DatabricksSystemSettings(
-                name="test-workspace",
-                profile="TEST_PROFILE",
-                workspace_root="/",
+                config_id=config_id,
+                name=name,
+                profile=profile,
+                workspace_root=workspace_root,
             ),
         ),
     )
@@ -210,6 +218,177 @@ async def test_dashboard_reads_action_and_object_snapshots_once(
     assert rendered.objects
     assert calls == {"actions": 1, "objects": 1}
     runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_configuration_reconciliation_rotates_profile_and_disables_removed_system(
+    tmp_path: Path,
+) -> None:
+    first = build_runtime(
+        settings(tmp_path, name="Original", profile="PROFILE_ONE", workspace_root="/Shared"),
+        runner=FakeCliRunner(b"[]"),
+    )
+    first.worker_available = True
+    initial_dashboard = await first.backend.dashboard()
+    initial_option = next(
+        option
+        for option in initial_dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    initial_system_id = initial_option.system_id
+    assert (
+        first.store.list_connection_bindings(system_id=initial_system_id)[0].non_secret_settings[
+            "profile"
+        ]
+        == "PROFILE_ONE"
+    )
+    first.store.close()
+
+    rotated = build_runtime(
+        settings(tmp_path, name="Renamed", profile="PROFILE_TWO", workspace_root="/Shared"),
+        runner=FakeCliRunner(b"[]"),
+    )
+    systems = rotated.store.list_systems()
+    assert [(system.system_id, system.display_name, system.enabled) for system in systems] == [
+        (initial_system_id, "Renamed", True)
+    ]
+    assert (
+        rotated.store.list_connection_bindings(system_id=initial_system_id)[0].non_secret_settings[
+            "profile"
+        ]
+        == "PROFILE_TWO"
+    )
+    rotated.worker_available = True
+    rotated_dashboard = await rotated.backend.dashboard()
+    rotated_option = next(
+        option
+        for option in rotated_dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    await rotated.backend.submit_refresh(
+        RefreshRequest(
+            system_id=rotated_option.system_id,
+            target_kind=rotated_option.target_kind,
+            target_id=rotated_option.target_id,
+            capability_key=rotated_option.capability_key,
+            facet=rotated_option.facet,
+        )
+    )
+    admitted = await rotated.coordinator.run_once()
+    assert admitted is not None and admitted.action_id is not None
+    rotated.store.close()
+
+    removed_runner = FakeCliRunner(b"[]")
+    removed = build_runtime(
+        ProjectSettings(
+            app=AppSettings(database_path=tmp_path / "state.sqlite3"),
+            databricks_systems=(),
+        ),
+        runner=removed_runner,
+    )
+    removed.worker_available = True
+    removed_dashboard = await removed.backend.dashboard()
+
+    assert removed_dashboard.objects
+    assert len(removed_dashboard.systems) == 1
+    assert not removed_dashboard.systems[0].enabled
+    assert removed_dashboard.refresh_options == ()
+    with pytest.raises(ValueError, match="not registered"):
+        await removed.backend.submit_refresh(
+            RefreshRequest(
+                system_id=initial_option.system_id,
+                target_kind=initial_option.target_kind,
+                target_id=initial_option.target_id,
+                capability_key=initial_option.capability_key,
+                facet=initial_option.facet,
+            )
+        )
+    assert removed_runner.calls == []
+    assert await removed.worker.run_once()
+    assert removed_runner.calls == []
+    stored = removed.store.get_stored_action(admitted.action_id)
+    assert stored is not None and stored.state.value == "cancelled"
+    removed.store.close()
+
+
+def test_explicit_config_id_adopts_legacy_system_identity(tmp_path: Path) -> None:
+    legacy = build_runtime(
+        settings(
+            tmp_path,
+            config_id=None,
+            name="Legacy name",
+            profile="LEGACY_PROFILE",
+            workspace_root="/Shared",
+        ),
+        runner=FakeCliRunner(b"[]"),
+    )
+    legacy_system_id = next(system.system_id for system in legacy.store.list_systems())
+    legacy.store.close()
+
+    adopted = build_runtime(
+        settings(
+            tmp_path,
+            config_id="stable-workspace",
+            name="Legacy name",
+            profile="LEGACY_PROFILE",
+            workspace_root="/Shared",
+        ),
+        runner=FakeCliRunner(b"[]"),
+    )
+    assert [(system.system_id, system.enabled) for system in adopted.store.list_systems()] == [
+        (legacy_system_id, True)
+    ]
+    adopted.store.close()
+
+    renamed = build_runtime(
+        settings(
+            tmp_path,
+            config_id="stable-workspace",
+            name="Renamed",
+            profile="ROTATED_PROFILE",
+            workspace_root="/Shared",
+        ),
+        runner=FakeCliRunner(b"[]"),
+    )
+    assert [
+        (system.system_id, system.display_name, system.enabled)
+        for system in renamed.store.list_systems()
+    ] == [(legacy_system_id, "Renamed", True)]
+    renamed.store.close()
+
+
+def test_workspace_root_change_creates_new_authority_and_pauses_predecessor(
+    tmp_path: Path,
+) -> None:
+    original = build_runtime(
+        settings(tmp_path, workspace_root="/Original"), runner=FakeCliRunner(b"[]")
+    )
+    original_id = next(system.system_id for system in original.store.list_systems())
+    original.store.close()
+
+    changed = build_runtime(
+        settings(tmp_path, workspace_root="/Changed"), runner=FakeCliRunner(b"[]")
+    )
+    systems = changed.store.list_systems()
+
+    assert len(systems) == 2
+    assert {system.display_name for system in systems} == {"test-workspace"}
+    assert {system.system_id for system in systems if system.enabled} != {original_id}
+    assert {system.system_id for system in systems if not system.enabled} == {original_id}
+    assert all(
+        not binding.enabled
+        for binding in changed.store.list_connection_bindings(system_id=original_id)
+    )
+    assert all(
+        not capability.enabled
+        for capability in changed.store.list_capability_bindings(system_id=original_id)
+    )
+    assert all(
+        not scope.enabled for scope in changed.store.list_configured_scopes(system_id=original_id)
+    )
+    changed.store.close()
 
 
 @pytest.mark.anyio

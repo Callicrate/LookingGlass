@@ -243,10 +243,14 @@ class SQLiteStore:
         self._lock = threading.RLock()
         with self._lock:
             self._connection.execute("PRAGMA foreign_keys = ON")
-            self._connection.execute("PRAGMA journal_mode = WAL")
             self._connection.execute("PRAGMA busy_timeout = 5000")
+            self._connection.execute("PRAGMA journal_mode = WAL")
             self._connection.execute("PRAGMA synchronous = FULL")
-        self._migrate()
+        try:
+            self._migrate()
+        except BaseException:
+            self._connection.close()
+            raise
 
     def close(self) -> None:
         with self._lock:
@@ -280,24 +284,21 @@ class SQLiteStore:
                 )
                 """
             )
-            applied = {
-                row["version"]
-                for row in self._connection.execute(
-                    "SELECT version FROM schema_migrations"
-                ).fetchall()
-            }
             for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
-                if migration.stem in applied:
-                    continue
                 script = migration.read_text(encoding="utf-8")
                 self._connection.execute("BEGIN IMMEDIATE")
                 try:
-                    for statement in self._migration_statements(script):
-                        self._execute_migration_statement(statement)
-                    self._connection.execute(
-                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                        (migration.stem, _utc_text(_now())),
-                    )
+                    applied = self._connection.execute(
+                        "SELECT 1 FROM schema_migrations WHERE version = ?",
+                        (migration.stem,),
+                    ).fetchone()
+                    if applied is None:
+                        for statement in self._migration_statements(script):
+                            self._execute_migration_statement(statement)
+                        self._connection.execute(
+                            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                            (migration.stem, _utc_text(_now())),
+                        )
                 except BaseException:
                     self._connection.rollback()
                     raise
@@ -441,6 +442,126 @@ class SQLiteStore:
             )
             if result.rowcount != 1:
                 raise ValueError("unknown system")
+
+    def get_configured_system_identity(
+        self, *, system_kind: str, config_id: str, authority_key: str
+    ) -> str | None:
+        require_contract_key(system_kind, "system_kind")
+        require_text(config_id, "config_id", max_length=128)
+        require_text(authority_key, "authority_key", max_length=2048)
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT system_id
+                FROM configured_system_identities
+                WHERE system_kind = ? AND config_id = ? AND authority_key = ?
+                """,
+                (system_kind, config_id, authority_key),
+            ).fetchone()
+        return row["system_id"] if row is not None else None
+
+    def upsert_configured_system_identity(
+        self,
+        *,
+        system_kind: str,
+        config_id: str,
+        authority_key: str,
+        system_id: str,
+        now: datetime | None = None,
+    ) -> None:
+        require_contract_key(system_kind, "system_kind")
+        require_text(config_id, "config_id", max_length=128)
+        require_text(authority_key, "authority_key", max_length=2048)
+        system_id = require_uuid(system_id, "system_id")
+        timestamp = _utc_text(now or _now())
+        with self._immediate_transaction() as connection:
+            system = connection.execute(
+                "SELECT system_kind FROM systems WHERE system_id = ?",
+                (system_id,),
+            ).fetchone()
+            if system is None or system["system_kind"] != system_kind:
+                raise ValueError("configured identity references an incompatible system")
+            connection.execute(
+                """
+                INSERT INTO configured_system_identities (
+                    system_kind, config_id, authority_key, system_id,
+                    record_created_at, record_updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(system_kind, config_id, authority_key) DO UPDATE SET
+                    system_id = excluded.system_id,
+                    record_updated_at = excluded.record_updated_at
+                """,
+                (system_kind, config_id, authority_key, system_id, timestamp, timestamp),
+            )
+
+    def reconcile_configured_resources(
+        self,
+        *,
+        system_kind: str,
+        system_ids: Iterable[str],
+        connection_binding_ids: Iterable[str],
+        capability_binding_ids: Iterable[str],
+        scope_ids: Iterable[str],
+        now: datetime | None = None,
+    ) -> None:
+        """Apply one configuration source as desired enabled state without deleting cache."""
+        require_contract_key(system_kind, "system_kind")
+        desired_systems = tuple(require_uuid(value, "system_id") for value in system_ids)
+        desired_bindings = tuple(
+            require_uuid(value, "connection_binding_id") for value in connection_binding_ids
+        )
+        desired_capabilities = tuple(
+            require_uuid(value, "capability_binding_id") for value in capability_binding_ids
+        )
+        desired_scopes = tuple(require_uuid(value, "scope_id") for value in scope_ids)
+        timestamp = _utc_text(now or _now())
+        with self._immediate_transaction() as connection:
+            system_filter = "SELECT system_id FROM systems WHERE system_kind = ?"
+            connection.execute(
+                "UPDATE capability_bindings SET enabled = 0, record_updated_at = ? "
+                "WHERE connection_binding_id IN ("
+                "SELECT binding_id FROM connection_bindings WHERE system_id IN ("
+                f"{system_filter}))",
+                (timestamp, system_kind),
+            )
+            connection.execute(
+                "UPDATE connection_bindings SET enabled = 0, record_updated_at = ? "
+                f"WHERE system_id IN ({system_filter})",
+                (timestamp, system_kind),
+            )
+            connection.execute(
+                "UPDATE configured_scopes SET enabled = 0, record_updated_at = ? "
+                f"WHERE system_id IN ({system_filter})",
+                (timestamp, system_kind),
+            )
+            connection.execute(
+                "UPDATE systems SET enabled = 0, record_updated_at = ? WHERE system_kind = ?",
+                (timestamp, system_kind),
+            )
+            connection.executemany(
+                "UPDATE systems SET enabled = 1, record_updated_at = ? "
+                "WHERE system_id = ? AND system_kind = ?",
+                ((timestamp, value, system_kind) for value in desired_systems),
+            )
+            connection.executemany(
+                "UPDATE connection_bindings SET enabled = 1, record_updated_at = ? "
+                "WHERE binding_id = ? AND system_id IN ("
+                "SELECT system_id FROM systems WHERE system_kind = ?)",
+                ((timestamp, value, system_kind) for value in desired_bindings),
+            )
+            connection.executemany(
+                "UPDATE capability_bindings SET enabled = 1, record_updated_at = ? "
+                "WHERE capability_binding_id = ? AND connection_binding_id IN ("
+                "SELECT binding_id FROM connection_bindings WHERE system_id IN ("
+                "SELECT system_id FROM systems WHERE system_kind = ?))",
+                ((timestamp, value, system_kind) for value in desired_capabilities),
+            )
+            connection.executemany(
+                "UPDATE configured_scopes SET enabled = 1, record_updated_at = ? "
+                "WHERE scope_id = ? AND system_id IN ("
+                "SELECT system_id FROM systems WHERE system_kind = ?)",
+                ((timestamp, value, system_kind) for value in desired_scopes),
+            )
 
     def upsert_connection_binding(
         self, binding: ConnectionBinding, *, now: datetime | None = None

@@ -32,6 +32,7 @@ class DatabricksSystemSettings:
     name: str
     profile: str
     workspace_root: str
+    config_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,14 +93,14 @@ def _workspace_root(value: object, field_name: str) -> str:
     return str(path)
 
 
-def _profile(value: object, field_name: str) -> str:
-    profile = _bounded_text(value, field_name, max_length=128)
+def _identifier(value: object, field_name: str) -> str:
+    identifier = _bounded_text(value, field_name, max_length=128)
     allowed = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
-    if any(char not in allowed for char in profile):
+    if any(char not in allowed for char in identifier):
         raise ConfigError(
             f"{field_name} may contain only letters, digits, periods, underscores, and hyphens"
         )
-    return profile
+    return identifier
 
 
 def load_settings(path: Path) -> ProjectSettings:
@@ -168,16 +169,19 @@ def load_settings(path: Path) -> ProjectSettings:
     for index, item in enumerate(databricks_raw):
         field_prefix = f"databricks[{index}]"
         entry = _mapping(item, field_prefix)
-        unknown = set(entry) - {"name", "profile", "workspace_root"}
+        unknown = set(entry) - {"id", "name", "profile", "workspace_root"}
         if unknown:
             raise ConfigError(f"unknown {field_prefix} settings: {sorted(unknown)}")
         systems.append(
             DatabricksSystemSettings(
                 name=_bounded_text(entry.get("name"), f"{field_prefix}.name", max_length=128),
-                profile=_profile(entry.get("profile"), f"{field_prefix}.profile"),
+                profile=_identifier(entry.get("profile"), f"{field_prefix}.profile"),
                 workspace_root=_workspace_root(
                     entry.get("workspace_root", "/"),
                     f"{field_prefix}.workspace_root",
+                ),
+                config_id=(
+                    _identifier(entry["id"], f"{field_prefix}.id") if "id" in entry else None
                 ),
             )
         )
@@ -185,4 +189,7 @@ def load_settings(path: Path) -> ProjectSettings:
     names = [system.name.casefold() for system in systems]
     if len(set(names)) != len(names):
         raise ConfigError("Databricks system names must be unique")
+    config_ids = [system.config_id.casefold() for system in systems if system.config_id]
+    if len(set(config_ids)) != len(config_ids):
+        raise ConfigError("Databricks system IDs must be unique")
     return ProjectSettings(app=app, databricks_systems=tuple(systems))

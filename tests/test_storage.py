@@ -1,5 +1,7 @@
 import asyncio
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -49,6 +51,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0001_initial",
             "0002_refresh_scope_capability_key",
             "0003_observation_batch_digest",
+            "0004_configured_system_identities",
         ]
 
 
@@ -77,6 +80,53 @@ def test_existing_v1_database_upgrades_scope_capability_columns(tmp_path) -> Non
         )
         for columns in table_columns:
             assert "capability_key" in {column[1] for column in columns}
+
+
+def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None:
+    path = tmp_path / "concurrent.sqlite3"
+    workers = 8
+    barrier = threading.Barrier(workers)
+
+    def open_store() -> tuple[str, ...]:
+        barrier.wait(timeout=5)
+        with SQLiteStore(path) as store:
+            rows = store._connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            return tuple(row[0] for row in rows)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        versions = tuple(executor.map(lambda _index: open_store(), range(workers)))
+
+    expected = (
+        "0001_initial",
+        "0002_refresh_scope_capability_key",
+        "0003_observation_batch_digest",
+        "0004_configured_system_identities",
+    )
+    assert versions == (expected,) * workers
+
+
+def test_configuration_reconciliation_cannot_enable_another_system_kind(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "state.sqlite3") as store:
+        other = SystemBootstrapService(store).create_system(
+            display_name="other",
+            system_kind="server.host",
+            enabled=False,
+            now=NOW,
+        )
+
+        store.reconcile_configured_resources(
+            system_kind="databricks.workspace",
+            system_ids=(other.system_id,),
+            connection_binding_ids=(),
+            capability_binding_ids=(),
+            scope_ids=(),
+            now=NOW,
+        )
+
+        unchanged = store.get_system(other.system_id)
+        assert unchanged is not None and not unchanged.enabled
 
 
 def test_migration_failure_rolls_back_schema_and_ledger(tmp_path, monkeypatch) -> None:
@@ -145,6 +195,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0001_initial",
             "0002_refresh_scope_capability_key",
             "0003_observation_batch_digest",
+            "0004_configured_system_identities",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":

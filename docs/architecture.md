@@ -1441,6 +1441,13 @@ Canonical configuration includes:
 - retention defaults and overrides;
 - content capture and local-access policies.
 
+The local TOML file is desired enabled state for its Databricks resources.
+Each new entry has an explicit stable configuration ID.
+Legacy entries without an ID remain compatible; adding an ID before changing other identity inputs records a durable mapping to the existing system and cached history.
+Display-name and profile changes under the same ID and Workspace root update one local system.
+Removing an entry disables its system, binding, capabilities, and configured scopes without deleting cached facts.
+Changing the Workspace root creates a new local system authority boundary and disables the predecessor.
+
 Session runtime state includes:
 
 - active UI sessions and heartbeats;

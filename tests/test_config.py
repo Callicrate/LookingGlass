@@ -21,6 +21,7 @@ host = "127.0.0.1"
 port = 9000
 
 [[databricks]]
+id = "workspace"
 name = "workspace"
 profile = "TEST_PROFILE"
 workspace_root = "/Shared"
@@ -31,6 +32,7 @@ workspace_root = "/Shared"
 
     assert settings.app.database_path == (tmp_path / "data/state.sqlite3").resolve()
     assert settings.app.host == "127.0.0.1"
+    assert settings.databricks_systems[0].config_id == "workspace"
     assert settings.databricks_systems[0].profile == "TEST_PROFILE"
     assert settings.databricks_systems[0].workspace_root == "/Shared"
 
@@ -69,6 +71,7 @@ def test_rejects_command_shaped_databricks_settings(
         tmp_path,
         f"""
 [[databricks]]
+id = "workspace"
 name = "workspace"
 profile = "{value if field == "profile" else "TEST_PROFILE"}"
 workspace_root = "{value if field == "workspace_root" else "/"}"
@@ -84,6 +87,7 @@ def test_rejects_unknown_fields_that_could_hide_credentials(tmp_path: Path) -> N
         tmp_path,
         """
 [[databricks]]
+id = "workspace"
 name = "workspace"
 profile = "TEST_PROFILE"
 workspace_root = "/"
@@ -92,4 +96,42 @@ token = "not-accepted"
     )
 
     with pytest.raises(ConfigError, match="unknown"):
+        load_settings(path)
+
+
+def test_allows_legacy_databricks_configuration_without_id(tmp_path: Path) -> None:
+    path = write_config(
+        tmp_path,
+        """
+[[databricks]]
+name = "workspace"
+profile = "TEST_PROFILE"
+workspace_root = "/"
+""",
+    )
+
+    settings = load_settings(path)
+
+    assert settings.databricks_systems[0].config_id is None
+
+
+def test_rejects_duplicate_databricks_system_ids(tmp_path: Path) -> None:
+    path = write_config(
+        tmp_path,
+        """
+[[databricks]]
+id = "workspace"
+name = "one"
+profile = "ONE"
+workspace_root = "/One"
+
+[[databricks]]
+id = "WORKSPACE"
+name = "two"
+profile = "TWO"
+workspace_root = "/Two"
+""",
+    )
+
+    with pytest.raises(ConfigError, match="system IDs must be unique"):
         load_settings(path)

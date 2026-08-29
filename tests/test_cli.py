@@ -11,6 +11,7 @@ def test_init_creates_database_from_local_config(tmp_path: Path) -> None:
 database_path = "{(tmp_path / "state.sqlite3").as_posix()}"
 
 [[databricks]]
+id = "test"
 name = "test"
 profile = "TEST_PROFILE"
 workspace_root = "/"

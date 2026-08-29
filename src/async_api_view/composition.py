@@ -712,14 +712,36 @@ def build_runtime(
     settings.app.database_path.parent.mkdir(parents=True, exist_ok=True)
     store = SQLiteStore(settings.app.database_path)
     bootstrap = SystemBootstrapService(store)
+    configured_system_ids: set[str] = set()
+    configured_binding_ids: set[str] = set()
+    configured_capability_ids: set[str] = set()
+    configured_scope_ids: set[str] = set()
     for system in settings.databricks_systems:
-        stable = str(
+        legacy_stable = str(
             uuid5(
                 NAMESPACE_URL,
                 f"async-api-view/databricks/{system.name}/{system.profile}/{system.workspace_root}",
             )
         )
-        bootstrap.configure_databricks_workspace(
+        stable = legacy_stable
+        if system.config_id is not None:
+            mapped = store.get_configured_system_identity(
+                system_kind="databricks.workspace",
+                config_id=system.config_id,
+                authority_key=system.workspace_root,
+            )
+            legacy_system = store.get_system(legacy_stable)
+            stable = mapped or (
+                legacy_stable
+                if legacy_system is not None and legacy_system.system_kind == "databricks.workspace"
+                else str(
+                    uuid5(
+                        NAMESPACE_URL,
+                        f"async-api-view/databricks/{system.config_id}/{system.workspace_root}",
+                    )
+                )
+            )
+        seeded = bootstrap.configure_databricks_workspace(
             display_name=system.name,
             profile=system.profile,
             workspace_root=system.workspace_root,
@@ -734,6 +756,26 @@ def build_runtime(
             workspace_root_object_id=str(uuid5(NAMESPACE_URL, f"{stable}/workspace-root")),
             workspace_root_scope_id=str(uuid5(NAMESPACE_URL, f"{stable}/workspace-root-scope")),
         )
+        if system.config_id is not None:
+            store.upsert_configured_system_identity(
+                system_kind="databricks.workspace",
+                config_id=system.config_id,
+                authority_key=system.workspace_root,
+                system_id=seeded.system.system_id,
+            )
+        configured_system_ids.add(seeded.system.system_id)
+        configured_binding_ids.add(seeded.connection_binding_id)
+        configured_capability_ids.update(seeded.capability_binding_ids)
+        configured_scope_ids.add(seeded.workspace_root_scope.scope_id)
+        if seeded.unity_catalog_root_scope is not None:
+            configured_scope_ids.add(seeded.unity_catalog_root_scope.scope_id)
+    store.reconcile_configured_resources(
+        system_kind="databricks.workspace",
+        system_ids=configured_system_ids,
+        connection_binding_ids=configured_binding_ids,
+        capability_binding_ids=configured_capability_ids,
+        scope_ids=configured_scope_ids,
+    )
     coordinator = DurableCoordinator(store)
     actual_runner = runner or CliRunner(
         timeout_seconds=settings.app.cli_timeout_seconds,

@@ -7,6 +7,7 @@ cli_timeout_seconds = 30.0
 cli_output_limit_bytes = 8388608
 
 [[databricks]]
+id = "primary-workspace"
 name = "primary-workspace"
 profile = "YOUR_PROFILE"
 workspace_root = "/"

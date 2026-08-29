@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 20:38 ET
+Updated: 2026-08-28 20:49 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 145 tests passed warning-free; Ruff format, Ruff lint, `uv lock --check`, and package build passed.
+- Latest checks: 152 tests passed warning-free; Ruff format, Ruff lint, `uv lock --check`, and package build passed.
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
-- Version control: local `main` history has four coherent commits ending at `e251856`.
+- Version control: local `main` history has five coherent commits ending at `6f5d76a`; the next reviewed commit is ready.
 - Active review round: configuration desired-state reconciliation, runtime supervision, bounded dashboard reads, and migration concurrency.
-- Next progress report due: 2026-08-28 21:00 ET.
+- Next progress report due: 2026-08-28 21:49 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -27,10 +27,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Re-run format, lint, tests, lock validation, package build, and a rendered UI smoke check.
 - [x] Review the final diff critically and commit coherent changes.
 - [x] Make orderly shutdown cancel and reap in-flight CLI work promptly.
-- [ ] Reconcile configuration identity and refresh authority across restarts.
+- [x] Reconcile configuration identity and refresh authority across restarts.
 - [x] Eliminate repeated full action/object reads from per-facet dashboard rendering.
 - [ ] Bound dashboard reads for large object and action histories.
-- [ ] Serialize concurrent migration decisions safely.
+- [x] Serialize concurrent migration decisions safely.
 - [ ] Reconcile documentation claims with the current implemented surface.
 - [ ] Independently review and verify the next change set before committing.
 
@@ -45,6 +45,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Final critical-review report is schema-valid in `.local/review/findings.json`; the local review workspace is ignored and does not pollute Git history.
 - Locked runtime dependencies have no known vulnerabilities according to `pip-audit`; the local package itself was correctly skipped as unpublished.
 - The independent diff review found no blocker in the shutdown, dashboard, config, packaging, or test-transport changes.
+- A durable configuration identity mapping adopts existing cached system UUIDs before desired-state reconciliation.
+- Removing a config entry now disables stale refresh authority; queued stale work is cancelled by the pre-dispatch guard without a CLI call.
+- Eight concurrent store constructors now complete the migration ledger safely in the regression test.
 
 ## Risks / watch list
 
