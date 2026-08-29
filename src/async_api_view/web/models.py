@@ -131,6 +131,7 @@ class RefreshRequest:
     target_id: str
     capability_key: str
     facet: str
+    ui_session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 22:34 ET
+Updated: 2026-08-28 23:08 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 196 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, and the branch-coverage gate passed.
-- Runtime surface: 4 CLI commands and 7 HTTP routes, verified from source.
-- Version control: local `main` includes the verified bounded alert-history batch; completed implementation batches are committed with focused messages.
-- Active review round: select the next high-value local improvement after closing the alert-history checkpoint.
+- Latest checks: 203 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Runtime surface: 4 CLI commands and 9 HTTP routes, verified from source.
+- Version control: local `main` includes the verified ephemeral local-caller authorization batch; completed implementation batches are committed with focused messages.
+- Active review round: repair the demonstrated direct Workspace metadata ingestion defect, then the out-of-order relationship reconciliation and doctor-cancellation defects.
 - Next progress report due: 2026-08-28 23:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -38,6 +38,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Enforce an aggregate branch-coverage floor in CI.
 - [x] Choose bounded object/containment navigation over lower-value full alert history filtering.
 - [x] Add bounded, filterable full alert history without expanding dashboard query cost.
+- [x] Require an ephemeral, process-local browser session before exposing cached data or refresh authority.
+- [ ] Repair direct Workspace metadata coverage so its normalized observation is accepted and credited.
+- [ ] Prevent older complete collection omissions from overwriting newer relationships.
+- [ ] Make Databricks compatibility checks reap their subprocess on cancellation.
 
 ## Evidence and decisions
 
@@ -86,8 +90,20 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The history route reports invalid or duplicate query input as 400 and backend failure as a generic 503; the backend-less fallback was corrected so missing state cannot be misrepresented as an empty history.
 - The alert-history page passed desktop/mobile browser checks without console or network errors; Lighthouse scored 100 in every audited category on both profiles.
 - Independent review found no release blocker in the alert-history diff; its sole low-severity fallback concern was fixed and covered directly.
-- Aggregate branch coverage is now 84% with 196 passing tests.
+- Aggregate branch coverage is now 84% with 203 passing tests.
 - The real ignored local database is migrated through `0007_operational_event_filters`; `PRAGMA integrity_check` is `ok` with zero foreign-key violations.
+- An unauthenticated local HTTP client previously could fetch the process CSRF token and enqueue a registered read under the service owner's CLI profile; an independent reproduction rated this medium severity.
+- `serve` now issues one 256-bit, ten-minute, single-use activation capability in a URL fragment and exchanges it through a bounded same-origin POST body for one memory-only browser session.
+- Bootstrap and session values are CSPRNG-generated, stored server-side only as SHA-256 digests, compared in constant time, invalidated on restart, and excluded from rendered HTML, request targets, redirects, application logs, and access logs.
+- Deny-by-default middleware gates every cached-data and mutation route before parsing or backend work; Trusted Host runs before authorization and security headers wrap both denials.
+- Refresh CSRF nonces are per-session, and manual intents now durably record the non-secret UI session UUID without persisting authentication material.
+- Redirected activation output fails closed unless `serve --allow-redirected-activation` explicitly opts in; the denial path closes the runtime store and exposes no capability.
+- Actual Chrome QA over plain `http://127.0.0.1` proved fragment scrubbing, one-time exchange, subsequent authorization, an `HttpOnly` cookie hidden from JavaScript, no console errors, and token-free access-log targets.
+- The bootstrap page scored 100 for Lighthouse accessibility, best practices, SEO, and agentic browsing; the full suite now passes 203 tests at 84% branch coverage.
+- Independent security follow-up found no release blocker after tracing bootstrap expiry/replay, cookie/session fixation, middleware order, route coverage, CSRF, attribution, and logging.
+- A separate storage review demonstrated that direct Workspace metadata normalization emits no coverage declaration, so ingestion rejects its only observation after spending the remote call.
+- The same review demonstrated that delayed older complete collection evidence can mark a newer relationship absent; both medium defects are queued ahead of feature work.
+- A runtime review reproduced that cancelling a Databricks compatibility check can leave its CLI subprocess alive; the bounded cleanup fix remains queued.
 
 ## Risks / watch list
 

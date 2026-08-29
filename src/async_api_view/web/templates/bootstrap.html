@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Authorize this browser for the local Rookery session.">
+  <title>Local access · Async API View</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/bootstrap.js" defer></script>
+</head>
+<body>
+  <main class="access-main">
+    <section class="access-card" aria-labelledby="access-heading">
+      <p class="eyebrow">Process-local authorization</p>
+      <h1 id="access-heading">Unlock this browser</h1>
+      <p>Use the one-time activation link shown in the terminal that started Rookery. The link expires after ten minutes and works once.</p>
+      <div class="notice notice--error{% if not error %} is-hidden{% endif %}" role="alert" data-bootstrap-error>{{ error|e if error else 'The activation link could not be accepted.' }}</div>
+      <form class="access-form" method="post" action="/bootstrap">
+        <label for="bootstrap-token">Activation code</label>
+        <input id="bootstrap-token" name="bootstrap_token" type="password" required minlength="32" maxlength="128" autocomplete="one-time-code" spellcheck="false" data-bootstrap-token>
+        <button type="submit">Unlock local view</button>
+      </form>
+      <p class="subtle">No cached metadata or refresh controls are available until this browser is authorized.</p>
+    </section>
+  </main>
+</body>
+</html>

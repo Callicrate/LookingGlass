@@ -50,6 +50,7 @@ from async_api_view.web import (
     FacetView,
     IntentScopeView,
     IntentView,
+    LocalCallerAuthorizer,
     ObjectDetailQuery,
     ObjectDetailView,
     ObjectView,
@@ -763,6 +764,7 @@ class SQLiteWebBackend:
             idempotency_key=str(uuid4()),
             origin=RefreshOrigin.MANUAL,
             actor_id="local-user",
+            ui_session_id=request.ui_session_id,
             scopes=(
                 RefreshScope(
                     system_id=request.system_id,
@@ -844,6 +846,7 @@ class ApplicationRuntime:
     worker: DatabricksWorker
     runner: CliRunner
     backend: SQLiteWebBackend
+    local_authorizer: LocalCallerAuthorizer
     app: FastAPI
     worker_available: bool = False
     worker_error: str | None = None
@@ -1097,7 +1100,12 @@ def _compose_runtime(
             )
         )
     )
-    app = create_app(backend, allowed_hosts=allowed_hosts)
+    local_authorizer = LocalCallerAuthorizer()
+    app = create_app(
+        backend,
+        allowed_hosts=allowed_hosts,
+        authorizer=local_authorizer,
+    )
     runtime = ApplicationRuntime(
         settings=settings,
         store=store,
@@ -1105,6 +1113,7 @@ def _compose_runtime(
         worker=worker,
         runner=actual_runner,
         backend=backend,
+        local_authorizer=local_authorizer,
         app=app,
     )
     runtime_placeholder["runtime"] = runtime

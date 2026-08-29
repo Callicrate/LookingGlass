@@ -1,6 +1,7 @@
 """Loopback operational web UI."""
 
 from .app import create_app
+from .auth import LocalCallerAuthorizer, LocalSession
 from .models import (
     ActivityView,
     AlertHistoryQuery,
@@ -31,6 +32,8 @@ __all__ = [
     "FacetView",
     "IntentScopeView",
     "IntentView",
+    "LocalCallerAuthorizer",
+    "LocalSession",
     "ObjectDetailQuery",
     "ObjectDetailView",
     "ObjectView",

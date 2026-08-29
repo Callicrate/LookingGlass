@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from async_api_view.web import (
@@ -16,6 +19,7 @@ from async_api_view.web import (
     FacetView,
     IntentScopeView,
     IntentView,
+    LocalCallerAuthorizer,
     ObjectDetailQuery,
     ObjectDetailView,
     ObjectView,
@@ -135,13 +139,161 @@ class FakeBackend:
         )
 
 
-def client_for(backend: FakeBackend) -> TestClient:
-    return TestClient(
-        create_app(
-            backend,
-            allowed_hosts=("127.0.0.1", "localhost", "testserver"),
-        )
+def authenticated_client(app: FastAPI) -> TestClient:
+    client = TestClient(app, base_url="https://testserver")
+    token = app.state.local_authorizer.take_bootstrap_token()
+    response = client.post(
+        "/bootstrap",
+        data={"bootstrap_token": token},
+        headers={"Origin": "https://testserver"},
+        follow_redirects=False,
     )
+    assert response.status_code == 303
+    return client
+
+
+def client_for(backend: FakeBackend) -> TestClient:
+    app = create_app(
+        backend,
+        allowed_hosts=("127.0.0.1", "localhost", "testserver"),
+    )
+    return authenticated_client(app)
+
+
+def test_local_access_denies_every_protected_surface_before_backend_work() -> None:
+    backend = FakeBackend(dashboard_view=ready_dashboard())
+    app = create_app(backend, allowed_hosts=("testserver",))
+    client = TestClient(app, base_url="https://testserver")
+
+    responses = (
+        client.get("/"),
+        client.get("/alerts"),
+        client.get(f"/objects/{DETAIL_ID}"),
+        client.get("/intents/intent-1"),
+        client.get("/api/intents/intent-1"),
+        client.post("/refresh"),
+    )
+
+    assert all(response.status_code == 403 for response in responses)
+    assert "Unlock this browser" in responses[0].text
+    assert "Data workspace" not in responses[0].text
+    assert 'name="csrf_token"' not in responses[0].text
+    assert backend.dashboard_queries == []
+    assert backend.object_queries == []
+    assert backend.alert_queries == []
+    assert backend.submitted == []
+
+
+def test_bootstrap_is_public_single_use_and_rotates_a_fixation_cookie() -> None:
+    backend = FakeBackend(dashboard_view=ready_dashboard())
+    app = create_app(backend, allowed_hosts=("testserver",))
+    client = TestClient(app, base_url="http://testserver")
+    token = app.state.local_authorizer.take_bootstrap_token()
+    client.cookies.set("rookery_session", "A" * 43)
+
+    page = client.get("/bootstrap")
+    static = client.get("/static/bootstrap.js")
+    response = client.post(
+        "/bootstrap",
+        data={"bootstrap_token": token},
+        headers={"Origin": "http://testserver"},
+        follow_redirects=False,
+    )
+
+    assert page.status_code == 200
+    assert static.status_code == 200
+    assert token not in page.text + static.text
+    assert static.text.index("history.replaceState") < static.text.index("fetch(")
+    assert "input.value = token" not in static.text
+    assert "localStorage" not in static.text
+    assert "sessionStorage" not in static.text
+    assert "console." not in static.text
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    assert token not in str(response.headers)
+    cookie = response.headers["set-cookie"]
+    assert "rookery_session=" in cookie
+    assert "HttpOnly" in cookie
+    assert "SameSite=strict" in cookie
+    assert "; Secure" not in cookie
+    assert "Path=/" in cookie
+    assert client.get("/").status_code == 200
+
+    replay = TestClient(app, base_url="http://testserver").post(
+        "/bootstrap",
+        data={"bootstrap_token": token},
+        headers={"Origin": "http://testserver"},
+        follow_redirects=False,
+    )
+    assert replay.status_code == 403
+    assert "set-cookie" not in replay.headers
+
+
+def test_bootstrap_redemption_is_atomic() -> None:
+    authorizer = LocalCallerAuthorizer()
+    token = authorizer.take_bootstrap_token()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(lambda _index: authorizer.redeem(token), range(2)))
+
+    assert sum(result is not None for result in results) == 1
+
+
+def test_bootstrap_expires_and_restart_rejects_the_prior_session() -> None:
+    now = [0.0]
+    authorizer = LocalCallerAuthorizer(clock=lambda: now[0])
+    token = authorizer.take_bootstrap_token()
+    now[0] = 601.0
+
+    assert authorizer.redeem(token) is None
+
+    first = LocalCallerAuthorizer()
+    grant = first.redeem(first.take_bootstrap_token())
+    assert grant is not None
+    restarted = LocalCallerAuthorizer()
+    assert restarted.authenticate(grant.cookie_token) is None
+
+
+def test_bootstrap_rejects_cross_origin_and_malformed_requests() -> None:
+    app = create_app(FakeBackend(), allowed_hosts=("testserver",))
+    client = TestClient(app, base_url="https://testserver")
+    token = app.state.local_authorizer.take_bootstrap_token()
+
+    cross_origin = client.post(
+        "/bootstrap",
+        data={"bootstrap_token": token},
+        headers={"Origin": "https://attacker.example"},
+    )
+    wrong_type = client.post(
+        "/bootstrap",
+        content="{}",
+        headers={"Origin": "https://testserver", "Content-Type": "application/json"},
+    )
+    unknown_field = client.post(
+        "/bootstrap",
+        data={"bootstrap_token": token, "next": "https://attacker.example"},
+        headers={"Origin": "https://testserver"},
+    )
+
+    assert cross_origin.status_code == 403
+    assert wrong_type.status_code == 415
+    assert unknown_field.status_code == 400
+
+
+def test_csrf_nonce_is_bound_to_the_authorized_browser_session() -> None:
+    first = client_for(FakeBackend(dashboard_view=ready_dashboard()))
+    second_backend = FakeBackend(dashboard_view=ready_dashboard())
+    second = client_for(second_backend)
+    first_token = csrf_from(first.get("/").text)
+
+    response = second.post(
+        "/refresh",
+        data=valid_form(first_token),
+        headers={"Origin": "https://testserver"},
+    )
+
+    assert response.status_code == 403
+    assert second_backend.submitted == []
 
 
 def csrf_from(response_text: str) -> str:
@@ -456,7 +608,8 @@ def test_alert_history_returns_safe_unavailable_response() -> None:
 
 
 def test_alert_history_default_backend_reports_unavailable() -> None:
-    response = TestClient(create_app(allowed_hosts=("testserver",))).get("/alerts")
+    app = create_app(allowed_hosts=("testserver",))
+    response = authenticated_client(app).get("/alerts")
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Alert history is unavailable"}
@@ -478,7 +631,7 @@ def test_refresh_requires_valid_csrf() -> None:
     client = client_for(backend)
     data = valid_form("wrong-token")
 
-    response = client.post("/refresh", data=data, headers={"Origin": "http://testserver"})
+    response = client.post("/refresh", data=data, headers={"Origin": "https://testserver"})
 
     assert response.status_code == 403
     assert backend.submitted == []
@@ -491,7 +644,7 @@ def test_refresh_reports_unavailable_dashboard_without_leaking_error() -> None:
     backend.dashboard_error = RuntimeError("secret profile token")
 
     response = client.post(
-        "/refresh", data=valid_form(token), headers={"Origin": "http://testserver"}
+        "/refresh", data=valid_form(token), headers={"Origin": "https://testserver"}
     )
 
     assert response.status_code == 503
@@ -570,7 +723,7 @@ def test_browser_form_without_origin_accepts_matching_referer() -> None:
     response = client.post(
         "/refresh",
         data=valid_form(token),
-        headers={"Referer": "http://testserver/dashboard"},
+        headers={"Referer": "https://testserver/dashboard"},
         follow_redirects=False,
     )
 
@@ -587,7 +740,7 @@ def test_browser_fallback_rejects_cross_site_fetch_metadata() -> None:
         "/refresh",
         data=valid_form(token),
         headers={
-            "Referer": "http://testserver/",
+            "Referer": "https://testserver/",
             "Sec-Fetch-Site": "cross-site",
         },
     )
@@ -630,21 +783,21 @@ def test_registered_refresh_redirects_to_receipt() -> None:
     response = client.post(
         "/refresh",
         data=valid_form(token),
-        headers={"Origin": "http://testserver"},
+        headers={"Origin": "https://testserver"},
         follow_redirects=False,
     )
 
     assert response.status_code == 303
     assert response.headers["location"] == "/intents/intent-1"
-    assert backend.submitted == [
-        RefreshRequest(
-            system_id="system-1",
-            target_kind="configured_scope",
-            target_id="scope-1",
-            capability_key="databricks.workspace.children.read",
-            facet="membership",
-        )
-    ]
+    submitted = backend.submitted[0]
+    assert UUID(submitted.ui_session_id or "")
+    assert replace(submitted, ui_session_id=None) == RefreshRequest(
+        system_id="system-1",
+        target_kind="configured_scope",
+        target_id="scope-1",
+        capability_key="databricks.workspace.children.read",
+        facet="membership",
+    )
 
 
 def test_arbitrary_fields_paths_and_force_are_rejected() -> None:
@@ -660,7 +813,7 @@ def test_arbitrary_fields_paths_and_force_are_rejected() -> None:
         {"cli_argument": "--profile=secret"},
     ):
         response = client.post(
-            "/refresh", data=base | extra, headers={"Origin": "http://testserver"}
+            "/refresh", data=base | extra, headers={"Origin": "https://testserver"}
         )
         assert response.status_code == 400
     assert backend.submitted == []
@@ -678,19 +831,19 @@ def test_registered_object_target_refresh_is_allowed() -> None:
     }
 
     response = client.post(
-        "/refresh", data=data, headers={"Origin": "http://testserver"}, follow_redirects=False
+        "/refresh", data=data, headers={"Origin": "https://testserver"}, follow_redirects=False
     )
 
     assert response.status_code == 303
-    assert backend.submitted == [
-        RefreshRequest(
-            system_id="system-1",
-            target_kind="object",
-            target_id="object-1",
-            capability_key="databricks.workspace.metadata.read",
-            facet="metadata",
-        )
-    ]
+    submitted = backend.submitted[0]
+    assert UUID(submitted.ui_session_id or "")
+    assert replace(submitted, ui_session_id=None) == RefreshRequest(
+        system_id="system-1",
+        target_kind="object",
+        target_id="object-1",
+        capability_key="databricks.workspace.metadata.read",
+        facet="metadata",
+    )
 
 
 def test_unregistered_target_identifier_combination_is_rejected() -> None:
@@ -699,7 +852,7 @@ def test_unregistered_target_identifier_combination_is_rejected() -> None:
     token = csrf_from(client.get("/").text)
     data = valid_form(token) | {"target_id": "../../arbitrary"}
 
-    response = client.post("/refresh", data=data, headers={"Origin": "http://testserver"})
+    response = client.post("/refresh", data=data, headers={"Origin": "https://testserver"})
 
     assert response.status_code == 400
     assert backend.submitted == []
@@ -714,7 +867,7 @@ def test_system_and_unknown_target_kinds_are_rejected_before_allowlist_matching(
         response = client.post(
             "/refresh",
             data=valid_form(token) | {"target_kind": target_kind},
-            headers={"Origin": "http://testserver"},
+            headers={"Origin": "https://testserver"},
         )
         assert response.status_code == 400
     assert backend.submitted == []
@@ -807,13 +960,13 @@ def test_refresh_rejects_wrong_content_type_and_oversize_body() -> None:
     wrong_type = client.post(
         "/refresh",
         content="{}",
-        headers={"Origin": "http://testserver", "Content-Type": "application/json"},
+        headers={"Origin": "https://testserver", "Content-Type": "application/json"},
     )
     oversize = client.post(
         "/refresh",
         content="x" * 9000,
         headers={
-            "Origin": "http://testserver",
+            "Origin": "https://testserver",
             "Content-Type": "application/x-www-form-urlencoded",
         },
     )

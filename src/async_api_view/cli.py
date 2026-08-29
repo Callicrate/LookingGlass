@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -43,7 +44,14 @@ def _parser() -> argparse.ArgumentParser:
         "run-once",
         help="Drain currently eligible local coordinator and adapter work, then stop.",
     )
-    subparsers.add_parser("serve", help="Run the loopback dashboard and background workers.")
+    serve = subparsers.add_parser(
+        "serve", help="Run the loopback dashboard and background workers."
+    )
+    serve.add_argument(
+        "--allow-redirected-activation",
+        action="store_true",
+        help="Allow the one-time browser activation link on redirected stdout.",
+    )
     return parser
 
 
@@ -91,6 +99,29 @@ async def _run_once(runtime: ApplicationRuntime) -> None:
         raise RuntimeError("run-once exceeded its bounded work limit")
 
 
+def _show_browser_activation(
+    runtime: ApplicationRuntime,
+    settings: ProjectSettings,
+    *,
+    allow_redirected: bool,
+) -> None:
+    if not sys.stdout.isatty() and not allow_redirected:
+        raise RuntimeError(
+            "refusing to write the browser activation link to redirected stdout; "
+            "use an interactive terminal or pass --allow-redirected-activation"
+        )
+    token = runtime.local_authorizer.take_bootstrap_token()
+    url = f"http://{settings.app.host}:{settings.app.port}/bootstrap#{token}"
+    # The one-time capability must reach the controlling terminal without entering
+    # application or access logs. It is consumed by the first successful exchange.
+    sys.stdout.write(
+        "Local browser activation (valid once for 10 minutes):\n"
+        f"{url}\n"
+        "Keep this link private. Restart serve to issue a new link.\n"
+    )
+    sys.stdout.flush()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one local command and return a process exit code."""
     args = _parser().parse_args(argv)
@@ -113,6 +144,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "serve":
             runtime = build_runtime(settings)
             try:
+                _show_browser_activation(
+                    runtime,
+                    settings,
+                    allow_redirected=args.allow_redirected_activation,
+                )
                 uvicorn.run(
                     runtime.app,
                     host=settings.app.host,

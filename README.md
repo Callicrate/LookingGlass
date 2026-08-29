@@ -68,7 +68,14 @@ It does not query workspace inventory or validate the selected profile's authent
 uv run async-api-view --config config.local.toml serve
 ```
 
-Open [http://127.0.0.1:8765](http://127.0.0.1:8765).
+`serve` prints a one-time browser activation link to its controlling terminal.
+Open that complete link, including its `#` fragment, within ten minutes.
+The browser removes the fragment before exchanging it, so the capability does not enter HTTP request targets, redirects, or access logs.
+The resulting host-only session cookie is process-local, `HttpOnly`, and `SameSite=Strict`.
+If the link expires, was already used by another browser profile, or the browser session is lost, restart `serve` to rotate it.
+When stdout is redirected, `serve` refuses to disclose the capability unless the operator explicitly passes `--allow-redirected-activation` and protects the destination.
+
+After activation, the dashboard is available at [http://127.0.0.1:8765](http://127.0.0.1:8765).
 The dashboard accepts `localhost` or an IPv4 loopback address only.
 Stop it with `Ctrl+C`; an in-flight local CLI process is cancelled and its durable lease remains recoverable.
 

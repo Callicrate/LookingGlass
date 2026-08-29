@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hmac
 import re
-import secrets
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
@@ -13,8 +12,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .auth import SESSION_COOKIE, LocalCallerAuthorizer, LocalSession
 from .models import (
     AlertHistoryQuery,
     DashboardQuery,
@@ -29,6 +30,7 @@ from .models import (
 )
 
 MAX_FORM_BYTES = 8 * 1024
+BOOTSTRAP_FORM_FIELDS = frozenset({"bootstrap_token"})
 FORM_FIELDS = frozenset(
     {"csrf_token", "system_id", "target_kind", "target_id", "capability_key", "facet"}
 )
@@ -148,6 +150,23 @@ def _alert_history_query(request: Request) -> AlertHistoryQuery:
 async def _parse_refresh_form(request: Request, csrf_token: str) -> RefreshRequest:
     if not _same_origin(request):
         raise HTTPException(status_code=403, detail="A same-origin request is required")
+    values = await _parse_form(request, expected_fields=FORM_FIELDS)
+    if not hmac.compare_digest(values["csrf_token"], csrf_token):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    fields = {name: values[name] for name in FORM_FIELDS - {"csrf_token"}}
+    if any(not value or len(value) > 256 for value in fields.values()):
+        raise HTTPException(status_code=400, detail="Invalid form value")
+    if fields["target_kind"] not in UI_TARGET_KINDS:
+        raise HTTPException(status_code=400, detail="Unsupported target kind")
+    session = _local_session(request)
+    return RefreshRequest(**fields, ui_session_id=session.session_id)
+
+
+async def _parse_form(
+    request: Request,
+    *,
+    expected_fields: frozenset[str],
+) -> dict[str, str]:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type != "application/x-www-form-urlencoded":
         raise HTTPException(status_code=415, detail="Expected a form-encoded request")
@@ -169,20 +188,30 @@ async def _parse_refresh_form(request: Request, csrf_token: str) -> RefreshReque
             body.decode("utf-8", errors="strict"),
             keep_blank_values=True,
             strict_parsing=True,
-            max_num_fields=len(FORM_FIELDS),
+            max_num_fields=len(expected_fields),
         )
     except (UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Malformed form data") from exc
-    if set(values) != FORM_FIELDS or any(len(items) != 1 for items in values.values()):
+    if set(values) != expected_fields or any(len(items) != 1 for items in values.values()):
         raise HTTPException(status_code=400, detail="Unexpected or missing form field")
-    if not hmac.compare_digest(values["csrf_token"][0], csrf_token):
-        raise HTTPException(status_code=403, detail="Invalid CSRF token")
-    fields = {name: values[name][0] for name in FORM_FIELDS - {"csrf_token"}}
-    if any(not value or len(value) > 256 for value in fields.values()):
-        raise HTTPException(status_code=400, detail="Invalid form value")
-    if fields["target_kind"] not in UI_TARGET_KINDS:
-        raise HTTPException(status_code=400, detail="Unsupported target kind")
-    return RefreshRequest(**fields)
+    return {name: items[0] for name, items in values.items()}
+
+
+async def _parse_bootstrap_form(request: Request) -> str:
+    if not _same_origin(request):
+        raise HTTPException(status_code=403, detail="A same-origin request is required")
+    values = await _parse_form(request, expected_fields=BOOTSTRAP_FORM_FIELDS)
+    token = values["bootstrap_token"]
+    if not token or len(token) > 128:
+        raise HTTPException(status_code=400, detail="Invalid bootstrap form")
+    return token
+
+
+def _local_session(request: Request) -> LocalSession:
+    session = getattr(request.state, "local_session", None)
+    if not isinstance(session, LocalSession):  # pragma: no cover - middleware invariant
+        raise RuntimeError("local session is unavailable")
+    return session
 
 
 def _intent_payload(view: IntentView) -> dict[str, object]:
@@ -212,12 +241,13 @@ def create_app(
     backend: WebBackend | None = None,
     *,
     allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost"),
+    authorizer: LocalCallerAuthorizer | None = None,
 ) -> FastAPI:
     """Create a loopback-oriented app around an injected application facade."""
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.backend = backend or UnavailableBackend()
-    app.state.csrf_token = secrets.token_urlsafe(32)
+    app.state.local_authorizer = authorizer or LocalCallerAuthorizer()
 
     root = Path(__file__).parent
     templates = Environment(
@@ -227,13 +257,59 @@ def create_app(
     templates.filters["display"] = display_text
     templates.filters["timestamp"] = timestamp
     app.mount("/static", StaticFiles(directory=root / "static"), name="static")
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(allowed_hosts))
 
-    @app.middleware("http")
     async def secure_responses(request: Request, call_next):  # type: ignore[no-untyped-def]
         response = await call_next(request)
         for name, value in SECURITY_HEADERS.items():
             response.headers[name] = value
+        return response
+
+    async def authorize_local(request: Request, call_next):  # type: ignore[no-untyped-def]
+        public = request.url.path == "/favicon.ico" or request.url.path.startswith("/static/")
+        bootstrap = request.url.path == "/bootstrap" and request.method in {
+            "GET",
+            "HEAD",
+            "POST",
+        }
+        if public or bootstrap:
+            return await call_next(request)
+        session = app.state.local_authorizer.authenticate(request.cookies.get(SESSION_COOKIE))
+        if session is None:
+            if request.method in {"GET", "HEAD"}:
+                content = templates.get_template("bootstrap.html").render(error=None)
+                return HTMLResponse(content, status_code=403)
+            return JSONResponse({"detail": "Local access is required"}, status_code=403)
+        request.state.local_session = session
+        return await call_next(request)
+
+    # Starlette runs the latest-added middleware first. Keep headers outermost,
+    # then reject untrusted hosts before evaluating local session credentials.
+    app.add_middleware(BaseHTTPMiddleware, dispatch=authorize_local)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(allowed_hosts))
+    app.add_middleware(BaseHTTPMiddleware, dispatch=secure_responses)
+
+    @app.get("/bootstrap", response_class=HTMLResponse, include_in_schema=False)
+    async def bootstrap_page() -> HTMLResponse:
+        content = templates.get_template("bootstrap.html").render(error=None)
+        return HTMLResponse(content)
+
+    @app.post("/bootstrap", include_in_schema=False)
+    async def bootstrap(request: Request) -> Response:
+        token = await _parse_bootstrap_form(request)
+        grant = app.state.local_authorizer.redeem(token)
+        if grant is None:
+            content = templates.get_template("bootstrap.html").render(
+                error="The activation link is invalid, expired, or already used."
+            )
+            return HTMLResponse(content, status_code=403)
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie(
+            key=SESSION_COOKIE,
+            value=grant.cookie_token,
+            path="/",
+            httponly=True,
+            samesite="strict",
+        )
         return response
 
     @app.get("/", response_class=HTMLResponse)
@@ -247,7 +323,7 @@ def create_app(
                 error="Local state services are unavailable. Cached facts could not be loaded.",
             )
         content = templates.get_template("index.html").render(
-            request=request, view=view, csrf_token=app.state.csrf_token
+            request=request, view=view, csrf_token=_local_session(request).csrf_token
         )
         return HTMLResponse(content)
 
@@ -276,13 +352,13 @@ def create_app(
         if view is None:
             raise HTTPException(status_code=404, detail="Object not found")
         content = templates.get_template("object.html").render(
-            request=request, view=view, csrf_token=app.state.csrf_token
+            request=request, view=view, csrf_token=_local_session(request).csrf_token
         )
         return HTMLResponse(content)
 
     @app.post("/refresh")
     async def refresh(request: Request) -> Response:
-        submitted = await _parse_refresh_form(request, app.state.csrf_token)
+        submitted = await _parse_refresh_form(request, _local_session(request).csrf_token)
         try:
             registered = await app.state.backend.is_refresh_registered(submitted)
         except Exception as exc:

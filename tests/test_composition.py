@@ -138,6 +138,7 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
         and option.target_kind == "configured_scope"
     )
 
+    ui_session_id = str(uuid4())
     intent_id = await runtime.backend.submit_refresh(
         request=RefreshRequest(
             system_id=refresh.system_id,
@@ -145,8 +146,12 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
             target_id=refresh.target_id,
             capability_key=refresh.capability_key,
             facet=refresh.facet,
+            ui_session_id=ui_session_id,
         )
     )
+    stored_intent = runtime.store.get_refresh_intent(intent_id)
+    assert stored_intent is not None
+    assert stored_intent.ui_session_id == ui_session_id
     admitted = await runtime.coordinator.run_once()
     assert admitted is not None
     assert admitted.action_id is not None

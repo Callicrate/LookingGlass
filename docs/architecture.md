@@ -69,7 +69,7 @@ Implemented and covered by automated tests:
 - durable SQLite intents, actions, leases, observations, projections, and alertable failures;
 - generic local-only coordination and idempotent observation ingestion;
 - closed Databricks CLI command mapping, bounded execution, error redaction, and Workspace/Unity Catalog metadata normalizers;
-- loopback operational UI with bounded inventory, containment, and alert-history pages, object facet/provenance detail, registered refresh controls, intent polling, stale/error states, CSRF, Origin/Host checks, and output escaping;
+- loopback operational UI with bounded inventory, containment, and alert-history pages, object facet/provenance detail, registered refresh controls, intent polling, ephemeral local-caller authorization, per-session CSRF, Origin/Host checks, stale/error states, and output escaping;
 - local configuration, initialization, doctor, one-shot worker, and serve commands;
 - an end-to-end fake-CLI test covering request, admission, execution, ingestion, display, and duplicate suppression.
 
@@ -1373,7 +1373,11 @@ They require:
 Version 1 is local and single-user.
 Contracts MUST still record the local actor and UI session so actions, policy changes, content access, and failures remain attributable.
 
-The service SHOULD bind only to local inter-process or loopback interfaces and rely on operating-system account and filesystem permissions for its initial access boundary.
+The service MUST bind only to local inter-process or loopback interfaces.
+For the browser UI, the launching terminal discloses one short-lived, single-use activation capability in a URL fragment.
+The browser removes the fragment before exchanging the capability in a same-origin request body for a host-only, process-local session cookie.
+The capability and session MUST remain memory-only, rotate on restart, stay out of request targets and application/access logs, and gate every cached-data or mutation route by default.
+Operating-system account and terminal permissions protect this bootstrap channel; loopback location alone is not caller authentication.
 It MUST NOT expose a network-accessible multi-user interface without a new authentication, authorization, tenancy, and content-access design.
 
 There is no force-refresh permission in version 1.
@@ -1683,7 +1687,7 @@ Exit condition: the same CLI-backed worker passes contract and live tests for ev
 ### Phase 5: operational hardening
 
 - Complete size, encryption, redaction, backup, and local-access controls for stored content.
-- Add the UI alert projection over durable operational events.
+- Add alert retention, compaction, and operator policy around the implemented durable UI projection.
 - Add projection replay, poison-item handling, adapter compatibility rollout, backup, and operator tooling.
 
 ### Rollback

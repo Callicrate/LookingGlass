@@ -1,3 +1,4 @@
+import secrets
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -5,6 +6,7 @@ import pytest
 
 from async_api_view import cli
 from async_api_view.config import AppSettings, ProjectSettings
+from async_api_view.web import LocalCallerAuthorizer
 
 
 def test_init_creates_database_from_local_config(tmp_path: Path) -> None:
@@ -36,7 +38,7 @@ def test_init_rejects_missing_config(tmp_path: Path) -> None:
 
 
 def test_serve_closes_runtime_store_when_server_start_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     class FakeStore:
         def __init__(self) -> None:
@@ -46,7 +48,12 @@ def test_serve_closes_runtime_store_when_server_start_fails(
             self.closed = True
 
     store = FakeStore()
-    runtime = SimpleNamespace(app=object(), store=store)
+    bootstrap_token = secrets.token_urlsafe(32)
+    runtime = SimpleNamespace(
+        app=object(),
+        store=store,
+        local_authorizer=LocalCallerAuthorizer(bootstrap_token=bootstrap_token),
+    )
     settings = ProjectSettings(
         app=AppSettings(database_path=tmp_path / "state.sqlite3"),
         databricks_systems=(),
@@ -59,10 +66,55 @@ def test_serve_closes_runtime_store_when_server_start_fails(
 
     monkeypatch.setattr(cli.uvicorn, "run", fail_server)
 
-    result = cli.main(["serve"])
+    result = cli.main(["serve", "--allow-redirected-activation"])
 
     assert result == 2
     assert store.closed
+    captured = capsys.readouterr()
+    assert f"/bootstrap#{bootstrap_token}" in captured.out
+    assert "valid once for 10 minutes" in captured.out
+    assert bootstrap_token not in captured.err
+
+
+def test_serve_refuses_to_disclose_activation_to_redirected_stdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeStore:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    store = FakeStore()
+    runtime = SimpleNamespace(
+        app=object(),
+        store=store,
+        local_authorizer=LocalCallerAuthorizer(),
+    )
+    settings = ProjectSettings(
+        app=AppSettings(database_path=tmp_path / "state.sqlite3"),
+        databricks_systems=(),
+    )
+    monkeypatch.setattr(cli, "_load", lambda _path: settings)
+    monkeypatch.setattr(cli, "build_runtime", lambda _settings: runtime)
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr(
+        cli.uvicorn,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("server started without activation disclosure"),
+    )
+
+    result = cli.main(["serve"])
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert store.closed
+    assert captured.out == ""
+    assert "--allow-redirected-activation" in caplog.text
+    assert "/bootstrap#" not in captured.err + caplog.text
 
 
 def test_doctor_runs_compatibility_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
