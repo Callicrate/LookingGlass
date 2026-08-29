@@ -144,6 +144,8 @@
                 <td data-label="Freshness">
                   <span class="badge badge--{{ facet.freshness|display }}">{{ facet.freshness|display }}</span>
                   <span class="subtle">Interval {{ facet.effective_interval|display }}</span>
+                  {% if facet.failure %}<span class="subtle failure">{{ facet.failure|display }}</span>{% endif %}
+                  {% if facet.freshness == 'failed' and facet.last_action_id %}<a class="subtle" href="/actions/{{ facet.last_action_id|display }}">View failed action →</a>{% endif %}
                 </td>
                 <td data-label="Source">{{ facet.provenance|display }}</td>
               </tr>

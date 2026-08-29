@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -13,6 +14,8 @@ from async_api_view.application import SystemBootstrapService
 from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
 from async_api_view.contracts import (
+    FacetState,
+    KnowledgeState,
     PresenceState,
     RefreshIntent,
     RefreshOrigin,
@@ -24,6 +27,7 @@ from async_api_view.contracts import (
 from async_api_view.storage import (
     ActionActivityRecord,
     ActionAttemptRecord,
+    FacetActionStatusRecord,
     SQLiteStore,
     StoredAction,
 )
@@ -451,9 +455,10 @@ async def test_dashboard_reads_action_and_object_snapshots_once(
     assert await runtime.coordinator.run_once() is not None
     assert await runtime.worker.run_once()
 
-    calls = {"actions": 0, "objects": 0}
+    calls = {"actions": 0, "objects": 0, "facet_actions": 0}
     list_actions = runtime.store.list_dashboard_actions
     list_objects = runtime.store.list_objects_page
+    list_facet_actions = runtime.store.list_latest_facet_actions
 
     def counted_actions() -> tuple[StoredAction, ...]:
         calls["actions"] += 1
@@ -463,13 +468,68 @@ async def test_dashboard_reads_action_and_object_snapshots_once(
         calls["objects"] += 1
         return list_objects(offset=offset, limit=limit, query=query)
 
+    def counted_facet_actions(
+        object_ids: tuple[str, ...],
+    ) -> tuple[FacetActionStatusRecord, ...]:
+        calls["facet_actions"] += 1
+        return list_facet_actions(object_ids)
+
     monkeypatch.setattr(runtime.store, "list_dashboard_actions", counted_actions)
     monkeypatch.setattr(runtime.store, "list_objects_page", counted_objects)
+    monkeypatch.setattr(runtime.store, "list_latest_facet_actions", counted_facet_actions)
 
     rendered = await runtime.backend.dashboard()
 
     assert rendered.objects
-    assert calls == {"actions": 1, "objects": 1}
+    assert calls == {"actions": 1, "objects": 1, "facet_actions": 1}
+    runtime.store.close()
+
+
+def test_facet_view_distinguishes_due_failed_refreshing_and_current(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    root = runtime.store.list_objects()[0]
+    observed_at = datetime.now(UTC) - timedelta(days=1)
+    facet = FacetState(
+        object_id=root.object_id,
+        facet="metadata",
+        facet_version="1",
+        knowledge=KnowledgeState.KNOWN,
+        payload={"name": "cached"},
+        observed_at=observed_at,
+        state_changed_at=observed_at,
+    )
+    failed_action = FacetActionStatusRecord(
+        system_id=root.system_id,
+        object_id=root.object_id,
+        facet="metadata",
+        action_id=str(uuid4()),
+        state="failed",
+        occurred_at=observed_at + timedelta(hours=1),
+        redacted_diagnostic="connection timeout",
+    )
+    arguments = {
+        "system_id": root.system_id,
+        "object_id": root.object_id,
+        "object_type": root.object_type,
+        "facet": facet,
+    }
+
+    due = runtime.backend._facet_view(**arguments, last_action=None)
+    failed = runtime.backend._facet_view(**arguments, last_action=failed_action)
+    refreshing = runtime.backend._facet_view(
+        **arguments, last_action=replace(failed_action, state="running")
+    )
+    current = runtime.backend._facet_view(
+        **(arguments | {"facet": replace(facet, observed_at=datetime.now(UTC))}),
+        last_action=failed_action,
+    )
+
+    assert due.freshness == "due"
+    assert failed.freshness == "failed"
+    assert failed.failure == "connection timeout"
+    assert failed.last_action_id == failed_action.action_id
+    assert refreshing.freshness == "refreshing"
+    assert current.freshness == "current"
     runtime.store.close()
 
 

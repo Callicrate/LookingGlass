@@ -72,6 +72,7 @@ from .models import (
     ActionActivityRecord,
     ActionAttemptRecord,
     ConfiguredScopeRecord,
+    FacetActionStatusRecord,
     IntentScopeRecord,
     IntentScopeWork,
     OperationalEventRecord,
@@ -1829,6 +1830,150 @@ class SQLiteStore:
                 "SELECT COUNT(*) FROM action_attempts WHERE action_id = ?", (action_id,)
             ).fetchone()
         return int(row[0]) if row is not None else 0
+
+    def list_latest_facet_actions(
+        self, object_ids: Sequence[str]
+    ) -> tuple[FacetActionStatusRecord, ...]:
+        """Return one active-preferred/latest action per visible object facet.
+
+        The caller supplies at most 100 object IDs. Both branches are driven from
+        that bounded JSON set through target-ID indexes; grouping is therefore
+        limited to action history attached to the visible objects.
+        """
+
+        if len(object_ids) > 100:
+            raise ValueError("at most 100 object IDs may be queried")
+        normalized_ids = tuple(
+            dict.fromkeys(require_uuid(value, "object_id") for value in object_ids)
+        )
+        if not normalized_ids:
+            return ()
+        object_statement = """
+            WITH visible AS (
+                SELECT value AS object_id FROM json_each(?)
+            ),
+            winners AS (
+                SELECT
+                    scope.target_id AS object_id,
+                    scope.facet,
+                    substr(
+                        MAX(
+                            CASE WHEN action.state IN (
+                                'ready', 'leased', 'running', 'retry_wait'
+                            ) THEN '1' ELSE '0' END
+                            || COALESCE(
+                                action.completed_at,
+                                action.started_at,
+                                action.record_created_at
+                            )
+                            || action.action_id
+                        ),
+                        -36
+                    ) AS action_id
+                FROM visible
+                CROSS JOIN adapter_action_scopes AS scope
+                    INDEXED BY ix_adapter_action_scopes_target_facet
+                CROSS JOIN adapter_actions AS action
+                WHERE scope.target_kind = 'object'
+                  AND scope.target_id = visible.object_id
+                  AND action.action_id = scope.action_id
+                GROUP BY scope.target_id, scope.facet
+            )
+            SELECT
+                action.system_id,
+                winners.object_id,
+                winners.facet,
+                action.action_id,
+                action.state,
+                COALESCE(
+                    action.completed_at,
+                    action.started_at,
+                    action.record_created_at
+                ) AS occurred_at,
+                action.redacted_diagnostic
+            FROM winners
+            JOIN adapter_actions AS action ON action.action_id = winners.action_id
+        """
+        configured_statement = """
+            WITH visible AS (
+                SELECT value AS object_id FROM json_each(?)
+            ),
+            winners AS (
+                SELECT
+                    configured.object_id,
+                    scope.facet,
+                    substr(
+                        MAX(
+                            CASE WHEN action.state IN (
+                                'ready', 'leased', 'running', 'retry_wait'
+                            ) THEN '1' ELSE '0' END
+                            || COALESCE(
+                                action.completed_at,
+                                action.started_at,
+                                action.record_created_at
+                            )
+                            || action.action_id
+                        ),
+                        -36
+                    ) AS action_id
+                FROM visible
+                CROSS JOIN configured_scopes AS configured
+                    INDEXED BY ix_configured_scopes_object
+                CROSS JOIN adapter_action_scopes AS scope
+                    INDEXED BY ix_adapter_action_scopes_target_facet
+                CROSS JOIN adapter_actions AS action
+                WHERE configured.object_id = visible.object_id
+                  AND scope.target_kind = 'configured_scope'
+                  AND scope.target_id = configured.scope_id
+                  AND action.action_id = scope.action_id
+                GROUP BY configured.object_id, scope.facet
+            )
+            SELECT
+                action.system_id,
+                winners.object_id,
+                winners.facet,
+                action.action_id,
+                action.state,
+                COALESCE(
+                    action.completed_at,
+                    action.started_at,
+                    action.record_created_at
+                ) AS occurred_at,
+                action.redacted_diagnostic
+            FROM winners
+            JOIN adapter_actions AS action ON action.action_id = winners.action_id
+        """
+        encoded_ids = json.dumps(normalized_ids)
+        with self._lock:
+            rows = (
+                *self._connection.execute(object_statement, (encoded_ids,)).fetchall(),
+                *self._connection.execute(configured_statement, (encoded_ids,)).fetchall(),
+            )
+        active_states = {"ready", "leased", "running", "retry_wait"}
+        records: dict[tuple[str, str, str], FacetActionStatusRecord] = {}
+        for row in rows:
+            record = FacetActionStatusRecord(
+                system_id=row["system_id"],
+                object_id=row["object_id"],
+                facet=row["facet"],
+                action_id=row["action_id"],
+                state=row["state"],
+                occurred_at=_dt(row["occurred_at"]),  # type: ignore[arg-type]
+                redacted_diagnostic=row["redacted_diagnostic"],
+            )
+            key = (record.system_id, record.object_id, record.facet)
+            existing = records.get(key)
+            if existing is None or (
+                record.state in active_states,
+                record.occurred_at,
+                record.action_id,
+            ) > (
+                existing.state in active_states,
+                existing.occurred_at,
+                existing.action_id,
+            ):
+                records[key] = record
+        return tuple(records[key] for key in sorted(records))
 
     def count_action_activity(
         self,

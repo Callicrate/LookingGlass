@@ -565,6 +565,28 @@ def test_ready_dashboard_keeps_stale_cached_facts_and_activity_visible() -> None
     assert "raw secret file contents" not in response.text
 
 
+def test_failed_facet_links_redacted_action_without_hiding_cached_value() -> None:
+    dashboard = ready_dashboard()
+    remote_object = dashboard.objects[0]
+    failed_facet = replace(
+        remote_object.facets[0],
+        freshness="failed",
+        failure="Databricks connection timed out.",
+        last_action_id=ACTION_ID,
+    )
+    view = replace(
+        dashboard,
+        objects=(replace(remote_object, facets=(failed_facet, *remote_object.facets[1:])),),
+    )
+
+    response = client_for(FakeBackend(dashboard_view=view)).get("/")
+
+    assert response.status_code == 200
+    assert "3 children" in response.text
+    assert "Databricks connection timed out." in response.text
+    assert f"/actions/{ACTION_ID}" in response.text
+
+
 def test_dashboard_passes_bounded_filter_and_page_to_backend() -> None:
     backend = FakeBackend(dashboard_view=ready_dashboard())
 

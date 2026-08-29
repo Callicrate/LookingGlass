@@ -43,6 +43,7 @@ from async_api_view.ingestion import SQLiteObservationIngestor
 from async_api_view.storage import (
     ActionActivityRecord,
     ActionAttemptRecord,
+    FacetActionStatusRecord,
     OperationalEventRecord,
     SQLiteStore,
     StoredAction,
@@ -222,7 +223,7 @@ class SQLiteWebBackend:
         object_id: str,
         object_type: str,
         facet: Any,
-        refreshing: bool,
+        last_action: FacetActionStatusRecord | None,
     ) -> FacetView:
         interval_text = "Unknown"
         freshness = "unobserved"
@@ -238,13 +239,23 @@ class SQLiteWebBackend:
             try:
                 interval = self._store.effective_interval(scope)
                 interval_text = str(interval)
-                freshness = (
-                    "current" if datetime.now(UTC) < facet.observed_at + interval else "stale"
-                )
+                freshness = "current" if datetime.now(UTC) < facet.observed_at + interval else "due"
             except ValueError:
                 freshness = "unsupported"
-        if refreshing:
+        active_states = {
+            ActionState.READY.value,
+            ActionState.LEASED.value,
+            ActionState.RUNNING.value,
+            ActionState.RETRY_WAIT.value,
+        }
+        if last_action is not None and last_action.state in active_states:
             freshness = "refreshing"
+        elif (
+            last_action is not None
+            and last_action.state == ActionState.FAILED.value
+            and (facet.observed_at is None or last_action.occurred_at > facet.observed_at)
+        ):
+            freshness = "failed"
         value = json.dumps(dict(facet.payload), ensure_ascii=False, sort_keys=True, default=str)
         return FacetView(
             name=facet.facet,
@@ -254,35 +265,19 @@ class SQLiteWebBackend:
             freshness=freshness,
             effective_interval=interval_text,
             provenance=facet.supporting_observation_id or "Unknown",
+            last_action_id=last_action.action_id if last_action is not None else None,
+            failure=(
+                last_action.redacted_diagnostic
+                if last_action is not None and freshness == "failed"
+                else None
+            ),
         )
-
-    @staticmethod
-    def _active_action_keys(
-        actions: Sequence[StoredAction],
-    ) -> set[tuple[str, str, str, str]]:
-        active_states = {
-            ActionState.READY,
-            ActionState.LEASED,
-            ActionState.RUNNING,
-            ActionState.RETRY_WAIT,
-        }
-        return {
-            (
-                str(stored_action.action.system_id),
-                stored_action.action.target.kind.value,
-                str(stored_action.action.target.target_id),
-                scope.facet,
-            )
-            for stored_action in actions
-            if stored_action.state in active_states
-            for scope in stored_action.action.requested_scopes
-        }
 
     def _object_view(
         self,
         remote_object: RemoteObject,
         *,
-        active_action_keys: set[tuple[str, str, str, str]],
+        latest_facet_actions: Mapping[tuple[str, str, str], FacetActionStatusRecord],
     ) -> ObjectView:
         object_id = str(remote_object.object_id)
         system_id = str(remote_object.system_id)
@@ -293,13 +288,7 @@ class SQLiteWebBackend:
                 object_id=object_id,
                 object_type=remote_object.object_type,
                 facet=facet,
-                refreshing=(
-                    system_id,
-                    TargetKind.OBJECT.value,
-                    object_id,
-                    facet.facet,
-                )
-                in active_action_keys,
+                last_action=latest_facet_actions.get((system_id, object_id, facet.facet)),
             )
             for facet in facets
         )
@@ -554,6 +543,12 @@ class SQLiteWebBackend:
             query=query.object_query,
         )
         actions = self._store.list_dashboard_actions()
+        latest_facet_actions = {
+            (record.system_id, record.object_id, record.facet): record
+            for record in self._store.list_latest_facet_actions(
+                tuple(str(remote_object.object_id) for remote_object in objects)
+            )
+        }
         alerts = tuple(
             self._event_view(event, system_names)
             for event in self._store.list_operational_events(alertable_only=True, limit=10)
@@ -561,7 +556,6 @@ class SQLiteWebBackend:
         actions_by_system: dict[str, list[StoredAction]] = {
             system.system_id: [] for system in systems
         }
-        active_action_keys = self._active_action_keys(actions)
         for stored_action in actions:
             actions_by_system.setdefault(stored_action.action.system_id, []).append(stored_action)
         system_views: list[SystemView] = []
@@ -595,7 +589,10 @@ class SQLiteWebBackend:
             )
 
         object_views = [
-            self._object_view(remote_object, active_action_keys=active_action_keys)
+            self._object_view(
+                remote_object,
+                latest_facet_actions=latest_facet_actions,
+            )
             for remote_object in objects
         ]
         return DashboardView(
@@ -748,8 +745,10 @@ class SQLiteWebBackend:
         if remote_object is None:
             return None
         systems = self._store.list_systems()
-        actions = self._store.list_dashboard_actions()
-        active_action_keys = self._active_action_keys(actions)
+        latest_facet_actions = {
+            (record.system_id, record.object_id, record.facet): record
+            for record in self._store.list_latest_facet_actions((object_id,))
+        }
         relationship_total = self._store.count_related_objects_sync(
             object_id,
             predicate="contains",
@@ -780,7 +779,10 @@ class SQLiteWebBackend:
             )
             for record in related_children
         )
-        object_view = self._object_view(remote_object, active_action_keys=active_action_keys)
+        object_view = self._object_view(
+            remote_object,
+            latest_facet_actions=latest_facet_actions,
+        )
         refresh_options = tuple(
             option
             for option in self._refresh_options(systems=systems, objects=(remote_object,))

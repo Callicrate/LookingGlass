@@ -112,6 +112,17 @@ class ActionAttemptRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class FacetActionStatusRecord:
+    system_id: str
+    object_id: str
+    facet: str
+    action_id: str
+    state: str
+    occurred_at: datetime
+    redacted_diagnostic: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class OperationalEventRecord:
     event_id: str
     event_type: str

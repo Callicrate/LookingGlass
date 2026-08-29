@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 01:21 ET
+Updated: 2026-08-29 01:42 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 236 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 238 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` contains the verified action/activity, browser-host, retry, deadline, poison-action, and monotonic object-presence slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: finish the parallel lifecycle/product reviews and select the next demonstrated defect.
+- Version control: local `main` contains the verified action/activity, facet-truth, browser-host, retry, deadline, poison-action, and monotonic projection slices plus all prior correctness fixes; completed batches are committed with focused messages.
+- Active review round: terminalize incompatible persisted intents, then continue residual-risk review.
 - Next progress report due: 2026-08-29 02:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -51,6 +51,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Expose bounded, redacted per-action attempt detail from alerts, activity, and intent receipts.
 - [x] Terminalize malformed persisted action timestamps once instead of repeatedly faulting the worker.
 - [x] Keep object presence monotonic across delayed present and absence observations.
+- [x] Distinguish due, refreshing, failed-last-attempt, and current facet state truthfully.
+- [ ] Terminalize incompatible persisted intents once so valid coordinator work can progress.
 
 ## Evidence and decisions
 
@@ -152,6 +154,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Storage and composition regressions prove queue progress and that only the healthy capability reaches the runner; independent follow-up cleared the blocker at 235 tests.
 - Authorized object absence now updates only when it is at least as new as `last_seen_at`, and records its observation time as the presence watermark.
 - Regressions prove delayed absence cannot hide newer presence, delayed presence cannot resurrect newer absence, and genuinely newer presence restores the object; independent review found no blocker at 236 tests.
+- Dashboard and object detail now derive active-preferred/latest terminal action disposition for every visible facet through two batched, target-ID-indexed queries capped at 100 object IDs.
+- Configured-scope and object-target actions share the same mapping; active work renders `refreshing`, later failed work renders `failed` with a redacted action link, elapsed facts render `due`, and newer evidence restores `current`.
+- Browser QA kept the cached value visible beside its failed badge and diagnostic with no console/network errors; migration `0009` is applied locally with integrity `ok`, and independent follow-up cleared both query/state blockers at 238 tests.
 
 ## Risks / watch list
 

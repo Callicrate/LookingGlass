@@ -189,6 +189,8 @@ class FacetView:
     ] = "unobserved"
     effective_interval: str = "Unknown"
     provenance: str = "Unknown"
+    last_action_id: str | None = None
+    failure: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

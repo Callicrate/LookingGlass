@@ -58,6 +58,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0006_relationship_navigation",
             "0007_operational_event_filters",
             "0008_action_activity",
+            "0009_facet_action_status",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -138,6 +139,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0006_relationship_navigation",
         "0007_operational_event_filters",
         "0008_action_activity",
+        "0009_facet_action_status",
     )
     assert versions == (expected,) * workers
 
@@ -235,6 +237,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0006_relationship_navigation",
             "0007_operational_event_filters",
             "0008_action_activity",
+            "0009_facet_action_status",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -678,6 +681,22 @@ def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> Non
         store.list_action_activity_page(offset=0, limit=10, action_id=action_ids[1])[0].state
         == "succeeded"
     )
+    facet_actions = store.list_latest_facet_actions((seeded.workspace_root_object_id,))
+    assert len(facet_actions) == 1
+    assert facet_actions[0].object_id == seeded.workspace_root_object_id
+    assert facet_actions[0].facet == "membership"
+    assert facet_actions[0].action_id == action_ids[2]
+    assert facet_actions[0].state == "failed"
+    assert facet_actions[0].redacted_diagnostic == "redacted failure"
+    store._connection.execute(
+        "UPDATE adapter_actions SET state = 'running', completed_at = NULL WHERE action_id = ?",
+        (action_ids[2],),
+    )
+    refreshing_actions = store.list_latest_facet_actions((seeded.workspace_root_object_id,))
+    assert len(refreshing_actions) == 1
+    assert refreshing_actions[0].state == "running"
+    with pytest.raises(ValueError, match="100 object IDs"):
+        store.list_latest_facet_actions(tuple(str(uuid4()) for _ in range(101)))
 
     with pytest.raises(ValueError, match="offset"):
         store.list_action_activity_page(offset=-1, limit=10)

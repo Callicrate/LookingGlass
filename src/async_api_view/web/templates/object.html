@@ -60,7 +60,7 @@
               <td data-label="Knowledge">{{ facet.knowledge|display }}</td>
               <td data-label="Cached value" class="cached-value">{% if facet.name == 'content' %}<span class="unknown">Raw content is not displayed</span>{% elif facet.value %}{{ facet.value|display }}{% else %}<span class="unknown">No value observed</span>{% endif %}</td>
               <td data-label="Known as of"><time>{{ facet.known_as_of|timestamp }}</time></td>
-              <td data-label="Freshness"><span class="badge badge--{{ facet.freshness|display }}">{{ facet.freshness|display }}</span><span class="subtle">Interval {{ facet.effective_interval|display }}</span></td>
+              <td data-label="Freshness"><span class="badge badge--{{ facet.freshness|display }}">{{ facet.freshness|display }}</span><span class="subtle">Interval {{ facet.effective_interval|display }}</span>{% if facet.failure %}<span class="subtle failure">{{ facet.failure|display }}</span>{% endif %}{% if facet.freshness == 'failed' and facet.last_action_id %}<a class="subtle" href="/actions/{{ facet.last_action_id|display }}">View failed action →</a>{% endif %}</td>
               <td data-label="Source">{{ facet.provenance|display }}</td>
             </tr>
           {% endfor %}

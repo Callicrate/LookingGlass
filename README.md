@@ -21,6 +21,7 @@ The current runnable slice can:
 - drill into one object's facets, provenance, current direct children, and registered refreshes;
 - browse and filter bounded pages of durable redacted operational alerts;
 - browse bounded durable action activity by state, system, or exact local action ID, then inspect its redacted attempts;
+- distinguish current, due, refreshing, and failed-last-attempt facet state while keeping cached values visible;
 - submit a generic refresh request;
 - validate, queue, and execute it through the Databricks worker;
 - ingest normalized observations into SQLite;
