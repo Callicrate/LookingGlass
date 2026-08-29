@@ -74,6 +74,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0014_coverage_policy_initialization",
             "0015_relationship_coverage_watermarks",
             "0016_projection_received_order",
+            "0017_queue_claim_order",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -236,7 +237,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 16
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 17
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -274,7 +275,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 16
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 17
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -464,6 +465,12 @@ def test_backup_wraps_malformed_source_and_cleans_temporary_file(tmp_path) -> No
         "ix_adapter_action_scopes_target_facet",
         "ix_configured_scopes_object",
         "ix_relationships_object_predicate",
+        "ix_refresh_intent_scopes_claim_order",
+        "ix_adapter_actions_claim_order",
+        "ix_refresh_intent_scopes_deferred_due",
+        "ix_refresh_intent_scopes_lease_due",
+        "ix_adapter_actions_lease_due",
+        "ix_adapter_actions_retry_due",
     ],
 )
 def test_reopen_repairs_missing_runtime_forced_indexes(tmp_path, index_name: str) -> None:
@@ -501,6 +508,54 @@ def test_reopen_repairs_missing_runtime_forced_indexes(tmp_path, index_name: str
             "CREATE INDEX ix_relationships_object_predicate ON relationships (subject_id)",
             ("object_id", "predicate", "presence", "subject_id"),
         ),
+        (
+            "ix_refresh_intent_scopes_claim_order",
+            "CREATE INDEX ix_refresh_intent_scopes_claim_order "
+            "ON refresh_intent_scopes (intent_scope_id)",
+            ("queue_priority", "queue_requested_at", "intent_scope_id"),
+        ),
+        (
+            "ix_adapter_actions_claim_order",
+            "CREATE INDEX ix_adapter_actions_claim_order ON adapter_actions (action_id)",
+            ("adapter_key", "record_created_at", "action_id"),
+        ),
+        (
+            "ix_refresh_intent_scopes_claim_order",
+            "CREATE INDEX ix_refresh_intent_scopes_claim_order "
+            "ON refresh_intent_scopes "
+            "(queue_priority DESC, queue_requested_at, intent_scope_id) "
+            "WHERE state = 'deferred'",
+            ("queue_priority", "queue_requested_at", "intent_scope_id"),
+        ),
+        (
+            "ix_adapter_actions_claim_order",
+            "CREATE INDEX ix_adapter_actions_claim_order "
+            "ON adapter_actions (adapter_key, record_created_at, action_id) "
+            "WHERE state = 'retry_wait'",
+            ("adapter_key", "record_created_at", "action_id"),
+        ),
+        (
+            "ix_refresh_intent_scopes_deferred_due",
+            "CREATE INDEX ix_refresh_intent_scopes_deferred_due "
+            "ON refresh_intent_scopes (intent_scope_id)",
+            ("eligible_at", "intent_scope_id"),
+        ),
+        (
+            "ix_refresh_intent_scopes_lease_due",
+            "CREATE INDEX ix_refresh_intent_scopes_lease_due "
+            "ON refresh_intent_scopes (intent_scope_id)",
+            ("leased_until", "intent_scope_id"),
+        ),
+        (
+            "ix_adapter_actions_lease_due",
+            "CREATE INDEX ix_adapter_actions_lease_due ON adapter_actions (action_id)",
+            ("adapter_key", "leased_until", "action_id"),
+        ),
+        (
+            "ix_adapter_actions_retry_due",
+            "CREATE INDEX ix_adapter_actions_retry_due ON adapter_actions (action_id)",
+            ("adapter_key", "retry_at", "action_id"),
+        ),
     ],
 )
 def test_reopen_replaces_mismatched_runtime_forced_indexes(
@@ -524,6 +579,101 @@ def test_reopen_replaces_mismatched_runtime_forced_indexes(
         )
         assert columns == expected_columns
         assert reopened.list_latest_facet_actions((str(uuid4()),)) == ()
+
+
+def test_queue_claim_plans_use_ordered_partial_indexes_without_temp_sort(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "claim-plans.sqlite3")
+    now_text = "2026-08-24T12:00:00.000000Z"
+    intent_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT scope.intent_scope_id
+        FROM refresh_intent_scopes AS scope
+            INDEXED BY ix_refresh_intent_scopes_claim_order
+        JOIN refresh_intents AS intent ON intent.intent_id = scope.intent_id
+        WHERE scope.state = 'queued'
+        ORDER BY scope.queue_priority DESC, scope.queue_requested_at, scope.intent_scope_id
+        LIMIT 1
+        """
+    ).fetchall()
+    action_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT * FROM adapter_actions INDEXED BY ix_adapter_actions_claim_order
+        WHERE adapter_key = ? AND state = 'ready'
+        ORDER BY record_created_at, action_id
+        LIMIT 1
+        """,
+        ("databricks",),
+    ).fetchall()
+    intent_deferred_null_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT intent_scope_id FROM refresh_intent_scopes
+            INDEXED BY ix_refresh_intent_scopes_deferred_due
+        WHERE state = 'deferred' AND eligible_at IS NULL
+        """
+    ).fetchall()
+    intent_deferred_due_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT intent_scope_id FROM refresh_intent_scopes
+            INDEXED BY ix_refresh_intent_scopes_deferred_due
+        WHERE state = 'deferred' AND eligible_at <= ?
+        """,
+        (now_text,),
+    ).fetchall()
+    intent_lease_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT intent_scope_id FROM refresh_intent_scopes
+            INDEXED BY ix_refresh_intent_scopes_lease_due
+        WHERE state = 'leased' AND leased_until <= ?
+        """,
+        (now_text,),
+    ).fetchall()
+    action_lease_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT action_id FROM adapter_actions INDEXED BY ix_adapter_actions_lease_due
+        WHERE adapter_key = ? AND state IN ('leased', 'running') AND leased_until <= ?
+        """,
+        ("databricks", now_text),
+    ).fetchall()
+    action_retry_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT action_id FROM adapter_actions INDEXED BY ix_adapter_actions_retry_due
+        WHERE adapter_key = ? AND state = 'retry_wait' AND retry_at <= ?
+        """,
+        ("databricks", now_text),
+    ).fetchall()
+
+    assert any("ix_refresh_intent_scopes_claim_order" in row[3] for row in intent_plan)
+    assert any("ix_adapter_actions_claim_order" in row[3] for row in action_plan)
+    assert any(
+        "ix_refresh_intent_scopes_deferred_due" in row[3] and "eligible_at=?" in row[3]
+        for row in intent_deferred_null_plan
+    )
+    assert any(
+        "ix_refresh_intent_scopes_deferred_due" in row[3] and "eligible_at<?" in row[3]
+        for row in intent_deferred_due_plan
+    )
+    assert any("ix_refresh_intent_scopes_lease_due" in row[3] for row in intent_lease_plan)
+    assert any("ix_adapter_actions_lease_due" in row[3] for row in action_lease_plan)
+    assert any("ix_adapter_actions_retry_due" in row[3] for row in action_retry_plan)
+    assert all(
+        "TEMP B-TREE" not in row[3]
+        for row in (
+            *intent_plan,
+            *action_plan,
+            *intent_deferred_null_plan,
+            *intent_deferred_due_plan,
+            *intent_lease_plan,
+            *action_lease_plan,
+            *action_retry_plan,
+        )
+    )
 
 
 def test_runtime_index_repair_failure_rolls_back_drop(tmp_path, monkeypatch) -> None:
@@ -663,6 +813,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0014_coverage_policy_initialization",
         "0015_relationship_coverage_watermarks",
         "0016_projection_received_order",
+        "0017_queue_claim_order",
     )
     assert versions == (expected,) * workers
 
@@ -802,6 +953,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0014_coverage_policy_initialization",
             "0015_relationship_coverage_watermarks",
             "0016_projection_received_order",
+            "0017_queue_claim_order",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":

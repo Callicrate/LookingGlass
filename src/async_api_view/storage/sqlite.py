@@ -8,6 +8,7 @@ by leases; the transactions that claim a lease or elect an active action use
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -96,6 +97,7 @@ _APPLICATION_ID = 0x524F4F4B  # ASCII "ROOK"
 _DEFAULT_LEASE = timedelta(seconds=60)
 _MAX_JSON_BYTES = 1_048_576
 _MAX_DIAGNOSTIC_LENGTH = 1_024
+_MAX_DUE_PROMOTIONS_PER_CLAIM = 1_000
 _TERMINAL_ACTION_STATES = {
     ActionState.SATISFIED,
     ActionState.SUCCEEDED,
@@ -148,20 +150,91 @@ _CAPABILITY_KEY_ALTER_TABLES = {
 _REQUIRED_RUNTIME_INDEXES = {
     "ix_adapter_action_scopes_target_facet": (
         "adapter_action_scopes",
-        ("target_kind", "target_id", "facet", "action_id"),
+        tuple(
+            (column, 0, "BINARY") for column in ("target_kind", "target_id", "facet", "action_id")
+        ),
+        0,
         "CREATE INDEX ix_adapter_action_scopes_target_facet "
         "ON adapter_action_scopes (target_kind, target_id, facet, action_id)",
     ),
     "ix_configured_scopes_object": (
         "configured_scopes",
-        ("object_id", "scope_id"),
+        (("object_id", 0, "BINARY"), ("scope_id", 0, "BINARY")),
+        0,
         "CREATE INDEX ix_configured_scopes_object ON configured_scopes (object_id, scope_id)",
     ),
     "ix_relationships_object_predicate": (
         "relationships",
-        ("object_id", "predicate", "presence", "subject_id"),
+        tuple(
+            (column, 0, "BINARY") for column in ("object_id", "predicate", "presence", "subject_id")
+        ),
+        0,
         "CREATE INDEX ix_relationships_object_predicate "
         "ON relationships (object_id, predicate, presence, subject_id)",
+    ),
+    "ix_refresh_intent_scopes_claim_order": (
+        "refresh_intent_scopes",
+        (
+            ("queue_priority", 1, "BINARY"),
+            ("queue_requested_at", 0, "BINARY"),
+            ("intent_scope_id", 0, "BINARY"),
+        ),
+        1,
+        "CREATE INDEX ix_refresh_intent_scopes_claim_order "
+        "ON refresh_intent_scopes ( queue_priority DESC, queue_requested_at, intent_scope_id ) "
+        "WHERE state = 'queued'",
+    ),
+    "ix_refresh_intent_scopes_deferred_due": (
+        "refresh_intent_scopes",
+        (("eligible_at", 0, "BINARY"), ("intent_scope_id", 0, "BINARY")),
+        1,
+        "CREATE INDEX ix_refresh_intent_scopes_deferred_due "
+        "ON refresh_intent_scopes (eligible_at, intent_scope_id) "
+        "WHERE state = 'deferred'",
+    ),
+    "ix_refresh_intent_scopes_lease_due": (
+        "refresh_intent_scopes",
+        (("leased_until", 0, "BINARY"), ("intent_scope_id", 0, "BINARY")),
+        1,
+        "CREATE INDEX ix_refresh_intent_scopes_lease_due "
+        "ON refresh_intent_scopes (leased_until, intent_scope_id) "
+        "WHERE state = 'leased'",
+    ),
+    "ix_adapter_actions_claim_order": (
+        "adapter_actions",
+        (
+            ("adapter_key", 0, "BINARY"),
+            ("record_created_at", 0, "BINARY"),
+            ("action_id", 0, "BINARY"),
+        ),
+        1,
+        "CREATE INDEX ix_adapter_actions_claim_order "
+        "ON adapter_actions (adapter_key, record_created_at, action_id) "
+        "WHERE state = 'ready'",
+    ),
+    "ix_adapter_actions_lease_due": (
+        "adapter_actions",
+        (
+            ("adapter_key", 0, "BINARY"),
+            ("leased_until", 0, "BINARY"),
+            ("action_id", 0, "BINARY"),
+        ),
+        1,
+        "CREATE INDEX ix_adapter_actions_lease_due "
+        "ON adapter_actions (adapter_key, leased_until, action_id) "
+        "WHERE state IN ('leased', 'running')",
+    ),
+    "ix_adapter_actions_retry_due": (
+        "adapter_actions",
+        (
+            ("adapter_key", 0, "BINARY"),
+            ("retry_at", 0, "BINARY"),
+            ("action_id", 0, "BINARY"),
+        ),
+        1,
+        "CREATE INDEX ix_adapter_actions_retry_due "
+        "ON adapter_actions (adapter_key, retry_at, action_id) "
+        "WHERE state = 'retry_wait'",
     ),
 }
 
@@ -721,11 +794,12 @@ class SQLiteStore:
         with self._immediate_transaction() as connection:
             for index_name, (
                 table_name,
-                expected_columns,
+                expected_keys,
+                expected_partial,
                 statement,
             ) in _REQUIRED_RUNTIME_INDEXES.items():
                 schema_row = connection.execute(
-                    "SELECT tbl_name FROM sqlite_schema WHERE type = 'index' AND name = ?",
+                    "SELECT tbl_name, sql FROM sqlite_schema WHERE type = 'index' AND name = ?",
                     (index_name,),
                 ).fetchone()
                 properties = connection.execute(
@@ -748,14 +822,15 @@ class SQLiteStore:
                         (index_name,),
                     ).fetchall()
                 )
-                expected_keys = tuple((column, 0, "BINARY") for column in expected_columns)
                 valid = (
                     schema_row is not None
                     and schema_row["tbl_name"] == table_name
+                    and _normalized_schema_sql(schema_row["sql"])
+                    == _normalized_schema_sql(statement)
                     and properties is not None
                     and properties["unique"] == 0
                     and properties["origin"] == "c"
-                    and properties["partial"] == 0
+                    and properties["partial"] == expected_partial
                     and key_columns == expected_keys
                 )
                 if valid:
@@ -2017,10 +2092,17 @@ class SQLiteStore:
                     """
                     INSERT INTO refresh_intent_scopes (
                         intent_scope_id, intent_id, system_id, target_kind, target_id,
-                        object_type, facet, capability_key, coverage, field_mask_json, state
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')
+                        object_type, facet, capability_key, coverage, field_mask_json, state,
+                        queue_priority, queue_requested_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
                     """,
-                    (scope_id, intent.intent_id, *_scope_columns(scope)),
+                    (
+                        scope_id,
+                        intent.intent_id,
+                        *_scope_columns(scope),
+                        intent.priority,
+                        _utc_text(intent.requested_at),
+                    ),
                 )
         return RefreshReceipt(
             intent_id=intent.intent_id, accepted_at=accepted_at, scope_ids=tuple(scope_ids)
@@ -2127,6 +2209,56 @@ class SQLiteStore:
             intent_scope_id=row["intent_scope_id"],
         )
 
+    def _promote_due_intent_scopes(self, now_text: str) -> bool:
+        with self._immediate_transaction() as connection:
+            promoted = 0
+            result = connection.execute(
+                """
+                UPDATE refresh_intent_scopes
+                SET state = 'queued', eligible_at = NULL
+                WHERE intent_scope_id IN (
+                    SELECT intent_scope_id FROM refresh_intent_scopes
+                        INDEXED BY ix_refresh_intent_scopes_deferred_due
+                    WHERE state = 'deferred' AND eligible_at IS NULL
+                    LIMIT ?
+                )
+                """,
+                (_MAX_DUE_PROMOTIONS_PER_CLAIM,),
+            )
+            promoted += result.rowcount
+            remaining = _MAX_DUE_PROMOTIONS_PER_CLAIM - promoted
+            result = connection.execute(
+                """
+                UPDATE refresh_intent_scopes
+                SET state = 'queued', eligible_at = NULL
+                WHERE intent_scope_id IN (
+                    SELECT intent_scope_id FROM refresh_intent_scopes
+                        INDEXED BY ix_refresh_intent_scopes_deferred_due
+                    WHERE state = 'deferred' AND eligible_at <= ?
+                    LIMIT ?
+                )
+                """,
+                (now_text, remaining),
+            )
+            promoted += result.rowcount
+            remaining = _MAX_DUE_PROMOTIONS_PER_CLAIM - promoted
+            result = connection.execute(
+                """
+                UPDATE refresh_intent_scopes
+                SET state = 'queued', lease_id = NULL, lease_worker_id = NULL,
+                    leased_until = NULL
+                WHERE intent_scope_id IN (
+                    SELECT intent_scope_id FROM refresh_intent_scopes
+                        INDEXED BY ix_refresh_intent_scopes_lease_due
+                    WHERE state = 'leased' AND leased_until <= ?
+                    LIMIT ?
+                )
+                """,
+                (now_text, remaining),
+            )
+            promoted += result.rowcount
+        return promoted >= _MAX_DUE_PROMOTIONS_PER_CLAIM
+
     async def lease_next_intent_scope(
         self,
         *,
@@ -2140,6 +2272,8 @@ class SQLiteStore:
             raise ValueError("lease_duration must be positive")
         now_text = _utc_text(now)
         leased_until = now + lease_duration
+        while self._promote_due_intent_scopes(now_text):
+            await asyncio.sleep(0)
         with self._immediate_transaction() as connection:
             while True:
                 row = connection.execute(
@@ -2148,17 +2282,13 @@ class SQLiteStore:
                            intent.ui_session_id, intent.requested_at, intent.expires_at,
                            intent.priority, intent.contract_version
                     FROM refresh_intent_scopes AS scope
+                        INDEXED BY ix_refresh_intent_scopes_claim_order
                     JOIN refresh_intents AS intent ON intent.intent_id = scope.intent_id
                     WHERE scope.state = 'queued'
-                       OR (
-                           scope.state = 'deferred'
-                           AND (scope.eligible_at IS NULL OR scope.eligible_at <= ?)
-                       )
-                       OR (scope.state = 'leased' AND scope.leased_until <= ?)
-                    ORDER BY intent.priority DESC, intent.requested_at, scope.intent_scope_id
+                    ORDER BY scope.queue_priority DESC, scope.queue_requested_at,
+                             scope.intent_scope_id
                     LIMIT 1
                     """,
-                    (now_text, now_text),
                 ).fetchone()
                 if row is None:
                     return None
@@ -2189,18 +2319,13 @@ class SQLiteStore:
                 """
                 UPDATE refresh_intent_scopes
                 SET state = 'leased', lease_id = ?, lease_worker_id = ?, leased_until = ?
-                WHERE intent_scope_id = ?
-                  AND (state = 'queued'
-                       OR (state = 'deferred' AND (eligible_at IS NULL OR eligible_at <= ?))
-                       OR (state = 'leased' AND leased_until <= ?))
+                WHERE intent_scope_id = ? AND state = 'queued'
                 """,
                 (
                     lease_id,
                     worker_id,
                     _utc_text(leased_until),
                     row["intent_scope_id"],
-                    now_text,
-                    now_text,
                 ),
             )
             if (
@@ -2992,6 +3117,43 @@ class SQLiteStore:
                     connection, action=action, dedupe_key=dedupe_key, created_at=_now()
                 )
 
+    def _promote_due_actions(self, *, adapter_key: str, now_text: str) -> bool:
+        with self._immediate_transaction() as connection:
+            promoted = 0
+            result = connection.execute(
+                """
+                UPDATE adapter_actions
+                SET state = 'ready', lease_id = NULL, lease_worker_id = NULL,
+                    leased_until = NULL
+                WHERE action_id IN (
+                    SELECT action_id FROM adapter_actions
+                        INDEXED BY ix_adapter_actions_lease_due
+                    WHERE adapter_key = ? AND state IN ('leased', 'running')
+                      AND leased_until <= ?
+                    LIMIT ?
+                )
+                """,
+                (adapter_key, now_text, _MAX_DUE_PROMOTIONS_PER_CLAIM),
+            )
+            promoted += result.rowcount
+            remaining = _MAX_DUE_PROMOTIONS_PER_CLAIM - promoted
+            result = connection.execute(
+                """
+                UPDATE adapter_actions
+                SET state = 'ready', retry_at = NULL, lease_id = NULL,
+                    lease_worker_id = NULL, leased_until = NULL
+                WHERE action_id IN (
+                    SELECT action_id FROM adapter_actions
+                        INDEXED BY ix_adapter_actions_retry_due
+                    WHERE adapter_key = ? AND state = 'retry_wait' AND retry_at <= ?
+                    LIMIT ?
+                )
+                """,
+                (adapter_key, now_text, remaining),
+            )
+            promoted += result.rowcount
+        return promoted >= _MAX_DUE_PROMOTIONS_PER_CLAIM
+
     async def lease_next(
         self, *, adapter_key: str, worker_id: str, now: datetime
     ) -> ActionLease | None:
@@ -3001,22 +3163,18 @@ class SQLiteStore:
         lease_id = str(uuid4())
         leased_until = now + _DEFAULT_LEASE
         now_text = _utc_text(now)
+        while self._promote_due_actions(adapter_key=adapter_key, now_text=now_text):
+            await asyncio.sleep(0)
         with self._immediate_transaction() as connection:
             while True:
                 row = connection.execute(
                     """
-                    SELECT * FROM adapter_actions
-                    WHERE adapter_key = ?
-                      AND (
-                          state = 'ready'
-                          OR (state = 'leased' AND leased_until <= ?)
-                          OR (state = 'running' AND leased_until <= ?)
-                          OR (state = 'retry_wait' AND retry_at <= ?)
-                      )
+                    SELECT * FROM adapter_actions INDEXED BY ix_adapter_actions_claim_order
+                    WHERE adapter_key = ? AND state = 'ready'
                     ORDER BY record_created_at, action_id
                     LIMIT 1
                     """,
-                    (adapter_key, now_text, now_text, now_text),
+                    (adapter_key,),
                 ).fetchone()
                 if row is None:
                     return None
@@ -3034,22 +3192,13 @@ class SQLiteStore:
                 """
                 UPDATE adapter_actions
                 SET state = 'leased', lease_id = ?, lease_worker_id = ?, leased_until = ?
-                WHERE action_id = ?
-                  AND (
-                      state = 'ready'
-                      OR (state = 'leased' AND leased_until <= ?)
-                      OR (state = 'running' AND leased_until <= ?)
-                      OR (state = 'retry_wait' AND retry_at <= ?)
-                  )
+                WHERE action_id = ? AND state = 'ready'
                 """,
                 (
                     lease_id,
                     worker_id,
                     _utc_text(leased_until),
                     row["action_id"],
-                    now_text,
-                    now_text,
-                    now_text,
                 ),
             )
             if result.rowcount != 1:  # pragma: no cover - transaction invariant

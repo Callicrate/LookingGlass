@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 15:19 ET
+Updated: 2026-08-29 15:40 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 378 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 397 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: ordered partial-index queue selection and migration `0017` are implemented locally with 81 coordinator/storage tests green and independent million-row re-review running; latest-action projection follows.
+- Active review round: bounded queue catch-up and migration `0017` are independently clear after the exact full/package gate; latest-action projection is the sole known medium finding and is active next.
 - Next progress report due: 2026-08-29 16:19 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -116,7 +116,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Ingest supported 10,000-item collections within byte/unit-bounded writer transactions.
 - [x] Fence exact-expiry final dispatch and renew the running lease atomically.
 - [x] Preserve Unity Catalog schema/relation/volume identity across rename and recreation.
-- [ ] Remove full-backlog temporary sorting from both durable lease selectors.
+- [x] Remove full-backlog sorting and unbounded due promotion from both lease selectors.
 - [ ] Read current cooldown/facet action state without replaying retained action history.
 
 ## Evidence and decisions
@@ -204,6 +204,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The local queue repair denormalizes immutable priority/request time onto intent scopes, uses forced partial indexes matching both claim orders, and repairs missing/mismatched key direction, collation, and partial predicates at startup.
 - Production-equivalent `EXPLAIN` plans contain both claim indexes and no temporary B-tree; priority-before-FIFO, migration backfill, concurrent startup, and all coordinator/storage semantics remain green.
 - Runnable-only queue indexes now exclude future deferred/leased/retry rows entirely; dedicated due indexes promote exact-boundary work first, and split NULL/time seeks keep 50,000 future deferred rows below 20,000 VM instructions.
+- Due catch-up is capped at 1,000 rows per immediate transaction and yields between batches without returning an idle sentinel; one-million-row review measured 0.0087s/53.5k VM instructions maximum, 1,000 yields, and a correctly ordered real lease.
+- Exact normalized index DDL is repaired before validation, including predicate, key direction, collation, and partial status; migration `0017` plus all six queue indexes are packaged as the 29th runtime asset.
 - The 15:18 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.

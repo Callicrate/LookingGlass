@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -82,6 +83,197 @@ def test_racing_equivalent_intents_elect_one_active_action(tmp_path) -> None:
     outcomes = run(coordinate())
     assert {outcome.state.value for outcome in outcomes} == {"admitted", "coalesced"}
     assert len(store.list_actions()) == 1
+
+
+def test_intent_claim_order_preserves_priority_before_fifo(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "claim-order.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    earlier = _intent(scope, NOW)
+    higher_priority = replace(
+        _intent(scope, NOW + timedelta(seconds=1)),
+        priority=10,
+    )
+    run(store.submit_refresh(earlier))
+    run(store.submit_refresh(higher_priority))
+
+    first = run(store.lease_next_intent_scope(worker_id="worker", now=NOW + timedelta(seconds=1)))
+
+    assert first is not None
+    assert first.intent.intent_id == higher_priority.intent_id
+
+
+def test_future_deferred_backlog_does_not_amplify_runnable_claim_steps(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "future-deferred-claim.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    receipt = run(store.submit_refresh(_intent(scope, NOW)))
+    store._connection.execute(
+        """
+        WITH RECURSIVE item(number) AS (
+            VALUES(1)
+            UNION ALL
+            SELECT number + 1 FROM item WHERE number < 50000
+        )
+        INSERT INTO refresh_intent_scopes (
+            intent_scope_id, intent_id, system_id, target_kind, target_id,
+            object_type, facet, capability_key, coverage, field_mask_json,
+            state, eligible_at, queue_priority, queue_requested_at
+        )
+        SELECT printf('future-%06d', item.number), scope.intent_id, scope.system_id,
+               scope.target_kind, scope.target_id, scope.object_type, scope.facet,
+               scope.capability_key, scope.coverage, scope.field_mask_json,
+               'deferred', '2099-01-01T00:00:00.000000Z', 100,
+               '2000-01-01T00:00:00.000000Z'
+        FROM item
+        CROSS JOIN refresh_intent_scopes AS scope
+        WHERE scope.intent_scope_id = ?
+        """,
+        (receipt.scope_ids[0],),
+    )
+    progress_callbacks = 0
+
+    def count_vm_steps() -> int:
+        nonlocal progress_callbacks
+        progress_callbacks += 1
+        return 0
+
+    store._connection.set_progress_handler(count_vm_steps, 100)
+    try:
+        claimed = run(store.lease_next_intent_scope(worker_id="worker", now=NOW))
+    finally:
+        store._connection.set_progress_handler(None, 0)
+
+    assert claimed is not None and claimed.intent_scope_id == receipt.scope_ids[0]
+    assert progress_callbacks < 200
+
+
+def test_simultaneous_due_backlog_promotes_in_bounded_transactions(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "simultaneous-due-claim.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    receipt = run(store.submit_refresh(_intent(scope, NOW)))
+    store._connection.execute(
+        """
+        WITH RECURSIVE item(number) AS (
+            VALUES(1)
+            UNION ALL
+            SELECT number + 1 FROM item WHERE number < 5000
+        )
+        INSERT INTO refresh_intent_scopes (
+            intent_scope_id, intent_id, system_id, target_kind, target_id,
+            object_type, facet, capability_key, coverage, field_mask_json,
+            state, eligible_at, queue_priority, queue_requested_at
+        )
+        SELECT printf('due-%06d', item.number), scope.intent_id, scope.system_id,
+               scope.target_kind, scope.target_id, scope.object_type, scope.facet,
+               scope.capability_key, scope.coverage, scope.field_mask_json,
+               'deferred', ?, 100, '2000-01-01T00:00:00.000000Z'
+        FROM item
+        CROSS JOIN refresh_intent_scopes AS scope
+        WHERE scope.intent_scope_id = ?
+        """,
+        (
+            NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+            receipt.scope_ids[0],
+        ),
+    )
+    progress_callbacks = 0
+
+    def count_vm_steps() -> int:
+        nonlocal progress_callbacks
+        progress_callbacks += 1
+        return 0
+
+    async def claim_with_ticker():
+        ticks = 0
+        stopped = False
+
+        async def ticker() -> None:
+            nonlocal ticks
+            while not stopped:
+                ticks += 1
+                await asyncio.sleep(0)
+
+        task = asyncio.create_task(ticker())
+        try:
+            claimed = await store.lease_next_intent_scope(worker_id="worker", now=NOW)
+        finally:
+            stopped = True
+            await task
+        return claimed, ticks
+
+    store._connection.set_progress_handler(count_vm_steps, 100)
+    try:
+        claimed, ticks = run(claim_with_ticker())
+    finally:
+        store._connection.set_progress_handler(None, 0)
+    states = dict(
+        store._connection.execute(
+            "SELECT state, COUNT(*) FROM refresh_intent_scopes GROUP BY state"
+        ).fetchall()
+    )
+    assert states == {"leased": 1, "queued": 5_000}
+    assert progress_callbacks < 8_000
+    assert ticks >= 4
+    assert claimed is not None and claimed.intent.priority == 0
+    assert claimed.intent_scope_id.startswith("due-")
+
+
+def test_queue_claim_migration_backfills_immutable_intent_order(tmp_path) -> None:
+    path = tmp_path / "claim-order-migration.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+        earlier = _intent(scope, NOW)
+        higher_priority = replace(
+            _intent(scope, NOW + timedelta(seconds=1)),
+            priority=10,
+        )
+        run(store.submit_refresh(earlier))
+        run(store.submit_refresh(higher_priority))
+        for index_name in (
+            "ix_refresh_intent_scopes_claim_order",
+            "ix_refresh_intent_scopes_deferred_due",
+            "ix_refresh_intent_scopes_lease_due",
+            "ix_adapter_actions_claim_order",
+            "ix_adapter_actions_lease_due",
+            "ix_adapter_actions_retry_due",
+        ):
+            store._connection.execute(f"DROP INDEX {index_name}")
+        store._connection.execute("ALTER TABLE refresh_intent_scopes DROP COLUMN queue_priority")
+        store._connection.execute(
+            "ALTER TABLE refresh_intent_scopes DROP COLUMN queue_requested_at"
+        )
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = '0017_queue_claim_order'"
+        )
+
+    with SQLiteStore(path) as migrated:
+        first = run(
+            migrated.lease_next_intent_scope(
+                worker_id="worker",
+                now=NOW + timedelta(seconds=1),
+            )
+        )
+        assert first is not None and first.intent.intent_id == higher_priority.intent_id
+        rows = migrated._connection.execute(
+            """
+            SELECT queue_priority, queue_requested_at
+            FROM refresh_intent_scopes
+            WHERE intent_id = ?
+            """,
+            (higher_priority.intent_id,),
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [(10, "2026-08-24T12:00:01.000000Z")]
 
 
 def test_incompatible_persisted_intent_is_rejected_without_blocking_valid_work(
