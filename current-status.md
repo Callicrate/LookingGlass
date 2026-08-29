@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 22:04 ET
+Updated: 2026-08-28 22:17 ET
 
 ## Goal
 
@@ -78,6 +78,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Dashboard objects now link to a bounded detail route with canonical identity, facets, provenance, current direct children, type filtering, and object-specific refresh actions.
 - Containment pages include only present relationships, show relationship and child-object presence separately, and use one indexed join without temporary sorting or per-child lookups.
 - The object page passed desktop/mobile interaction and screenshot checks with no console or network errors; Lighthouse scored 100 in every audited category on both profiles.
+- The exact locked CI sequence passes on native Windows and Ubuntu/WSL with Python 3.12; CI now runs both operating systems with fail-fast disabled.
 
 ## Risks / watch list
 

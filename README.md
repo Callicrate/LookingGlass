@@ -110,7 +110,7 @@ uv lock --check
 
 The default test suite uses fake CLI results and does not contact Databricks.
 A live smoke test requires an explicit named profile and Workspace root.
-The same formatting, lint, test, and locked-dependency checks run in CI for pushes and pull requests.
+The same formatting, lint, test, and locked-dependency checks run on Windows and Ubuntu in CI for pushes and pull requests.
 
 ## Project structure
 
