@@ -91,6 +91,85 @@ def test_partial_listing_preserves_members_and_observation_replay_is_idempotent(
     assert run(ingestor.ingest(partial)).status.value == "duplicate"
 
 
+def test_complete_omission_never_overwrites_a_newer_relationship(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    parent = seeded.workspace_root_object_id
+    membership = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        coverage=RefreshCoverage.FACET,
+    )
+    declaration = CoverageDeclaration(
+        scope=membership,
+        completeness=CollectionCoverage.COMPLETE,
+        absence_authority=(AbsenceAuthority.RELATIONSHIP,),
+    )
+    child = ObjectLocator(
+        object_type="file",
+        source_kind="databricks.workspace.file",
+        external_key="/Shared/report.py",
+        display_name="report.py",
+    )
+    newer_at = NOW + timedelta(minutes=10)
+    present = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=newer_at,
+        received_at=newer_at,
+        relationship_observations=(
+            RelationshipObservation(
+                observation_id=uuid4(),
+                subject=ObjectLocator(object_type="folder", object_id=parent),
+                predicate="contains",
+                object=child,
+                presence=PresenceState.PRESENT,
+            ),
+        ),
+        coverage=(declaration,),
+    )
+    delayed_older_omission = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW + timedelta(minutes=20),
+        coverage=(declaration,),
+    )
+    genuinely_newer_omission = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW + timedelta(minutes=30),
+        received_at=NOW + timedelta(minutes=30),
+        coverage=(declaration,),
+    )
+
+    assert run(store.ingest(present)).status.value == "accepted"
+    assert run(store.ingest(delayed_older_omission)).status.value == "accepted"
+    relationship = store.list_relationships_sync(parent)[0]
+    assert relationship.presence is PresenceState.PRESENT
+    assert relationship.observed_at == newer_at
+    assert store.count_related_objects_sync(parent) == 1
+
+    assert run(store.ingest(genuinely_newer_omission)).status.value == "accepted"
+    relationship = store.list_relationships_sync(parent)[0]
+    assert relationship.presence is PresenceState.ABSENT
+    assert relationship.observed_at == genuinely_newer_omission.observed_at
+    assert store.count_related_objects_sync(parent) == 0
+
+
 def test_partial_facet_patch_never_clears_unobserved_fields(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(

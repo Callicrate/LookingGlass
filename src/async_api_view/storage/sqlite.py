@@ -3067,7 +3067,7 @@ class SQLiteStore:
             return
         rows = connection.execute(
             """
-            SELECT relationship_id, object_id FROM relationships
+            SELECT relationship_id, object_id, observed_at FROM relationships
             WHERE system_id = ? AND subject_id = ?
               AND predicate = 'contains' AND presence = 'present'
             """,
@@ -3075,6 +3075,8 @@ class SQLiteStore:
         ).fetchall()
         for row in rows:
             if (subject_id, row["object_id"]) in positive_contains:
+                continue
+            if batch.observed_at < _dt(row["observed_at"]):
                 continue
             connection.execute(
                 """
