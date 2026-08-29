@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 02:32 ET
+Updated: 2026-08-29 02:49 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 250 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 253 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: continue post-fix residual-risk review after the independently cleared session and schema-invariant repairs.
@@ -59,6 +59,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prefer active system work over later terminal history in dashboard summaries.
 - [x] Bound redeemed browser sessions with idle and absolute server-side expiry.
 - [x] Repair missing or semantically mismatched indexes required by forced runtime plans.
+- [x] Preserve configured-system identity across case-only ID edits and legacy mixed-case rows.
+- [x] Fail closed on Workspace content until retention-aware artifact persistence exists.
+- [x] Prove interrupted CLI work remains reclaimable after shutdown and lease expiry.
 
 ## Evidence and decisions
 
@@ -180,6 +183,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Browser sessions now expire after two idle hours or twelve total hours, clear server state and stale cookies at the boundary, and require a fresh process activation; independent security review cleared the 82-test web/CLI slice.
 - Startup now verifies the exact table, ordered keys, direction, collation, uniqueness, origin, and partial status of both indexes forced by dashboard SQL; missing or mismatched definitions rebuild atomically, and an injected failure proves rollback restores the prior schema.
 - The ignored local database is migrated through `0010_dashboard_active_action`; `PRAGMA integrity_check` is `ok` with zero foreign-key violations.
+- Stable configuration IDs now use one lowercase ASCII domain before database creation, UUID generation, lookup, and persistence; mixed-case legacy aliases collapse to the earliest durable mapping without forking cached state.
+- Workspace content actions now fail locally before target resolution or CLI execution because the current worker has no artifact sink; normalized content metadata carries neither coverage nor a freshness satisfaction claim.
+- The shutdown regression now reopens the database after cancelling a blocked CLI, proves no attempt or terminal outcome was fabricated, and reclaims the action after its durable lease expires.
+- The 02:43 Murmuration tending pass found no Rookery-specific public discussion; the native identity profile, writes, notifications, and BookStack remain unavailable, so the pass stayed read-only.
 
 ## Risks / watch list
 
