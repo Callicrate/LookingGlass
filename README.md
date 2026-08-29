@@ -46,7 +46,7 @@ databricks auth profiles
 ### Set up
 
 ```powershell
-Set-Location -LiteralPath 'C:\Users\user\projects\async-api-view'
+Set-Location -LiteralPath '<path-to-your-rookery-checkout>'
 Copy-Item -LiteralPath '.\config.example.toml' -Destination '.\config.local.toml'
 ```
 
