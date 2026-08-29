@@ -490,6 +490,14 @@ async def test_malformed_action_deadline_terminalizes_without_cli_call(tmp_path:
     )
     healthy_admission = await runtime.coordinator.run_once()
     assert healthy_admission is not None and healthy_admission.action_id is not None
+    runtime.store._connection.execute(
+        "UPDATE adapter_actions SET record_created_at = ? WHERE action_id = ?",
+        ("2026-08-29T00:00:00.000000Z", admitted.action_id),
+    )
+    runtime.store._connection.execute(
+        "UPDATE adapter_actions SET record_created_at = ? WHERE action_id = ?",
+        ("2026-08-29T00:00:01.000000Z", healthy_admission.action_id),
+    )
 
     assert await runtime.worker.run_once()
 
