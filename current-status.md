@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 05:14 ET
+Updated: 2026-08-29 05:17 ET
 
 ## Goal
 
@@ -234,10 +234,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Facet payloads and connection settings now require JSON objects rather than arbitrary JSON arrays/scalars, and authority/count/priority fields reject Python's bool-as-int coercion.
 - Final start authorization owns the `leased → running` transition; current API workers can no longer call lifecycle `mark_running` after a stale guard decision.
 - Resolver-time revocation regressions prove system, binding, capability, and newly expired deadlines all stop before process creation with no attempt record.
+- A fresh multi-process storage/runtime audit cleared transaction, lease recovery, aggregate, configuration reconciliation, backup, and poison-row behavior with 92 focused tests.
 
 ## Risks / watch list
 
-- The directory was not a Git worktree when inspected.
 - The architecture document describes deferred capabilities beyond the implemented slice; documentation must keep current behavior distinct from roadmap behavior.
 - Local browser/debug data is present under `.local/` and must remain untracked.
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
