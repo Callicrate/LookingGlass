@@ -21,6 +21,7 @@ from async_api_view.contracts import (
     ObservationBatch,
     PresenceState,
     RefreshCoverage,
+    RefreshIntervalOverride,
     RefreshScope,
     RemoteObject,
     TargetKind,
@@ -61,6 +62,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0008_action_activity",
             "0009_facet_action_status",
             "0010_dashboard_active_action",
+            "0011_refresh_override_identity",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -276,6 +278,45 @@ def test_existing_v1_database_upgrades_scope_capability_columns(tmp_path) -> Non
             assert "capability_key" in {column[1] for column in columns}
 
 
+def test_override_identity_migration_keeps_latest_null_facet_row(tmp_path) -> None:
+    path = tmp_path / "legacy-overrides.sqlite3"
+    scope_id = str(uuid4())
+    with SQLiteStore(path) as store:
+        store._connection.execute("DROP INDEX ux_refresh_overrides_identity")
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = '0011_refresh_override_identity'"
+        )
+        store._connection.executemany(
+            """
+            INSERT INTO refresh_overrides (
+                level, scope_id, facet, interval_seconds, record_updated_at
+            ) VALUES ('system', ?, NULL, ?, ?)
+            """,
+            (
+                (scope_id, 28_800, "2026-08-24T12:00:00.000000Z"),
+                (scope_id, 14_400, "2026-08-24T13:00:00.000000Z"),
+            ),
+        )
+
+    with SQLiteStore(path) as migrated:
+        rows = migrated._connection.execute(
+            """
+            SELECT interval_seconds
+            FROM refresh_overrides
+            WHERE level = 'system' AND scope_id = ? AND facet IS NULL
+            """,
+            (scope_id,),
+        ).fetchall()
+        indexes = {
+            row["name"]
+            for row in migrated._connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'index'"
+            ).fetchall()
+        }
+        assert [row["interval_seconds"] for row in rows] == [14_400]
+        assert "ux_refresh_overrides_identity" in indexes
+
+
 def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None:
     path = tmp_path / "concurrent.sqlite3"
     workers = 8
@@ -303,6 +344,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0008_action_activity",
         "0009_facet_action_status",
         "0010_dashboard_active_action",
+        "0011_refresh_override_identity",
     )
     assert versions == (expected,) * workers
 
@@ -327,6 +369,38 @@ def test_configuration_reconciliation_cannot_enable_another_system_kind(tmp_path
 
         unchanged = store.get_system(other.system_id)
         assert unchanged is not None and not unchanged.enabled
+
+
+def test_null_facet_refresh_override_replaces_prior_value(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "state.sqlite3") as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+        )
+        store.set_refresh_override(
+            RefreshIntervalOverride("system", seeded.system.system_id, timedelta(hours=8)),
+            now=NOW,
+        )
+        store.set_refresh_override(
+            RefreshIntervalOverride("system", seeded.system.system_id, timedelta(hours=4)),
+            now=NOW + timedelta(seconds=1),
+        )
+
+        rows = store._connection.execute(
+            """
+            SELECT interval_seconds
+            FROM refresh_overrides
+            WHERE level = 'system' AND scope_id = ? AND facet IS NULL
+            """,
+            (seeded.system.system_id,),
+        ).fetchall()
+        assert [row["interval_seconds"] for row in rows] == [14_400]
+        assert store.effective_interval(scope) == timedelta(hours=4)
 
 
 def test_migration_failure_rolls_back_schema_and_ledger(tmp_path, monkeypatch) -> None:
@@ -402,6 +476,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0008_action_activity",
             "0009_facet_action_status",
             "0010_dashboard_active_action",
+            "0011_refresh_override_identity",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":

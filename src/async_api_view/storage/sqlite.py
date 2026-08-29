@@ -1427,15 +1427,28 @@ class SQLiteStore:
         if interval_seconds <= 0 or timedelta(seconds=interval_seconds) != override.interval:
             raise ValueError("refresh interval must be an integral positive number of seconds")
         with self._immediate_transaction() as connection:
+            previous = connection.execute(
+                """
+                SELECT interval_seconds
+                FROM refresh_overrides
+                WHERE level = ? AND scope_id = ? AND facet IS ?
+                """,
+                (override.level, override.scope_id, override.facet),
+            ).fetchall()
+            changed = len(previous) != 1 or previous[0]["interval_seconds"] != interval_seconds
+            connection.execute(
+                """
+                DELETE FROM refresh_overrides
+                WHERE level = ? AND scope_id = ? AND facet IS ?
+                """,
+                (override.level, override.scope_id, override.facet),
+            )
             connection.execute(
                 """
                 INSERT INTO refresh_overrides (
                     level, scope_id, facet, interval_seconds, record_updated_at
                 )
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(level, scope_id, facet) DO UPDATE SET
-                    interval_seconds = excluded.interval_seconds,
-                    record_updated_at = excluded.record_updated_at
                 """,
                 (
                     override.level,
@@ -1445,6 +1458,16 @@ class SQLiteStore:
                     _utc_text(now or _now()),
                 ),
             )
+            if changed:
+                connection.execute(
+                    """
+                    UPDATE refresh_intent_scopes
+                    SET state = 'queued', disposition_reason = 'policy_changed',
+                        eligible_at = NULL, lease_id = NULL, lease_worker_id = NULL,
+                        leased_until = NULL
+                    WHERE state = 'deferred'
+                    """
+                )
 
     def _overrides_for(
         self, *, object_id: str, system_id: str

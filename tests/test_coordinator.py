@@ -178,6 +178,64 @@ def test_lease_recovery_revalidates_deferred_scope_and_policy_precedence(tmp_pat
     assert store.list_intent_scopes(receipt.intent_id)[0].state.value == "admitted"
 
 
+def test_refresh_override_change_wakes_deferred_scope_for_policy_recheck(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "policy-change.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    run(store.submit_refresh(_intent(scope, NOW)))
+    initial = run(DurableCoordinator(store, worker_id="initial").run_once(now=NOW))
+    assert initial is not None and initial.action_id is not None
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+    assert lease is not None
+    run(store.mark_running(action_id=initial.action_id, lease_id=lease.lease_id, started_at=NOW))
+    run(
+        store.complete_action(
+            ActionCompletion(
+                action_id=initial.action_id,
+                outcome=ActionOutcome.SUCCEEDED,
+                completed_at=NOW + timedelta(seconds=30),
+            ),
+            lease_id=lease.lease_id,
+        )
+    )
+    requested_at = NOW + timedelta(hours=2)
+    deferred_receipt = run(store.submit_refresh(_intent(scope, requested_at)))
+    deferred = run(DurableCoordinator(store, worker_id="deferred").run_once(now=requested_at))
+    assert deferred is not None and deferred.state.value == "deferred"
+    assert deferred.eligible_at == NOW + timedelta(days=1)
+
+    store.set_refresh_override(
+        RefreshIntervalOverride("system", seeded.system.system_id, timedelta(days=2), "membership"),
+        now=requested_at,
+    )
+    awakened = store.list_intent_scopes(deferred_receipt.intent_id)[0]
+    assert awakened.state.value == "queued"
+    assert awakened.disposition_reason == "policy_changed"
+    assert awakened.eligible_at is None
+    later = run(DurableCoordinator(store, worker_id="later").run_once(now=requested_at))
+    assert later is not None and later.state.value == "deferred"
+    assert later.eligible_at == NOW + timedelta(days=2)
+    store.set_refresh_override(
+        RefreshIntervalOverride("system", seeded.system.system_id, timedelta(days=2), "membership"),
+        now=requested_at + timedelta(seconds=1),
+    )
+    unchanged = store.list_intent_scopes(deferred_receipt.intent_id)[0]
+    assert unchanged.state.value == "deferred"
+    assert unchanged.eligible_at == NOW + timedelta(days=2)
+
+    store.set_refresh_override(
+        RefreshIntervalOverride(
+            "system", seeded.system.system_id, timedelta(hours=1), "membership"
+        ),
+        now=requested_at,
+    )
+    admitted = run(DurableCoordinator(store, worker_id="admitted").run_once(now=requested_at))
+    assert admitted is not None and admitted.state.value == "admitted"
+    assert admitted.action_id != initial.action_id
+
+
 def test_owned_core_never_imports_adapter_code() -> None:
     source_root = Path("src/async_api_view")
     for package in ("storage", "application", "ingestion"):
