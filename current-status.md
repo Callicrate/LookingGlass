@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 05:20 ET
+Updated: 2026-08-29 05:25 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 291 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
+- Latest checks: 297 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: no medium-or-higher defect open; continue fresh post-fix residual audits against the clean 291-test head.
@@ -79,6 +79,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Reject raw nested DTOs, scalar mapping payloads, and boolean/integer coercion at contract construction.
 - [x] Atomically revalidate authority and deadlines at the final remote-start transition.
 - [x] Exclude workspace status/progress, CI, and Murmuration metadata from source distributions.
+- [x] Return controlled CLI errors for corrupt or incompatible local SQLite state.
 
 ## Evidence and decisions
 
@@ -236,6 +237,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Final start authorization owns the `leased → running` transition; current API workers can no longer call lifecycle `mark_running` after a stale guard decision.
 - Resolver-time revocation regressions prove system, binding, capability, and newly expired deadlines all stop before process creation with no attempt record.
 - CI now verifies distribution contents on Windows and Ubuntu after every build; the source archive has 71 intended entries with workspace audit surfaces excluded, and the wheel has all 53 required runtime entries/assets.
+- `init`, `run-once`, and `serve` now catch SQLite open/migration failures at the CLI boundary, emit one bounded generic error, return exit code 2, and close the database handle without exposing a traceback.
 - A fresh multi-process storage/runtime audit cleared transaction, lease recovery, aggregate, configuration reconciliation, backup, and poison-row behavior with 92 focused tests.
 
 ## Risks / watch list
