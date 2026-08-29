@@ -596,7 +596,7 @@ def test_redaction_and_import_boundary() -> None:
     diagnostic = redact_diagnostic(
         "token=not-for-storage --profile local\nAuthorization: Bearer abc "
         "bearer lowercase-secret "
-        '"client_secret":"json-secret" access_token=token-value '
+        '"client_secret":"json-secret" access_token=token-value '  # pragma: allowlist secret
         "refresh_token=refresh-value api_key=api-value \\\\server\\share\\config "
         "/home/person/.databrickscfg "
         "Config: C:\\Users\\person\\.databrickscfg, "
