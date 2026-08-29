@@ -41,6 +41,11 @@
       <span>{{ view.error|display }}</span>
       <a href="/">Try again</a>
     </section>
+    {% elif view.refresh_unavailable %}
+    <section class="notice notice--warning" role="status">
+      <strong>Refresh unavailable</strong>
+      <span>{{ view.refresh_error|display if view.refresh_error else 'The refresh worker is unavailable.' }} Cached snapshot loaded.</span>
+    </section>
     {% endif %}
 
     <section aria-labelledby="alerts-heading">

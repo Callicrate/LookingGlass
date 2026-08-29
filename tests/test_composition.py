@@ -1233,8 +1233,10 @@ async def test_worker_startup_retries_with_one_event_and_clears_dashboard_error(
 
     await runtime.start()
     unavailable = await runtime.backend.dashboard()
-    assert unavailable.disconnected
-    assert unavailable.error == "worker stopped unexpectedly (RuntimeError)"
+    assert not unavailable.disconnected
+    assert unavailable.error is None
+    assert unavailable.refresh_unavailable
+    assert unavailable.refresh_error == "worker stopped unexpectedly (RuntimeError)"
     await asyncio.wait_for(runner.ready.wait(), timeout=1)
     await asyncio.sleep(0)
 
@@ -1242,6 +1244,8 @@ async def test_worker_startup_retries_with_one_event_and_clears_dashboard_error(
     assert runner.doctor_calls == 3
     assert not recovered.disconnected
     assert recovered.error is None
+    assert not recovered.refresh_unavailable
+    assert recovered.refresh_error is None
     worker_events = [
         event
         for event in runtime.store.list_operational_events(alertable_only=True)
@@ -1380,7 +1384,9 @@ async def test_blocked_worker_startup_does_not_hold_cached_authenticated_dashboa
         assert bootstrap.status_code == 303
         assert response.status_code == 200
         assert "test-workspace" in response.text
-        assert "Disconnected" in response.text
+        assert "Refresh unavailable" in response.text
+        assert "Cached snapshot loaded" in response.text
+        assert "Disconnected" not in response.text
         assert "Worker compatibility check is in progress." in response.text
         assert runtime.status() == (
             False,

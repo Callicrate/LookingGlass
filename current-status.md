@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 347 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 348 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: poll-floor, profile-grammar, and redirected-serve fixes are independently clear; four temporal/product findings remain queued.
+- Active review round: worker-degradation labeling and README hierarchy are independently clear; provenance and temporal ordering findings remain queued.
 - Next progress report due: 2026-08-29 11:03 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -99,9 +99,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Require every ingested fact to prove action or incidental capability/scope authority.
 - [x] Close review of exact partial/patch field-mask enforcement.
 - [ ] Define source-revision and equal-time projection ordering.
-- [ ] Render refresh-worker degradation without claiming local disconnection.
+- [x] Render refresh-worker degradation without claiming local disconnection.
 - [ ] Expose bounded adapter/action provenance for displayed facts.
-- [ ] Separate standalone and source-checkout setup hierarchy.
+- [x] Separate standalone and source-checkout setup hierarchy.
 - [x] Enforce a practical minimum worker poll interval.
 - [x] Share profile validation before database creation and doctor.
 - [x] Reject redirected `serve` before applying durable configuration.
@@ -147,6 +147,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Independent mask review cleared empty/null/absence interactions, complete snapshots, normalizer compatibility, JSON DTO roundtrips, and preservation of unobserved known fields.
 - Configuration loading now enforces a 50 ms worker-poll floor and bootstrap-compatible profile grammar; redirected `serve` rejects its output channel before loading config or applying reconciliation.
 - Independent config/CLI review cleared TOML and programmatic settings, inclusive timing bounds, profile parity, allowed redirected/interactive serving, corrupt-state handling, cleanup, and activation secrecy.
+- Successful local dashboard reads now separate `refresh_unavailable` from true disconnection and render a warning that cached snapshot data loaded; local query failure retains the red Disconnected alert.
+- Independent product review cleared degraded/recovered copy, escaped worker summaries, accessible disabled reasons/status semantics, responsive structure, and peer standalone/source-checkout README flow.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.

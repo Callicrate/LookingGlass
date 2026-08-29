@@ -351,6 +351,8 @@ class DashboardView:
     loaded_at: datetime | str | None = None
     disconnected: bool = False
     error: str | None = None
+    refresh_unavailable: bool = False
+    refresh_error: str | None = None
     object_total: int = 0
     object_page: int = 1
     object_page_count: int = 1

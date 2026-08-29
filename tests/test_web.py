@@ -742,6 +742,22 @@ def test_dashboard_recovers_to_disconnected_error_without_leaking_exception() ->
     assert "secret profile token" not in response.text
 
 
+def test_dashboard_distinguishes_worker_degradation_from_local_disconnection() -> None:
+    view = replace(
+        ready_dashboard(),
+        refresh_unavailable=True,
+        refresh_error="Worker compatibility check is in progress.",
+    )
+
+    response = client_for(FakeBackend(dashboard_view=view)).get("/")
+
+    assert response.status_code == 200
+    assert "Refresh unavailable" in response.text
+    assert "Cached snapshot loaded" in response.text
+    assert "Worker compatibility check is in progress." in response.text
+    assert "Disconnected" not in response.text
+
+
 def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
     view = replace(
         ready_dashboard(),

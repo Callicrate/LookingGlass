@@ -8,6 +8,7 @@ The first adapter uses the existing Databricks CLI.
 
 - [First usable workflow](#first-usable-workflow)
 - [Standalone wheel install](#standalone-wheel-install)
+- [Source checkout setup](#source-checkout-setup)
 - [Databricks scope](#databricks-scope)
 - [Commands](#commands)
 - [Verify](#verify)
@@ -65,7 +66,7 @@ async-api-view --config '.\rookery.toml' serve
 
 `init-config` writes UTF-8 TOML, creates parent directories, and refuses to overwrite any existing path. The generated SQLite path is relative to the configuration file. Use `uv tool install --force '<path-to-new-wheel>'` to upgrade and `uv tool uninstall async-api-view` to remove the installed command; configuration and cached SQLite state remain operator-owned files.
 
-### Set up
+## Source checkout setup
 
 ```powershell
 Set-Location -LiteralPath '<path-to-your-rookery-checkout>'
