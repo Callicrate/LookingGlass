@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 13:43 ET
+Updated: 2026-08-29 14:24 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 365 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 369 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: a high collection-envelope contradiction remains under dual architecture review; exact-expiry dispatch is independently clear, leaving Unity Catalog stable identity, queue selection, and latest-action projection queued.
-- Next progress report due: 2026-08-29 14:23 ET.
+- Active review round: byte/unit-bounded multipart collection ingestion is implemented locally after converged dual architecture review; the exact full gate passes and independent high-severity re-review is running, with three medium findings queued behind it.
+- Next progress report due: 2026-08-29 15:23 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 13:22 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 14:23 ET.
+- [ ] Tend Murmuration about hourly; the 14:23 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 15:23 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -189,7 +189,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - A documentation audit found that backup consistency was described without warning that restore remains unimplemented and unverified; the README now forbids live replacement/sidecar mixing and treats snapshots as protected recovery input rather than a tested recovery workflow.
 - Independent documentation review confirmed the warning matches online-backup behavior, does not imply an unsupported manual restore, and keeps atomically validated restore explicitly deferred.
 - The 13:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
-- A 10,000-child Workspace result normalizes to about 15.3 MiB while storage rejects batches over 1 MiB; simply raising the cap would create multi-second writer locks, so deterministic linked-item chunking is under dual architecture review.
+- A 10,000-child Workspace result normalized to about 15.3 MiB while storage rejected batches over 1 MiB; simply raising the cap would have created multi-second writer locks.
+- The local multipart repair shares exact canonical batch bytes, keeps facet/contains pairs indivisible, caps parts at 1,000,000 bytes/250 units beneath storage's 1 MiB guard, puts the root summary last, retains incomplete coverage on every part, and rejects multipart COMPLETE or oversized units before the first write.
+- A real 10,000-child worker/SQLite regression persists all children and edges across deterministic lease-fenced parts, records one partial action outcome, and requires every individual ingestion call to complete within one second.
+- The 14:23 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - Final dispatch accepted `leased_until == now` even though another worker could reclaim at that exact boundary.
 - Final dispatch now rejects exact expiry and atomically renews the running lease; independent two-connection races proved exact-expiry reclaim and just-before-expiry mutual exclusion with no remaining medium-or-higher finding.
 - Unity Catalog schema/table/view/volume normalization discards stable source UUIDs and keys mutable qualified names, causing rename forks and same-name recreation merges.
