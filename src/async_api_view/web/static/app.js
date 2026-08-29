@@ -50,6 +50,10 @@
         cache: "no-store",
         credentials: "same-origin",
       });
+      if (response.status === 403) {
+        window.location.reload();
+        return;
+      }
       if (!response.ok) throw new Error("status unavailable");
       const payload = await response.json();
       failures = 0;

@@ -1282,5 +1282,7 @@ def test_first_party_script_avoids_dangerous_dom_sinks() -> None:
     ).read_text(encoding="utf-8")
 
     assert "textContent" in script
+    assert "response.status === 403" in script
+    assert "window.location.reload()" in script
     for sink in ("innerHTML", "outerHTML", "document.write", "eval(", "new Function"):
         assert sink not in script
