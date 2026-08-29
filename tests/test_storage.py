@@ -59,6 +59,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0007_operational_event_filters",
             "0008_action_activity",
             "0009_facet_action_status",
+            "0010_dashboard_active_action",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -140,6 +141,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0007_operational_event_filters",
         "0008_action_activity",
         "0009_facet_action_status",
+        "0010_dashboard_active_action",
     )
     assert versions == (expected,) * workers
 
@@ -238,6 +240,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0007_operational_event_filters",
             "0008_action_activity",
             "0009_facet_action_status",
+            "0010_dashboard_active_action",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -622,8 +625,35 @@ def test_malformed_action_contract_terminalizes_once_and_queue_progresses(tmp_pa
     )
     latest_activity = store.list_latest_system_activity()
     assert len(latest_activity) == 1
-    assert latest_activity[0].action_id == poisoned.action_id
-    assert latest_activity[0].state == "failed"
+    assert latest_activity[0].action_id == healthy.action_id
+    assert latest_activity[0].state == "leased"
+
+    run(
+        store.complete_action(
+            ActionCompletion(
+                action_id=healthy.action_id,
+                outcome=ActionOutcome.SUCCEEDED,
+                completed_at=NOW + timedelta(seconds=3),
+            ),
+            lease_id=next_lease.lease_id,
+        )
+    )
+    latest_terminal = store.list_latest_system_activity()
+    assert latest_terminal[0].action_id == poisoned.action_id
+    plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT active.action_id
+        FROM adapter_actions AS active
+        WHERE active.system_id = ?
+          AND active.state IN ('ready', 'leased', 'running', 'retry_wait')
+        ORDER BY active.record_created_at DESC, active.action_id
+        LIMIT 1
+        """,
+        (seeded.system.system_id,),
+    ).fetchall()
+    assert any("ix_adapter_actions_system_active_recency" in row[3] for row in plan)
+    assert all("TEMP B-TREE" not in row[3] for row in plan)
 
 
 def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> None:

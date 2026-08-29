@@ -2144,7 +2144,7 @@ class SQLiteStore:
         return tuple(self._stored_action_from_row(row) for row in rows)
 
     def list_latest_system_activity(self) -> tuple[ActionActivityRecord, ...]:
-        """Return one raw action summary per system without contract reconstruction."""
+        """Return active-preferred system summaries without contract reconstruction."""
 
         with self._lock:
             rows = self._connection.execute(
@@ -2152,12 +2152,22 @@ class SQLiteStore:
                 SELECT action.*
                 FROM systems AS system
                 JOIN adapter_actions AS action
-                  ON action.action_id = (
-                      SELECT candidate.action_id
-                      FROM adapter_actions AS candidate
-                      WHERE candidate.system_id = system.system_id
-                      ORDER BY candidate.record_created_at DESC, candidate.action_id
-                      LIMIT 1
+                  ON action.action_id = COALESCE(
+                      (
+                          SELECT active.action_id
+                          FROM adapter_actions AS active
+                          WHERE active.system_id = system.system_id
+                            AND active.state IN ('ready', 'leased', 'running', 'retry_wait')
+                          ORDER BY active.record_created_at DESC, active.action_id
+                          LIMIT 1
+                      ),
+                      (
+                          SELECT latest.action_id
+                          FROM adapter_actions AS latest
+                          WHERE latest.system_id = system.system_id
+                          ORDER BY latest.record_created_at DESC, latest.action_id
+                          LIMIT 1
+                      )
                   )
                 ORDER BY action.record_created_at DESC, action.action_id
                 """
