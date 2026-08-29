@@ -365,7 +365,7 @@ async def test_expired_action_deadline_never_reaches_cli_runner(tmp_path: Path) 
     )
     configured = runtime.store.get_configured_scope(option.target_id)
     assert configured is not None
-    requested_at = datetime(2026, 8, 29, tzinfo=UTC)
+    requested_at = datetime.now(UTC)
     intent = RefreshIntent(
         intent_id=uuid4(),
         idempotency_key=str(uuid4()),
@@ -500,7 +500,7 @@ async def test_expired_coalesced_receipt_is_not_overlaid_by_live_action(tmp_path
     )
     configured = runtime.store.get_configured_scope(option.target_id)
     assert configured is not None
-    requested_at = datetime(2026, 8, 29, tzinfo=UTC)
+    requested_at = datetime.now(UTC)
     scope = RefreshScope(
         system_id=option.system_id,
         target=TargetRef(TargetKind.CONFIGURED_SCOPE, option.target_id),

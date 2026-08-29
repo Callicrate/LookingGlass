@@ -6,12 +6,14 @@ from uuid import uuid4
 
 import pytest
 
+import async_api_view.storage.sqlite as sqlite_storage
 from async_api_view.application import DurableCoordinator, SystemBootstrapService
 from async_api_view.contracts import (
     ActionCompletion,
     ActionOutcome,
     CollectionCoverage,
     CoverageDeclaration,
+    IntentScopeState,
     ObservationBatch,
     PresenceState,
     RefreshCoverage,
@@ -26,6 +28,11 @@ from async_api_view.contracts import (
 from async_api_view.storage import SQLiteStore
 
 NOW = datetime(2026, 8, 24, 12, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _fixed_store_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sqlite_storage, "_now", lambda: NOW)
 
 
 def run(awaitable):
@@ -177,6 +184,57 @@ def test_lease_recovery_revalidates_deferred_scope_and_policy_precedence(tmp_pat
     )
     assert recovered is not None and recovered.state.value == "admitted"
     assert store.list_intent_scopes(receipt.intent_id)[0].state.value == "admitted"
+
+
+def test_expired_coordinator_claim_cannot_dispose_or_admit(tmp_path, monkeypatch) -> None:
+    store = SQLiteStore(tmp_path / "expired-claim.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    receipt = run(store.submit_refresh(_intent(scope, NOW)))
+    work = run(
+        store.lease_next_intent_scope(
+            worker_id="expired",
+            now=NOW,
+            lease_duration=timedelta(milliseconds=1),
+        )
+    )
+    assert work is not None
+    monkeypatch.setattr(sqlite_storage, "_now", lambda: work.leased_until)
+
+    for state in (
+        IntentScopeState.SATISFIED,
+        IntentScopeState.DEFERRED,
+        IntentScopeState.REJECTED,
+        IntentScopeState.EXPIRED,
+    ):
+        with pytest.raises(ValueError, match="lease is no longer current"):
+            store.set_intent_scope_disposition(
+                intent_scope_id=work.intent_scope_id,
+                lease_id=work.lease_id,
+                state=state,
+                reason="expired_claim",
+            )
+
+    selected = store.select_capability(
+        system_id=scope.system_id,
+        target_kind=scope.target.kind,
+        facet=scope.facet,
+        capability_key=scope.capability_key,
+    )
+    assert selected is not None
+    with pytest.raises(ValueError, match="lease is no longer current"):
+        store.admit_or_coalesce(
+            work=work,
+            binding=selected[0],
+            capability=selected[1],
+            now=NOW,
+        )
+
+    persisted = store.list_intent_scopes(receipt.intent_id)[0]
+    assert persisted.state is IntentScopeState.LEASED
+    assert store.list_actions() == ()
 
 
 @pytest.mark.parametrize(

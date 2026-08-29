@@ -1901,13 +1901,15 @@ class SQLiteStore:
     def _claim_is_current(
         self, connection: sqlite3.Connection, *, intent_scope_id: str, lease_id: str
     ) -> bool:
+        commit_time = _utc_text(_now())
         return (
             connection.execute(
                 """
                 SELECT 1 FROM refresh_intent_scopes
                 WHERE intent_scope_id = ? AND state = 'leased' AND lease_id = ?
+                  AND leased_until > ?
                 """,
-                (intent_scope_id, lease_id),
+                (intent_scope_id, lease_id, commit_time),
             ).fetchone()
             is not None
         )

@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 07:32 ET
+Updated: 2026-08-29 07:40 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 320 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
+- Latest checks: 321 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: the high stale-worker ingestion race and protected-web surface are independently clear; three medium storage findings remain queued while the release-engineering audit continues.
+- Active review round: coordinator claim-expiry fencing is independently clear; membership-boundary and migration-identity fixes plus five release-hardening findings remain queued.
 - Next progress report due: 2026-08-29 08:05 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 06:43 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 07:43 ET.
+- [ ] Tend Murmuration about hourly; the 07:40 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 08:40 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -89,8 +89,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Distinguish current manual refresh from planned Phase 4 automation throughout operator and architecture documentation.
 - [x] Close independent review of action-linked ingestion lease fencing.
 - [ ] Persist authoritative complete-membership boundaries against delayed older positive edges.
-- [ ] Expire coordinator claims at disposition/admission commit time.
+- [x] Close independent review of coordinator claim expiry fencing.
 - [ ] Reject incompatible non-Rookery schemas before mutating the migration ledger.
+- [ ] Verify every packaged runtime asset and smoke-test the installed wheel.
+- [ ] Constrain isolated build dependencies for reproducible release archives.
+- [ ] Upgrade pytest past its reported moderate advisory and audit dependencies in CI.
+- [ ] Complete a documented first-run path for standalone wheel installation.
+- [ ] Pin CI actions to immutable reviewed commit SHAs.
 
 ## Evidence and decisions
 
@@ -102,6 +107,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - First-time action-linked ingestion now atomically requires the matching unexpired `running` lease; a reassignment regression rejects the expired worker, accepts the current worker, and preserves exact replay idempotency.
 - Ten independent two-connection races confirmed stale ingestion cannot reserve a batch ID and the replacement lease can accept that same deterministic batch; exact-expiry and legacy replay probes also pass.
 - A fresh protected-web audit cleared Host-before-bootstrap ordering, strict Origin checks, static confinement, and scoped security lint with 115 exact-HEAD tests.
+- Coordinator dispositions and action attachment now compare `leased_until` to fresh store time inside their immediate transaction; exact-expiry regression covers all terminal/deferred outcomes and action admission rollback.
+- The post-fix coordinator review cleared new/existing/racing action attachment, all dispositions, recovery, strict expiry, rollback, and deterministic clock isolation with no remaining finding.
+- The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
+- Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
 - A live Databricks smoke test remains out of scope because selecting a profile would require credentials or user input.
 - The production composition now passes an explicit host allowlist, so the test-only `testserver` host is not accepted by the real runtime.
