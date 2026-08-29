@@ -19,8 +19,10 @@ from async_api_view.contracts import (
     FieldCoverage,
     ObjectLocator,
     ObservationBatch,
+    PresenceState,
     RefreshCoverage,
     RefreshScope,
+    RemoteObject,
     TargetKind,
     TargetRef,
     UpdateMode,
@@ -256,6 +258,34 @@ def test_restart_read_helpers_expose_scopes_and_catalogs_root_without_secrets(tm
         scopes = reopened.list_configured_scopes()
         assert {scope.display_name for scope in scopes} == {"/Shared", "Unity Catalog catalogs"}
         assert reopened.get_object_sync(seeded.unity_catalog_root_object_id) is not None
+
+
+def test_object_page_search_escapes_wildcards_and_bounds_results(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "state.sqlite3") as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/", now=NOW
+        )
+        for index, name in enumerate(("100% real", "under_score", "ordinary")):
+            store.upsert_object(
+                RemoteObject(
+                    object_id=uuid4(),
+                    system_id=seeded.system.system_id,
+                    object_type="file",
+                    object_type_version="1",
+                    source_kind="databricks.workspace.file",
+                    external_key=f"workspace-id:{index}",
+                    display_name=name,
+                    presence=PresenceState.PRESENT,
+                    first_seen_at=NOW,
+                    last_seen_at=NOW,
+                )
+            )
+
+        assert store.count_objects(query="%") == 1
+        assert [
+            item.display_name for item in store.list_objects_page(offset=0, limit=10, query="_")
+        ] == ["under_score"]
+        assert len(store.list_objects_page(offset=1, limit=2)) == 2
 
 
 def test_invalid_bootstrap_capability_does_not_leave_partial_state(tmp_path) -> None:

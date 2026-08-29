@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
 from async_api_view.adapters.databricks import CliExecution, CliInvocation, CliRunner
 from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
-from async_api_view.contracts import RemoteObject
+from async_api_view.contracts import PresenceState, RemoteObject
 from async_api_view.storage import StoredAction
-from async_api_view.web import RefreshRequest
+from async_api_view.web import DashboardQuery, RefreshRequest
 
 
 @pytest.fixture
@@ -217,24 +218,86 @@ async def test_dashboard_reads_action_and_object_snapshots_once(
     assert await runtime.worker.run_once()
 
     calls = {"actions": 0, "objects": 0}
-    list_actions = runtime.store.list_actions
-    list_objects = runtime.store.list_objects
+    list_actions = runtime.store.list_dashboard_actions
+    list_objects = runtime.store.list_objects_page
 
-    def counted_actions(*, system_id: str | None = None) -> tuple[StoredAction, ...]:
+    def counted_actions() -> tuple[StoredAction, ...]:
         calls["actions"] += 1
-        return list_actions(system_id=system_id)
+        return list_actions()
 
-    def counted_objects(*, system_id: str | None = None) -> tuple[RemoteObject, ...]:
+    def counted_objects(*, offset: int, limit: int, query: str = "") -> tuple[RemoteObject, ...]:
         calls["objects"] += 1
-        return list_objects(system_id=system_id)
+        return list_objects(offset=offset, limit=limit, query=query)
 
-    monkeypatch.setattr(runtime.store, "list_actions", counted_actions)
-    monkeypatch.setattr(runtime.store, "list_objects", counted_objects)
+    monkeypatch.setattr(runtime.store, "list_dashboard_actions", counted_actions)
+    monkeypatch.setattr(runtime.store, "list_objects_page", counted_objects)
 
     rendered = await runtime.backend.dashboard()
 
     assert rendered.objects
     assert calls == {"actions": 1, "objects": 1}
+    runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_dashboard_paginates_and_filters_large_cached_inventory(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    observed_at = datetime(2026, 8, 28, tzinfo=UTC)
+    system_id = runtime.store.list_systems()[0].system_id
+    for index in range(500):
+        runtime.store.upsert_object(
+            RemoteObject(
+                object_id=uuid4(),
+                system_id=system_id,
+                object_type="file",
+                object_type_version="1",
+                source_kind="databricks.workspace.file",
+                external_key=f"workspace-id:{index}",
+                display_name=f"object-{index:03d}",
+                presence=PresenceState.PRESENT,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+            )
+        )
+    runtime.worker_available = True
+
+    selects: list[str] = []
+    runtime.store._connection.set_trace_callback(
+        lambda statement: (
+            selects.append(statement)
+            if statement.lstrip().upper().startswith(("SELECT", "WITH"))
+            else None
+        )
+    )
+    first = await runtime.backend.dashboard(DashboardQuery())
+    runtime.store._connection.set_trace_callback(None)
+    last = await runtime.backend.dashboard(DashboardQuery(object_page=11))
+    filtered = await runtime.backend.dashboard(DashboardQuery(object_query="object-499"))
+
+    assert first.object_total == 502
+    assert len(first.objects) == 50
+    assert first.object_page_count == 11
+    assert first.previous_page_url is None
+    assert first.next_page_url == "/?page=2"
+    assert len(selects) <= 70
+    assert len(last.objects) == 2
+    assert last.object_page_start == 501
+    assert last.object_page_end == 502
+    assert last.next_page_url is None
+    assert filtered.object_total == 1
+    assert [item.name for item in filtered.objects] == ["object-499"]
+    object_refresh = next(
+        option for option in filtered.refresh_options if option.target_kind == "object"
+    )
+    assert await runtime.backend.is_refresh_registered(
+        RefreshRequest(
+            system_id=object_refresh.system_id,
+            target_kind=object_refresh.target_kind,
+            target_id=object_refresh.target_id,
+            capability_key=object_refresh.capability_key,
+            facet=object_refresh.facet,
+        )
+    )
     runtime.store.close()
 
 

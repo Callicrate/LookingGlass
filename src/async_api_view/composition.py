@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlencode
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import FastAPI
@@ -42,6 +43,7 @@ from async_api_view.ingestion import SQLiteObservationIngestor
 from async_api_view.storage import SQLiteStore, StoredAction, SystemRecord
 from async_api_view.web import (
     ActivityView,
+    DashboardQuery,
     DashboardView,
     FacetView,
     IntentScopeView,
@@ -242,17 +244,25 @@ class SQLiteWebBackend:
     ) -> tuple[RefreshOption, ...]:
         options: list[RefreshOption] = []
         worker_available, worker_error = self._worker_status()
+        bindings_by_system = {
+            system.system_id: tuple(
+                binding
+                for binding in self._store.list_connection_bindings(system_id=system.system_id)
+                if binding.enabled
+            )
+            for system in systems
+            if system.enabled
+        }
         capabilities_by_system = {
             system.system_id: {
                 capability.capability_key: capability
                 for capability in self._store.list_capability_bindings(system_id=system.system_id)
                 if capability.enabled
+                and capability.connection_binding_id
+                in {binding.binding_id for binding in bindings_by_system.get(system.system_id, ())}
             }
             for system in systems
-        }
-        bindings_by_system = {
-            system.system_id: self._store.list_connection_bindings(system_id=system.system_id)
-            for system in systems
+            if system.enabled
         }
 
         for configured in self._store.list_configured_scopes():
@@ -372,11 +382,32 @@ class SQLiteWebBackend:
             )
         )
 
-    async def dashboard(self) -> DashboardView:
+    @staticmethod
+    def _page_url(query: DashboardQuery, page: int) -> str:
+        parameters: dict[str, str | int] = {}
+        if query.object_query:
+            parameters["q"] = query.object_query
+        if page > 1:
+            parameters["page"] = page
+        encoded = urlencode(parameters)
+        return f"/?{encoded}" if encoded else "/"
+
+    async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView:
+        query = query or DashboardQuery()
         worker_available, worker_error = self._worker_status()
         systems = self._store.list_systems()
-        objects = self._store.list_objects()
-        actions = self._store.list_actions()
+        object_total = self._store.count_objects(query=query.object_query)
+        object_page_count = max(
+            1, (object_total + query.object_page_size - 1) // query.object_page_size
+        )
+        object_page = min(query.object_page, object_page_count)
+        object_offset = (object_page - 1) * query.object_page_size
+        objects = self._store.list_objects_page(
+            offset=object_offset,
+            limit=query.object_page_size,
+            query=query.object_query,
+        )
+        actions = self._store.list_dashboard_actions()
         actions_by_system: dict[str, list[StoredAction]] = {
             system.system_id: [] for system in systems
         }
@@ -472,11 +503,28 @@ class SQLiteWebBackend:
             loaded_at=datetime.now(UTC),
             disconnected=not worker_available,
             error=worker_error,
+            object_total=object_total,
+            object_page=object_page,
+            object_page_count=object_page_count,
+            object_page_start=object_offset + 1 if objects else 0,
+            object_page_end=object_offset + len(objects),
+            object_query=query.object_query,
+            previous_page_url=(self._page_url(query, object_page - 1) if object_page > 1 else None),
+            next_page_url=(
+                self._page_url(query, object_page + 1) if object_page < object_page_count else None
+            ),
         )
 
-    async def submit_refresh(self, request: RefreshRequest) -> str:
-        options = await self.dashboard()
-        if not any(
+    async def is_refresh_registered(self, request: RefreshRequest) -> bool:
+        systems = self._store.list_systems()
+        objects: tuple[RemoteObject, ...] = ()
+        if request.target_kind == TargetKind.OBJECT.value:
+            remote_object = self._store.get_object_sync(request.target_id)
+            if remote_object is None:
+                return False
+            objects = (remote_object,)
+        options = self._refresh_options(systems=systems, objects=objects)
+        return any(
             option.enabled
             and (
                 option.system_id,
@@ -492,8 +540,11 @@ class SQLiteWebBackend:
                 request.capability_key,
                 request.facet,
             )
-            for option in options.refresh_options
-        ):
+            for option in options
+        )
+
+    async def submit_refresh(self, request: RefreshRequest) -> str:
+        if not await self.is_refresh_registered(request):
             raise ValueError("refresh selection is not registered")
         target_kind = TargetKind(request.target_kind)
         if target_kind is TargetKind.CONFIGURED_SCOPE:

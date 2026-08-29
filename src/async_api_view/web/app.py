@@ -15,9 +15,9 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .models import (
+    DashboardQuery,
     DashboardView,
     IntentView,
-    RefreshOption,
     RefreshRequest,
     UnavailableBackend,
     WebBackend,
@@ -89,25 +89,19 @@ def _same_origin(request: Request) -> bool:
     return fetch_site == "same-origin"
 
 
-def _option_matches(option: RefreshOption, submitted: RefreshRequest) -> bool:
-    return (
-        option.enabled
-        and option.target_kind in UI_TARGET_KINDS
-        and (
-            option.system_id,
-            option.target_kind,
-            option.target_id,
-            option.capability_key,
-            option.facet,
-        )
-        == (
-            submitted.system_id,
-            submitted.target_kind,
-            submitted.target_id,
-            submitted.capability_key,
-            submitted.facet,
-        )
-    )
+def _dashboard_query(request: Request) -> DashboardQuery:
+    values = list(request.query_params.multi_items())
+    if any(name not in {"q", "page"} for name, _value in values):
+        raise HTTPException(status_code=400, detail="Unexpected dashboard query parameter")
+    if len({name for name, _value in values}) != len(values):
+        raise HTTPException(status_code=400, detail="Duplicate dashboard query parameter")
+    query = request.query_params.get("q", "")
+    page_text = request.query_params.get("page", "1")
+    try:
+        page = int(page_text)
+        return DashboardQuery(object_query=query, object_page=page)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid dashboard query") from exc
 
 
 async def _parse_refresh_form(request: Request, csrf_token: str) -> RefreshRequest:
@@ -203,8 +197,9 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request) -> HTMLResponse:
+        query = _dashboard_query(request)
         try:
-            view = await app.state.backend.dashboard()
+            view = await app.state.backend.dashboard(query)
         except Exception:
             view = DashboardView(
                 disconnected=True,
@@ -223,12 +218,12 @@ def create_app(
     async def refresh(request: Request) -> Response:
         submitted = await _parse_refresh_form(request, app.state.csrf_token)
         try:
-            dashboard_view = await app.state.backend.dashboard()
+            registered = await app.state.backend.is_refresh_registered(submitted)
         except Exception as exc:
             raise HTTPException(
                 status_code=503, detail="Local state services are unavailable"
             ) from exc
-        if not any(_option_matches(option, submitted) for option in dashboard_view.refresh_options):
+        if not registered:
             raise HTTPException(status_code=400, detail="Refresh selection is not registered")
         try:
             result = await app.state.backend.submit_refresh(submitted)

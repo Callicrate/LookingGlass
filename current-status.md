@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 20:57 ET
+Updated: 2026-08-28 21:07 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 155 tests passed warning-free; Ruff format and lint passed; lock and package build remain green from the preceding batch.
+- Latest checks: 165 tests passed warning-free; Ruff format and lint passed; lock and package build remain green.
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
-- Version control: local `main` history has six coherent commits ending at `9d08703`; the next reviewed runtime commit is ready.
+- Version control: local `main` history has seven coherent commits ending at `9911504`; the next reviewed dashboard commit is ready.
 - Active review round: configuration desired-state reconciliation, runtime supervision, bounded dashboard reads, and migration concurrency.
-- Next progress report due: 2026-08-28 21:49 ET.
+- Next progress report due: 2026-08-28 22:07 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -30,7 +30,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Supervise and recover transient worker startup, coordinator, and worker-loop failures.
 - [x] Reconcile configuration identity and refresh authority across restarts.
 - [x] Eliminate repeated full action/object reads from per-facet dashboard rendering.
-- [ ] Bound dashboard reads for large object and action histories.
+- [x] Bound dashboard reads for large object and action histories.
 - [x] Serialize concurrent migration decisions safely.
 - [ ] Reconcile documentation claims with the current implemented surface.
 - [ ] Independently review and verify the next change set before committing.
@@ -51,6 +51,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Eight concurrent store constructors now complete the migration ledger safely in the regression test.
 - Runtime retries use a 0.1 to 30 second bounded exponential backoff, remain wakeable, and emit one event per uninterrupted outage.
 - Successful component recovery clears the dashboard error automatically; the independent follow-up review confirmed the retry-floor blocker is resolved.
+- Dashboard inventory now uses 50-object pages, 128-character literal filters, a one-million-page input ceiling, and active-plus-latest action summaries.
+- A 502-object regression case keeps the first-page SELECT budget at 70 or fewer while later pages and filtered objects remain refreshable.
+- Desktop and 390px mobile QA passed with no console errors; Lighthouse accessibility, best practices, and agentic browsing scored 100 on both device profiles.
 
 ## Risks / watch list
 

@@ -4,10 +4,12 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+import pytest
 from fastapi.testclient import TestClient
 
 from async_api_view.web import (
     ActivityView,
+    DashboardQuery,
     DashboardView,
     FacetView,
     IntentScopeView,
@@ -47,11 +49,35 @@ class FakeBackend:
     dashboard_error: Exception | None = None
     intent_error: Exception | None = None
     submitted: list[RefreshRequest] = field(default_factory=list)
+    dashboard_queries: list[DashboardQuery] = field(default_factory=list)
 
-    async def dashboard(self) -> DashboardView:
+    async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView:
         if self.dashboard_error:
             raise self.dashboard_error
+        self.dashboard_queries.append(query or DashboardQuery())
         return self.dashboard_view
+
+    async def is_refresh_registered(self, request: RefreshRequest) -> bool:
+        if self.dashboard_error:
+            raise self.dashboard_error
+        return any(
+            option.enabled
+            and (
+                option.system_id,
+                option.target_kind,
+                option.target_id,
+                option.capability_key,
+                option.facet,
+            )
+            == (
+                request.system_id,
+                request.target_kind,
+                request.target_id,
+                request.capability_key,
+                request.facet,
+            )
+            for option in self.dashboard_view.refresh_options
+        )
 
     async def submit_refresh(self, request: RefreshRequest) -> str:
         self.submitted.append(request)
@@ -131,6 +157,9 @@ def ready_dashboard(*, hostile_name: str = "Workspace root") -> DashboardView:
             ),
         ),
         refresh_options=(OPTION, OBJECT_OPTION),
+        object_total=1,
+        object_page_start=1,
+        object_page_end=1,
     )
 
 
@@ -154,6 +183,36 @@ def test_ready_dashboard_keeps_stale_cached_facts_and_activity_visible() -> None
     assert "Request refresh" in response.text
     assert "Raw content is not displayed" in response.text
     assert "raw secret file contents" not in response.text
+
+
+def test_dashboard_passes_bounded_filter_and_page_to_backend() -> None:
+    backend = FakeBackend(dashboard_view=ready_dashboard())
+
+    response = client_for(backend).get("/?q=folder&page=2")
+
+    assert response.status_code == 200
+    assert backend.dashboard_queries[-1] == DashboardQuery(object_query="folder", object_page=2)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?page=0",
+        "?page=1000001",
+        f"?page={'9' * 1000}",
+        "?page=nan",
+        "?page=1&page=2",
+        "?unknown=value",
+        f"?q={'x' * 129}",
+    ],
+)
+def test_dashboard_rejects_invalid_query_contract(query: str) -> None:
+    backend = FakeBackend()
+
+    response = client_for(backend).get(f"/{query}")
+
+    assert response.status_code == 400
+    assert backend.dashboard_queries == []
 
 
 def test_dashboard_recovers_to_disconnected_error_without_leaking_exception() -> None:

@@ -7,6 +7,26 @@ from datetime import datetime
 from typing import Literal, Protocol
 
 MAX_DISPLAY_LENGTH = 512
+DEFAULT_OBJECT_PAGE_SIZE = 50
+MAX_OBJECT_QUERY_LENGTH = 128
+MAX_OBJECT_PAGE = 1_000_000
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardQuery:
+    object_query: str = ""
+    object_page: int = 1
+    object_page_size: int = DEFAULT_OBJECT_PAGE_SIZE
+
+    def __post_init__(self) -> None:
+        if len(self.object_query) > MAX_OBJECT_QUERY_LENGTH or any(
+            ord(char) < 32 for char in self.object_query
+        ):
+            raise ValueError("object query is invalid")
+        if not 1 <= self.object_page <= MAX_OBJECT_PAGE:
+            raise ValueError(f"object page must be between 1 and {MAX_OBJECT_PAGE}")
+        if not 1 <= self.object_page_size <= 100:
+            raise ValueError("object page size must be between 1 and 100")
 
 
 def display_text(value: object | None, *, limit: int = MAX_DISPLAY_LENGTH) -> str:
@@ -105,6 +125,14 @@ class DashboardView:
     loaded_at: datetime | str | None = None
     disconnected: bool = False
     error: str | None = None
+    object_total: int = 0
+    object_page: int = 1
+    object_page_count: int = 1
+    object_page_start: int = 0
+    object_page_end: int = 0
+    object_query: str = ""
+    previous_page_url: str | None = None
+    next_page_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +163,9 @@ class IntentView:
 class WebBackend(Protocol):
     """Narrow application-facing boundary used by the presentation layer."""
 
-    async def dashboard(self) -> DashboardView: ...
+    async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView: ...
+
+    async def is_refresh_registered(self, request: RefreshRequest) -> bool: ...
 
     async def submit_refresh(self, request: RefreshRequest) -> str: ...
 
@@ -152,8 +182,13 @@ class UnavailableBackend:
     def __post_init__(self) -> None:
         self._dashboard = DashboardView(disconnected=True, error=self.message)
 
-    async def dashboard(self) -> DashboardView:
+    async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView:
+        del query
         return self._dashboard
+
+    async def is_refresh_registered(self, request: RefreshRequest) -> bool:
+        del request
+        return False
 
     async def submit_refresh(self, request: RefreshRequest) -> str:
         del request

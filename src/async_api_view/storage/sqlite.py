@@ -13,6 +13,7 @@ import json
 import re
 import sqlite3
 import threading
+import time
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -139,6 +140,14 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _object_search_pattern(query: str) -> str | None:
+    if not query:
+        return None
+    require_text(query, "object_query", max_length=128)
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def _json_text(value: object, *, field_name: str) -> str:
     validated = validate_json(value, field_name)
     encoded = json.dumps(validated, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -241,16 +250,26 @@ class SQLiteStore:
         )
         self._connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
-        with self._lock:
-            self._connection.execute("PRAGMA foreign_keys = ON")
-            self._connection.execute("PRAGMA busy_timeout = 5000")
-            self._connection.execute("PRAGMA journal_mode = WAL")
-            self._connection.execute("PRAGMA synchronous = FULL")
         try:
+            with self._lock:
+                self._connection.execute("PRAGMA foreign_keys = ON")
+                self._connection.execute("PRAGMA busy_timeout = 5000")
+                self._enable_wal_mode()
+                self._connection.execute("PRAGMA synchronous = FULL")
             self._migrate()
         except BaseException:
             self._connection.close()
             raise
+
+    def _enable_wal_mode(self) -> None:
+        for attempt in range(8):
+            try:
+                self._connection.execute("PRAGMA journal_mode = WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == 7:
+                    raise
+                time.sleep(min(0.25, 0.01 * (2**attempt)))
 
     def close(self) -> None:
         with self._lock:
@@ -852,6 +871,49 @@ class SQLiteStore:
                 "SELECT * FROM remote_objects WHERE system_id = ? ORDER BY display_name, object_id"
             )
             parameters = (require_uuid(system_id, "system_id"),)
+        with self._lock:
+            rows = self._connection.execute(statement, parameters).fetchall()
+        return tuple(self._object_from_row(row) for row in rows)
+
+    def count_objects(self, *, query: str = "") -> int:
+        pattern = _object_search_pattern(query)
+        statement = "SELECT COUNT(*) FROM remote_objects"
+        parameters: tuple[object, ...] = ()
+        if pattern is not None:
+            statement += (
+                " WHERE display_name LIKE ? ESCAPE '\\'"
+                " OR object_type LIKE ? ESCAPE '\\'"
+                " OR source_kind LIKE ? ESCAPE '\\'"
+            )
+            parameters = (pattern, pattern, pattern)
+        with self._lock:
+            row = self._connection.execute(statement, parameters).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def list_objects_page(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        query: str = "",
+    ) -> tuple[RemoteObject, ...]:
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("object offset must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("object limit must be between 1 and 100")
+        pattern = _object_search_pattern(query)
+        statement = "SELECT * FROM remote_objects"
+        parameters: tuple[object, ...]
+        if pattern is None:
+            parameters = (limit, offset)
+        else:
+            statement += (
+                " WHERE display_name LIKE ? ESCAPE '\\'"
+                " OR object_type LIKE ? ESCAPE '\\'"
+                " OR source_kind LIKE ? ESCAPE '\\'"
+            )
+            parameters = (pattern, pattern, pattern, limit, offset)
+        statement += " ORDER BY display_name, object_id LIMIT ? OFFSET ?"
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._object_from_row(row) for row in rows)
@@ -1574,6 +1636,41 @@ class SQLiteStore:
             parameters = (require_uuid(system_id, "system_id"),)
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
+        return tuple(self._stored_action_from_row(row) for row in rows)
+
+    def list_dashboard_actions(self) -> tuple[StoredAction, ...]:
+        """Return active actions plus the latest recorded action for each system."""
+        active_states = (
+            ActionState.READY.value,
+            ActionState.LEASED.value,
+            ActionState.RUNNING.value,
+            ActionState.RETRY_WAIT.value,
+        )
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                WITH ranked AS (
+                    SELECT
+                        action_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY system_id
+                            ORDER BY record_created_at DESC, action_id
+                        ) AS recency_rank
+                    FROM adapter_actions
+                ),
+                selected AS (
+                    SELECT action_id FROM ranked WHERE recency_rank = 1
+                    UNION
+                    SELECT action_id FROM adapter_actions
+                    WHERE state IN (?, ?, ?, ?)
+                )
+                SELECT actions.*
+                FROM adapter_actions AS actions
+                INNER JOIN selected ON selected.action_id = actions.action_id
+                ORDER BY actions.record_created_at DESC, actions.action_id
+                """,
+                active_states,
+            ).fetchall()
         return tuple(self._stored_action_from_row(row) for row in rows)
 
     def _insert_action(

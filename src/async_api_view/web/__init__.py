@@ -3,6 +3,7 @@
 from .app import create_app
 from .models import (
     ActivityView,
+    DashboardQuery,
     DashboardView,
     FacetView,
     IntentScopeView,
@@ -17,6 +18,7 @@ from .models import (
 
 __all__ = [
     "ActivityView",
+    "DashboardQuery",
     "DashboardView",
     "FacetView",
     "IntentScopeView",

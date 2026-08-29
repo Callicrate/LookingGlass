@@ -17,7 +17,7 @@ The first adapter uses the existing Databricks CLI.
 The current runnable slice can:
 
 - register a Databricks workspace by named CLI profile;
-- show cached Workspace and Unity Catalog metadata in a loopback dashboard;
+- filter and page through cached Workspace and Unity Catalog metadata in a loopback dashboard;
 - submit a generic refresh request;
 - validate, queue, and execute it through the Databricks worker;
 - ingest normalized observations into SQLite;

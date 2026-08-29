@@ -1108,6 +1108,9 @@ The first useful client SHOULD support:
 - redacted failure detail and next eligible or retry time;
 - a queryable history of alertable operational failures, even if active alert presentation is implemented later.
 
+Object inventory views MUST use bounded pages and keep every cached object reachable through pagination or filtering.
+Refresh controls for objects SHOULD follow the displayed page; configured-scope refreshes remain visible independently.
+
 ### Freshness presentation
 
 The client MUST distinguish:
@@ -1486,6 +1489,7 @@ Clock skew between local processes must remain within a documented operational t
 No hard throughput or latency SLO is specified because object counts, system counts, and desired freshness are unknown.
 The initial design SHOULD optimize for correctness and inspectability at single-user local scale.
 The contracts MUST avoid requiring full object scans for every UI read, but a simple indexed scheduler scan is acceptable until measured otherwise.
+The current web view uses 50-object pages, bounded query text, active-plus-latest action summaries, and literal wildcard escaping for filters.
 
 ## Testing and acceptance criteria
 

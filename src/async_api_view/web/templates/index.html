@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Local cached view of remote system state and refresh activity.">
   <title>Remote state · Async API View</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
@@ -30,8 +31,8 @@
       </div>
       <dl class="snapshot-stats">
         <div><dt>Systems</dt><dd>{{ view.systems|length }}</dd></div>
-        <div><dt>Objects</dt><dd>{{ view.objects|length }}</dd></div>
-        <div><dt>Refreshes</dt><dd>{{ view.refresh_options|length }}</dd></div>
+        <div><dt>Objects</dt><dd>{{ view.object_total }}</dd></div>
+        <div><dt>Actions</dt><dd>{{ view.refresh_options|length }}</dd></div>
       </dl>
     </section>
     {% if view.error %}
@@ -48,7 +49,7 @@
           <p class="eyebrow">Configuration</p>
           <h2 id="systems-heading">Systems and scopes</h2>
         </div>
-        <span class="count">{{ view.systems|length }} configured</span>
+        <span class="count">{{ view.systems|length }} known</span>
       </div>
       {% if view.systems %}
       <div class="system-grid">
@@ -90,8 +91,16 @@
           <p class="eyebrow">Canonical cache</p>
           <h2 id="objects-heading">Folders, objects, and facets</h2>
         </div>
-        <span class="count">{{ view.objects|length }} objects</span>
+        <span class="count">{% if view.object_total %}{{ view.object_page_start }}-{{ view.object_page_end }} of {{ view.object_total }}{% else %}0{% endif %} objects</span>
       </div>
+      <form class="inventory-toolbar" method="get" action="/" role="search">
+        <label for="object-filter">Filter cached objects</label>
+        <div class="inventory-search">
+          <input id="object-filter" type="search" name="q" value="{{ view.object_query|display }}" maxlength="128" placeholder="Name or type">
+          <button type="submit">Filter</button>
+          {% if view.object_query %}<a href="/">Clear</a>{% endif %}
+        </div>
+      </form>
       {% if view.objects %}
       <div class="table-scroll" tabindex="0" aria-label="Scrollable cached object table">
         <table>
@@ -123,10 +132,17 @@
           </tbody>
         </table>
       </div>
+      {% if view.object_page_count > 1 %}
+      <nav class="pagination" aria-label="Cached object pages">
+        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← Previous</a>{% else %}<span></span>{% endif %}
+        <span>Page {{ view.object_page }} of {{ view.object_page_count }}</span>
+        {% if view.next_page_url %}<a href="{{ view.next_page_url }}">Next →</a>{% else %}<span></span>{% endif %}
+      </nav>
+      {% endif %}
       {% else %}
       <div class="empty-state">
-        <strong>No cached objects</strong>
-        <p>Registered refreshes remain available below. Empty cache does not imply an empty remote system.</p>
+        <strong>{% if view.object_query %}No matching cached objects{% else %}No cached objects{% endif %}</strong>
+        <p>{% if view.object_query %}Try a different name or type, or clear the filter.{% else %}Registered refreshes remain available below. Empty cache does not imply an empty remote system.{% endif %}</p>
       </div>
       {% endif %}
     </section>
@@ -135,7 +151,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">Ordinary refresh path</p>
-          <h2 id="refresh-heading">Registered refreshes</h2>
+          <h2 id="refresh-heading">Available refreshes</h2>
         </div>
       </div>
       {% if view.refresh_options %}
