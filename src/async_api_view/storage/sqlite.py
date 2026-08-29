@@ -1460,15 +1460,45 @@ class SQLiteStore:
                 ),
             )
             if changed:
-                connection.execute(
-                    """
-                    UPDATE refresh_intent_scopes
-                    SET state = 'queued', disposition_reason = 'policy_changed',
-                        eligible_at = NULL, lease_id = NULL, lease_worker_id = NULL,
-                        leased_until = NULL
-                    WHERE state = 'deferred'
-                    """
-                )
+                parameters = (override.facet, override.facet)
+                if override.level == "system":
+                    connection.execute(
+                        """
+                        UPDATE refresh_intent_scopes
+                        SET state = 'queued', disposition_reason = 'policy_changed',
+                            eligible_at = NULL, lease_id = NULL, lease_worker_id = NULL,
+                            leased_until = NULL
+                        WHERE state = 'deferred' AND system_id = ?
+                          AND (? IS NULL OR facet = ?)
+                        """,
+                        (override.scope_id, *parameters),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE refresh_intent_scopes
+                        SET state = 'queued', disposition_reason = 'policy_changed',
+                            eligible_at = NULL, lease_id = NULL, lease_worker_id = NULL,
+                            leased_until = NULL
+                        WHERE state = 'deferred' AND target_kind = 'object' AND target_id = ?
+                          AND (? IS NULL OR facet = ?)
+                        """,
+                        (override.scope_id, *parameters),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE refresh_intent_scopes
+                        SET state = 'queued', disposition_reason = 'policy_changed',
+                            eligible_at = NULL, lease_id = NULL, lease_worker_id = NULL,
+                            leased_until = NULL
+                        WHERE state = 'deferred' AND target_kind = 'configured_scope'
+                          AND target_id IN (
+                              SELECT scope_id FROM configured_scopes WHERE object_id = ?
+                          )
+                          AND (? IS NULL OR facet = ?)
+                        """,
+                        (override.scope_id, *parameters),
+                    )
 
     def _overrides_for(
         self, *, object_id: str, system_id: str

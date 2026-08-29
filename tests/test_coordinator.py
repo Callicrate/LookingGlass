@@ -309,6 +309,96 @@ def test_refresh_override_change_wakes_deferred_scope_for_policy_recheck(tmp_pat
     assert admitted.action_id != initial.action_id
 
 
+def test_refresh_override_wakes_only_matching_deferred_scopes(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "scoped-policy-change.sqlite3")
+    first = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="first", profile="FIRST", workspace_root="/First", now=NOW
+    )
+    second = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="second", profile="SECOND", workspace_root="/Second", now=NOW
+    )
+    first_membership = _scope(first.system.system_id, first.workspace_root_scope.scope_id)
+    first_metadata = RefreshScope(
+        system_id=first.system.system_id,
+        target=TargetRef(TargetKind.OBJECT, first.workspace_root_object_id),
+        object_type="folder",
+        facet="metadata",
+    )
+    second_membership = _scope(second.system.system_id, second.workspace_root_scope.scope_id)
+    receipts = tuple(
+        run(store.submit_refresh(_intent(scope, NOW)))
+        for scope in (first_membership, first_metadata, second_membership)
+    )
+    eligible_at = NOW + timedelta(days=7)
+    store._connection.execute(
+        """
+        UPDATE refresh_intent_scopes
+        SET state = 'deferred', disposition_reason = 'minimum_interval_not_elapsed',
+            eligible_at = ?
+        """,
+        (eligible_at.isoformat().replace("+00:00", "Z"),),
+    )
+    system_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT intent_scope_id FROM refresh_intent_scopes
+        WHERE state = 'deferred' AND system_id = ? AND facet = ?
+        """,
+        (first.system.system_id, "metadata"),
+    ).fetchall()
+    object_target_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT intent_scope_id FROM refresh_intent_scopes
+        WHERE state = 'deferred' AND target_kind = 'object' AND target_id = ? AND facet = ?
+        """,
+        (first.workspace_root_object_id, "membership"),
+    ).fetchall()
+    configured_target_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT intent_scope_id FROM refresh_intent_scopes
+        WHERE state = 'deferred' AND target_kind = 'configured_scope'
+          AND target_id IN (
+              SELECT scope_id FROM configured_scopes WHERE object_id = ?
+          )
+          AND facet = ?
+        """,
+        (first.workspace_root_object_id, "membership"),
+    ).fetchall()
+    assert any("ix_intent_scopes_deferred_system_facet" in row[3] for row in system_plan)
+    assert any("ix_intent_scopes_deferred_target_facet" in row[3] for row in object_target_plan)
+    assert any("ix_intent_scopes_deferred_target_facet" in row[3] for row in configured_target_plan)
+    assert any("ix_configured_scopes_object" in row[3] for row in configured_target_plan)
+
+    store.set_refresh_override(
+        RefreshIntervalOverride(
+            "object", first.workspace_root_object_id, timedelta(hours=1), "membership"
+        ),
+        now=NOW,
+    )
+
+    states = [store.list_intent_scopes(receipt.intent_id)[0] for receipt in receipts]
+    assert states[0].state.value == "queued"
+    assert states[0].eligible_at is None
+    assert states[1].state.value == "deferred"
+    assert states[1].eligible_at == eligible_at
+    assert states[2].state.value == "deferred"
+    assert states[2].eligible_at == eligible_at
+
+    store.set_refresh_override(
+        RefreshIntervalOverride("system", first.system.system_id, timedelta(hours=2), "metadata"),
+        now=NOW,
+    )
+
+    metadata_state = store.list_intent_scopes(receipts[1].intent_id)[0]
+    other_system_state = store.list_intent_scopes(receipts[2].intent_id)[0]
+    assert metadata_state.state.value == "queued"
+    assert metadata_state.eligible_at is None
+    assert other_system_state.state.value == "deferred"
+    assert other_system_state.eligible_at == eligible_at
+
+
 def test_owned_core_never_imports_adapter_code() -> None:
     source_root = Path("src/async_api_view")
     for package in ("storage", "application", "ingestion"):

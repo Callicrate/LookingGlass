@@ -63,6 +63,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0009_facet_action_status",
             "0010_dashboard_active_action",
             "0011_refresh_override_identity",
+            "0012_deferred_scope_policy_indexes",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -345,6 +346,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0009_facet_action_status",
         "0010_dashboard_active_action",
         "0011_refresh_override_identity",
+        "0012_deferred_scope_policy_indexes",
     )
     assert versions == (expected,) * workers
 
@@ -477,6 +479,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0009_facet_action_status",
             "0010_dashboard_active_action",
             "0011_refresh_override_identity",
+            "0012_deferred_scope_policy_indexes",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
