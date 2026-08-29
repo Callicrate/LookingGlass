@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 04:16 ET
+Updated: 2026-08-29 04:38 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 270 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
+- Latest checks: 281 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: no medium-or-higher defect open; continue fresh post-fix residual audits against the clean 270-test head.
@@ -73,6 +73,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent contradictory Unity Catalog response identity from redirecting later refreshes.
 - [x] Reject primitive string enums across every shared contract DTO boundary.
 - [x] Return open intent pages to the unlock flow when browser authorization expires.
+- [x] Preserve typed Workspace object/resource identity without unsafe legacy merging.
+- [x] Cover coordinator authority rejection across disabled, unknown, absent, and mismatched targets.
 
 ## Evidence and decisions
 
@@ -211,7 +213,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - All facet observations now use transaction-local savepoints; a merge-over-limit regression proves rejected items cannot rename objects, advance presence time, journal provenance, or replace supporting evidence.
 - `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
 - Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
-- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 270 tests and 87% branch coverage, including backup publication, enum-wide DTO invariants, Unity Catalog identity checks, and migration `0011`; the shared Windows `.venv` was untouched.
+- The latest Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 270 tests and 87% branch coverage, including backup publication, enum-wide DTO invariants, Unity Catalog identity checks, and migration `0011`; the shared Windows `.venv` was untouched.
 - The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
 - Databricks target resolution now derives catalog/schema command arguments from immutable canonical external identity rather than mutable facet payload, and a corruption regression proves later dispatch remains on the intended scope.
@@ -220,6 +222,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Shared enum validators now cover target kinds, presence/knowledge states, refresh origin/coverage, observation modes, collection/absence coverage, guard decisions, ingestion results, capability operation/targets, and action records.
 - Persisted intent reconstruction explicitly restores `RefreshOrigin`; a raw `"dispatch"` can no longer make the worker silently abandon a live lease, and raw automatic origins cannot bypass session requirements.
 - Intent polling now reloads on authorization denial instead of retrying forever as a false disconnection, and the unlock page tells expired sessions to restart Rookery for a new link.
+- New Workspace identities retain typed `object_id`/`resource_id` namespaces; metadata responses must match the exact typed witness, while legitimate dual IDs remain independent.
+- Historical untyped Workspace identities are never auto-merged because their witness type cannot be proven; symmetric collision regressions preserve legacy UUID/cache and fail closed as separate typed objects.
+- Seven coordinator authority regressions raised coordinator branch coverage from 73% to 86% while proving invalid local authority never admits an action.
 
 ## Risks / watch list
 
