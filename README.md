@@ -124,7 +124,7 @@ uv run coverage run -m pytest -q
 uv run coverage report
 uv lock --check
 uv audit --locked --preview-features audit-command
-uv build
+uv build --build-constraint build-constraints.txt --require-hashes
 uv run python scripts/verify_distribution.py
 ```
 

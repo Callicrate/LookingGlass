@@ -1,0 +1,3 @@
+# Regenerate with:
+# uv pip compile build-constraints.in --generate-hashes --universal --output-file build-constraints.txt
+hatchling==1.32.0

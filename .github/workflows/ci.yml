@@ -43,5 +43,5 @@ jobs:
           uv run coverage report
       - name: Build package
         run: |
-          uv build
+          uv build --build-constraint build-constraints.txt --require-hashes
           uv run python scripts/verify_distribution.py
