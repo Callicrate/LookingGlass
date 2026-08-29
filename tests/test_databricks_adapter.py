@@ -1406,6 +1406,39 @@ def test_supported_large_collection_is_deterministically_chunked_with_linked_aut
         )
 
 
+def test_supported_wide_relations_chunk_before_shared_node_budget() -> None:
+    tables = [
+        {
+            "name": f"table_{table_index}",
+            "full_name": f"main.sales.table_{table_index}",
+            "columns": [{"name": f"column_{column_index}"} for column_index in range(1_000)],
+        }
+        for table_index in range(50)
+    ]
+    stdout = json.dumps({"tables": tables}).encode()
+    assert len(stdout) < databricks_adapter.MAX_JSON_BYTES
+
+    result = normalize(
+        action=_action("databricks.uc.relations.read"),
+        binding=_binding(),
+        target=ResolvedTarget(catalog_name="main", schema_name="sales"),
+        stdout=stdout,
+        observed_at=datetime(2026, 8, 29, tzinfo=UTC),
+    )
+
+    assert len(result.batches) > 1
+    assert sum(len(batch.relationship_observations) for batch in result.batches) == 50
+    assert all(
+        databricks_adapter._canonical_batch_size(batch)
+        <= databricks_adapter.MAX_INGESTION_BATCH_BYTES
+        for batch in result.batches
+    )
+    assert all(
+        len(batch.relationship_observations) <= databricks_adapter.MAX_INGESTION_BATCH_UNITS
+        for batch in result.batches
+    )
+
+
 def test_chunk_plan_is_source_order_independent_and_rejects_oversized_units() -> None:
     action = _action("databricks.workspace.children.read", "membership")
     target = ResolvedTarget(

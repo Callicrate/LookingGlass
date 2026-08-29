@@ -136,6 +136,41 @@ def test_partial_listing_preserves_members_and_observation_replay_is_idempotent(
     assert run(ingestor.ingest(partial)).status.value == "duplicate"
 
 
+def test_post_construction_json_cycle_is_rejected_without_durable_residue(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "state.sqlite3") as store:
+        observation = FacetObservation(
+            observation_id=uuid4(),
+            target=ObjectLocator(object_type="file", object_id=uuid4()),
+            facet="metadata",
+            facet_version="1",
+            update_mode=UpdateMode.SNAPSHOT,
+            field_coverage=FieldCoverage.COMPLETE,
+            payload={"name": "safe"},
+        )
+        observation.payload["cycle"] = observation.payload
+        batch = ObservationBatch(
+            batch_id=uuid4(),
+            system_id=uuid4(),
+            connection_binding_id=uuid4(),
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=NOW,
+            received_at=NOW,
+            facet_observations=(observation,),
+        )
+
+        result = run(SQLiteObservationIngestor(store).ingest(batch))
+
+        assert result.status.value == "rejected"
+        for table in (
+            "observation_batches",
+            "observation_journal",
+            "ingestion_issues",
+            "remote_objects",
+        ):
+            assert store._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
 def test_complete_omission_never_overwrites_a_newer_relationship(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(

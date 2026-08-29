@@ -5318,7 +5318,10 @@ class SQLiteStore:
         item becomes a redacted ingestion issue; it never clears known facts or
         enables absence reconciliation for the batch.
         """
-        batch_digest = _batch_digest(batch)
+        try:
+            batch_digest = _batch_digest(batch)
+        except ValueError:
+            return IngestionResult(batch_id=batch.batch_id, status=IngestionStatus.REJECTED)
         with self._immediate_transaction() as connection:
             prior = connection.execute(
                 """

@@ -16,6 +16,9 @@ type JSONScalar = str | int | float | bool | None
 type JSONValue = JSONScalar | list[JSONValue] | dict[str, JSONValue]
 
 _CONTRACT_KEY = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
+_MAX_JSON_DEPTH = 32
+_MAX_JSON_CONTAINER_ITEMS = 10_000
+_MAX_JSON_NODES = 1_000_000
 
 
 def require_text(value: str, field_name: str, *, max_length: int = 512) -> str:
@@ -126,24 +129,59 @@ def validate_json(value: Any, field_name: str = "payload") -> JSONValue:
     """Validate and defensively copy a JSON value.
 
     Native object deserialization is intentionally unsupported. Contract payloads
-    are plain JSON data, with finite numbers and string object keys.
+    are bounded plain JSON data, with finite numbers and string object keys.
     """
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError(f"{field_name} must not contain non-finite numbers")
-        return value
-    if isinstance(value, Mapping):
-        result: dict[str, JSONValue] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise ValueError(f"{field_name} object keys must be strings")
-            result[key] = validate_json(item, f"{field_name}.{key}")
-        return result
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [validate_json(item, f"{field_name}[]") for item in value]
-    raise ValueError(f"{field_name} must contain only JSON-compatible values")
+
+    active_containers: set[int] = set()
+    node_count = 0
+
+    def normalize(item: Any, item_name: str, depth: int) -> JSONValue:
+        nonlocal node_count
+        if depth > _MAX_JSON_DEPTH:
+            raise ValueError(f"{field_name} exceeds maximum JSON depth {_MAX_JSON_DEPTH}")
+        node_count += 1
+        if node_count > _MAX_JSON_NODES:
+            raise ValueError(f"{field_name} exceeds maximum JSON node count {_MAX_JSON_NODES}")
+        if item is None or isinstance(item, (str, bool, int)):
+            return item
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise ValueError(f"{item_name} must not contain non-finite numbers")
+            return item
+        if isinstance(item, Mapping):
+            if len(item) > _MAX_JSON_CONTAINER_ITEMS:
+                raise ValueError(
+                    f"{item_name} exceeds maximum JSON container size {_MAX_JSON_CONTAINER_ITEMS}"
+                )
+            identity = id(item)
+            if identity in active_containers:
+                raise ValueError(f"{field_name} must not contain JSON cycles")
+            active_containers.add(identity)
+            try:
+                result: dict[str, JSONValue] = {}
+                for key, child in item.items():
+                    if not isinstance(key, str):
+                        raise ValueError(f"{item_name} object keys must be strings")
+                    result[key] = normalize(child, f"{item_name}.{key[:64]}", depth + 1)
+                return result
+            finally:
+                active_containers.remove(identity)
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            if len(item) > _MAX_JSON_CONTAINER_ITEMS:
+                raise ValueError(
+                    f"{item_name} exceeds maximum JSON container size {_MAX_JSON_CONTAINER_ITEMS}"
+                )
+            identity = id(item)
+            if identity in active_containers:
+                raise ValueError(f"{field_name} must not contain JSON cycles")
+            active_containers.add(identity)
+            try:
+                return [normalize(child, f"{item_name}[]", depth + 1) for child in item]
+            finally:
+                active_containers.remove(identity)
+        raise ValueError(f"{item_name} must contain only JSON-compatible values")
+
+    return normalize(value, field_name, 0)
 
 
 def canonical_json_bytes(value: Any, field_name: str = "payload") -> bytes:

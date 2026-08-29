@@ -43,6 +43,8 @@ from async_api_view.contracts import (
     TargetRef,
     UpdateMode,
 )
+from async_api_view.contracts import _validation as contract_validation
+from async_api_view.contracts._validation import validate_json
 
 NOW = datetime(2026, 8, 24, 12, tzinfo=UTC)
 
@@ -151,6 +153,51 @@ def test_contracts_reject_naive_time_and_non_json_payload() -> None:
             field_coverage=FieldCoverage.COMPLETE,
             payload={"unsafe": object()},
         )
+
+
+def test_json_validation_bounds_depth_and_returns_controlled_error() -> None:
+    accepted: object = None
+    for _ in range(32):
+        accepted = [accepted]
+    assert validate_json(accepted) == accepted
+
+    too_deep: object = None
+    for _ in range(2_000):
+        too_deep = [too_deep]
+    with pytest.raises(ValueError, match="maximum JSON depth"):
+        validate_json(too_deep)
+
+
+@pytest.mark.parametrize("container_type", [list, dict])
+def test_json_validation_rejects_cycles(container_type: type[list] | type[dict]) -> None:
+    cyclic: list[object] | dict[str, object] = container_type()
+    if isinstance(cyclic, list):
+        cyclic.append(cyclic)
+    else:
+        cyclic["self"] = cyclic
+
+    with pytest.raises(ValueError, match="JSON cycles"):
+        validate_json(cyclic)
+
+
+def test_json_validation_allows_repeated_non_cyclic_references() -> None:
+    shared = {"values": [1, 2, 3]}
+
+    normalized = validate_json({"first": shared, "second": shared})
+
+    assert normalized == {"first": shared, "second": shared}
+    assert isinstance(normalized, dict)
+    assert normalized["first"] is not normalized["second"]
+
+
+def test_json_validation_bounds_container_and_total_node_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="maximum JSON container size"):
+        validate_json([None] * 10_001)
+    monkeypatch.setattr(contract_validation, "_MAX_JSON_NODES", 100)
+    with pytest.raises(ValueError, match="maximum JSON node count"):
+        validate_json([[None] * 50 for _ in range(2)])
 
 
 def test_partial_observation_requires_explicit_matching_field_mask() -> None:
