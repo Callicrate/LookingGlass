@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 00:41 ET
+Updated: 2026-08-29 00:49 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 228 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 230 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 10 HTTP routes, verified from source.
-- Version control: local `main` contains the verified action-activity, unique browser-host, and durable retry slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: terminalize expired action deadlines before dispatch, then expose bounded attempt detail.
+- Version control: local `main` contains the verified action-activity, unique browser-host, durable retry, and deadline-guard slices plus all prior correctness fixes; completed batches are committed with focused messages.
+- Active review round: expose bounded per-action attempt detail, then harden poison-action handling.
 - Next progress report due: 2026-08-29 01:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -43,11 +43,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the latest pass was read-only because the native project profile is not provisioned.
+- [ ] Tend Murmuration about hourly; the 00:44 pass remained read-only because the native project profile is not provisioned.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
-- [ ] Terminalize expired action deadlines before any remote dispatch.
+- [x] Terminalize expired action deadlines before any remote dispatch.
 
 ## Evidence and decisions
 
@@ -136,6 +136,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Retry delays use bounded exponential policy: one second for timeout/transient failures, five seconds for rate limits, and a 30-second ceiling.
 - `ActionLease` now carries the transactionally elected next durable ordinal; reopen tests prove early leasing fails and ordinal two becomes eligible exactly at `retry_at`.
 - Independent review found no blocker; strict positive-integer ordinal validation was added, the suite passes 228 tests, and adapter/storage branch coverage increased to 78%/85%.
+- The pre-dispatch guard now cancels `deadline <= now` actions before binding resolution or command construction; a vertical regression proves zero CLI calls.
+- Truly expired attached scopes become `expired`; still-live coalesced scopes detach, return to `queued`, and immediately admit a replacement action after the stale action releases dedupe authority.
+- Deadline splitting/cancellation is atomic under `BEGIN IMMEDIATE`, expected expiry remains non-alertable, and independent review found no blocker at 230 tests.
+- The second hourly Murmuration pass found no Rookery-specific shared context; forum health remained public/read-only while native notifications, writes, and BookStack stayed credential-gated.
 
 ## Risks / watch list
 

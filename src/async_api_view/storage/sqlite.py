@@ -2529,6 +2529,76 @@ class SQLiteStore:
         self._refresh_action_parent_aggregates(connection, action_id=action_id)
         return GuardDecision(GuardDisposition.CANCEL, reason)
 
+    def _guard_expire_action(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        action_id: str,
+        now: datetime,
+    ) -> GuardDecision:
+        reason = "action_deadline_expired"
+        linked_scopes = connection.execute(
+            """
+            SELECT scope.intent_scope_id, intent.expires_at
+            FROM action_intent_scopes AS link
+            JOIN refresh_intent_scopes AS scope ON scope.intent_scope_id = link.intent_scope_id
+            JOIN refresh_intents AS intent ON intent.intent_id = scope.intent_id
+            WHERE link.action_id = ? AND scope.state IN ('admitted', 'coalesced')
+            """,
+            (action_id,),
+        ).fetchall()
+        expired_scope_ids = tuple(
+            row["intent_scope_id"]
+            for row in linked_scopes
+            if _dt(row["expires_at"]) is not None and _dt(row["expires_at"]) <= now
+        )
+        live_scope_ids = tuple(
+            row["intent_scope_id"]
+            for row in linked_scopes
+            if row["intent_scope_id"] not in expired_scope_ids
+        )
+        for intent_scope_id in expired_scope_ids:
+            connection.execute(
+                """
+                UPDATE refresh_intent_scopes
+                SET state = 'expired', disposition_reason = ?, eligible_at = NULL,
+                    lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
+                WHERE intent_scope_id = ?
+                """,
+                (reason, intent_scope_id),
+            )
+        for intent_scope_id in live_scope_ids:
+            connection.execute(
+                "DELETE FROM action_intent_scopes WHERE intent_scope_id = ?",
+                (intent_scope_id,),
+            )
+            connection.execute(
+                """
+                UPDATE refresh_intent_scopes
+                SET state = 'queued', disposition_reason = ?, eligible_at = ?,
+                    linked_action_id = NULL, lease_id = NULL,
+                    lease_worker_id = NULL, leased_until = NULL
+                WHERE intent_scope_id = ?
+                """,
+                (reason, _utc_text(now), intent_scope_id),
+            )
+        connection.execute(
+            """
+            UPDATE adapter_actions
+            SET state = 'cancelled', completed_at = ?, lease_id = NULL, lease_worker_id = NULL,
+                leased_until = NULL, retry_at = NULL, error_class = ?, redacted_diagnostic = ?
+            WHERE action_id = ?
+            """,
+            (
+                _utc_text(now),
+                ErrorClass.LOCAL_CANCELLATION.value,
+                _redact(reason),
+                action_id,
+            ),
+        )
+        self._refresh_action_parent_aggregates(connection, action_id=action_id)
+        return GuardDecision(GuardDisposition.CANCEL, reason)
+
     async def evaluate(self, *, action_id: str, lease_id: str, now: datetime) -> GuardDecision:
         """Run the generic local pre-dispatch guard against a current lease."""
         action_id = require_uuid(action_id, "action_id")
@@ -2559,6 +2629,13 @@ class SQLiteStore:
                 return GuardDecision(GuardDisposition.FAIL, "invalid_action_lease")
             if _dt(row["leased_until"]) is None or _dt(row["leased_until"]) < now:
                 return GuardDecision(GuardDisposition.FAIL, "expired_action_lease")
+            deadline = _dt(row["deadline"])
+            if deadline is not None and deadline <= now:
+                return self._guard_expire_action(
+                    connection,
+                    action_id=action_id,
+                    now=now,
+                )
             if not row["system_enabled"]:
                 return self._guard_cancel(connection, action_id=action_id, reason="system_disabled")
             if not row["binding_enabled"]:

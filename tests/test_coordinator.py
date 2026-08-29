@@ -41,7 +41,9 @@ def _scope(system_id: str, configured_scope_id: str) -> RefreshScope:
     )
 
 
-def _intent(scope: RefreshScope, now: datetime) -> RefreshIntent:
+def _intent(
+    scope: RefreshScope, now: datetime, *, expires_at: datetime | None = None
+) -> RefreshIntent:
     return RefreshIntent(
         intent_id=uuid4(),
         idempotency_key=str(uuid4()),
@@ -49,6 +51,7 @@ def _intent(scope: RefreshScope, now: datetime) -> RefreshIntent:
         actor_id="local-user",
         scopes=(scope,),
         requested_at=now,
+        expires_at=expires_at,
     )
 
 
@@ -298,6 +301,53 @@ def test_guard_cancellation_completes_attached_parent_intent(
         "SELECT aggregate_state FROM refresh_intents WHERE intent_id = ?", (receipt.intent_id,)
     ).fetchone()[0]
     assert aggregate == "complete"
+
+
+def test_guard_expires_dead_action_and_requeues_still_live_coalesced_scope(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "deadline.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    expiring = run(store.submit_refresh(_intent(scope, NOW, expires_at=NOW + timedelta(seconds=2))))
+    admitted = run(DurableCoordinator(store, worker_id="first").run_once(now=NOW))
+    assert admitted is not None and admitted.action_id is not None
+    still_live = run(store.submit_refresh(_intent(scope, NOW + timedelta(seconds=1))))
+    coalesced = run(
+        DurableCoordinator(store, worker_id="coalesced").run_once(now=NOW + timedelta(seconds=1))
+    )
+    assert coalesced is not None and coalesced.state.value == "coalesced"
+    assert coalesced.action_id == admitted.action_id
+    lease = run(
+        store.lease_next(
+            adapter_key="databricks",
+            worker_id="worker",
+            now=NOW + timedelta(seconds=3),
+        )
+    )
+    assert lease is not None
+
+    decision = run(
+        store.evaluate(
+            action_id=lease.action.action_id,
+            lease_id=lease.lease_id,
+            now=NOW + timedelta(seconds=3),
+        )
+    )
+
+    assert decision.disposition.value == "cancel"
+    assert decision.reason == "action_deadline_expired"
+    assert store.get_stored_action(admitted.action_id).state.value == "cancelled"
+    expired_scope = store.list_intent_scopes(expiring.intent_id)[0]
+    live_scope = store.list_intent_scopes(still_live.intent_id)[0]
+    assert expired_scope.state.value == "expired"
+    assert live_scope.state.value == "queued"
+    assert live_scope.linked_action_id is None
+    replacement = run(
+        DurableCoordinator(store, worker_id="replacement").run_once(now=NOW + timedelta(seconds=3))
+    )
+    assert replacement is not None and replacement.state.value == "admitted"
+    assert replacement.action_id != admitted.action_id
 
 
 def test_guard_satisfaction_completes_attached_parent_intent(tmp_path) -> None:

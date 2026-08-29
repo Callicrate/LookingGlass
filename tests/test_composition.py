@@ -12,7 +12,15 @@ from async_api_view.adapters.databricks import CliExecution, CliInvocation, CliR
 from async_api_view.application import SystemBootstrapService
 from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
-from async_api_view.contracts import PresenceState, RemoteObject
+from async_api_view.contracts import (
+    PresenceState,
+    RefreshIntent,
+    RefreshOrigin,
+    RefreshScope,
+    RemoteObject,
+    TargetKind,
+    TargetRef,
+)
 from async_api_view.storage import ActionActivityRecord, SQLiteStore, StoredAction
 from async_api_view.web import (
     ActionHistoryQuery,
@@ -304,6 +312,49 @@ async def test_direct_workspace_metadata_refresh_is_accepted_and_credited(
         "databricks.workspace.metadata.read",
     ]
 
+    runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_expired_action_deadline_never_reaches_cli_runner(tmp_path: Path) -> None:
+    runner = FakeCliRunner(b"[]")
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    dashboard = await runtime.backend.dashboard()
+    option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.workspace.children.read"
+        and item.target_kind == "configured_scope"
+    )
+    configured = runtime.store.get_configured_scope(option.target_id)
+    assert configured is not None
+    requested_at = datetime(2026, 8, 29, tzinfo=UTC)
+    intent = RefreshIntent(
+        intent_id=uuid4(),
+        idempotency_key=str(uuid4()),
+        origin=RefreshOrigin.MANUAL,
+        actor_id="local-user",
+        scopes=(
+            RefreshScope(
+                system_id=option.system_id,
+                target=TargetRef(TargetKind.CONFIGURED_SCOPE, option.target_id),
+                object_type=configured.object_type,
+                facet=option.facet,
+                capability_key=option.capability_key,
+            ),
+        ),
+        requested_at=requested_at,
+        expires_at=requested_at + timedelta(seconds=1),
+    )
+    await runtime.store.submit_refresh(intent)
+    admitted = await runtime.coordinator.run_once(now=requested_at)
+    assert admitted is not None and admitted.action_id is not None
+
+    assert await runtime.worker.run_once(now=requested_at + timedelta(seconds=2))
+
+    assert runner.calls == []
+    assert runtime.store.get_stored_action(admitted.action_id).state.value == "cancelled"
+    assert runtime.store.list_intent_scopes(intent.intent_id)[0].state.value == "expired"
     runtime.store.close()
 
 
