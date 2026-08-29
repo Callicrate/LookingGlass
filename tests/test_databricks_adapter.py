@@ -431,6 +431,59 @@ def test_fixture_normalization_is_deterministic_and_metadata_only(
 
 
 @pytest.mark.parametrize(
+    ("capability", "target", "payload"),
+    [
+        (
+            "databricks.uc.schemas.read",
+            ResolvedTarget(catalog_name="main"),
+            {"schemas": [{"name": "sales", "full_name": "other.sales"}]},
+        ),
+        (
+            "databricks.uc.schemas.read",
+            ResolvedTarget(catalog_name="main"),
+            {"schemas": [{"name": "sales", "catalog_name": "other"}]},
+        ),
+        (
+            "databricks.uc.relations.read",
+            ResolvedTarget(catalog_name="main", schema_name="sales"),
+            {"tables": [{"name": "orders", "full_name": "main.other.orders"}]},
+        ),
+        (
+            "databricks.uc.volumes.read",
+            ResolvedTarget(catalog_name="main", schema_name="sales"),
+            {"volumes": [{"name": "raw", "schema_name": "other"}]},
+        ),
+    ],
+)
+def test_uc_normalization_rejects_identity_that_contradicts_target(
+    capability: str,
+    target: ResolvedTarget,
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(InvalidDownstreamResponse, match=r"another|contradicts"):
+        normalize(
+            action=_action(capability),
+            binding=_binding(),
+            target=target,
+            stdout=json.dumps(payload).encode(),
+            observed_at=datetime.now(UTC),
+        )
+
+
+def test_uc_normalization_derives_leaf_name_from_valid_full_name() -> None:
+    result = normalize(
+        action=_action("databricks.uc.schemas.read"),
+        binding=_binding(),
+        target=ResolvedTarget(catalog_name="main"),
+        stdout=b'{"schemas":[{"full_name":"main.sales"}]}',
+        observed_at=datetime.now(UTC),
+    )
+
+    assert result.batch.facet_observations[0].target.external_key == "schema:main.sales"
+    assert result.batch.facet_observations[0].target.display_name == "sales"
+
+
+@pytest.mark.parametrize(
     ("capability", "facet", "target", "envelope_key", "array_key"),
     [
         (

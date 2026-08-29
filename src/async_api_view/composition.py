@@ -166,13 +166,12 @@ class SQLiteDatabricksTargetResolver:
                 canonical_parent_external_key=remote_object.external_key,
             )
 
-        payload = self._facet_payload(remote_object.object_id, "attributes")
         if action.capability_key == "databricks.uc.schemas.read":
-            catalog_name = self._payload_name(payload, "name", "full_name")
-            if catalog_name is None and remote_object.external_key.startswith("catalog:"):
-                catalog_name = remote_object.external_key.removeprefix("catalog:")
-            if catalog_name is None:
-                raise CommandRejected("catalog target has no observed name")
+            if not remote_object.external_key.startswith("catalog:"):
+                raise CommandRejected("catalog target has no canonical name")
+            catalog_name = remote_object.external_key.removeprefix("catalog:")
+            if not catalog_name:
+                raise CommandRejected("catalog target has no canonical name")
             return ResolvedTarget(
                 catalog_name=catalog_name,
                 display_name=remote_object.display_name,
@@ -183,11 +182,9 @@ class SQLiteDatabricksTargetResolver:
             "databricks.uc.relations.read",
             "databricks.uc.volumes.read",
         }:
-            full_name = self._payload_name(payload, "full_name")
-            if full_name is None and remote_object.external_key.startswith("schema:"):
-                full_name = remote_object.external_key.removeprefix("schema:")
-            if full_name is None:
-                raise CommandRejected("schema target has no observed full name")
+            if not remote_object.external_key.startswith("schema:"):
+                raise CommandRejected("schema target has no canonical full name")
+            full_name = remote_object.external_key.removeprefix("schema:")
             parts = full_name.split(".")
             if len(parts) != 2 or not all(parts):
                 raise CommandRejected("schema full name is not catalog.schema")

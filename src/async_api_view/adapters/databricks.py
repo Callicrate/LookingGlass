@@ -715,6 +715,36 @@ def _generic_payload(item: Mapping[str, Any], *, entity: str) -> dict[str, Any]:
     return payload
 
 
+def _uc_child_name(
+    item: Mapping[str, Any],
+    *,
+    catalog: str,
+    schema: str | None = None,
+    label: str,
+) -> str:
+    if "catalog_name" in item and _name(item["catalog_name"], label="catalog name") != catalog:
+        raise InvalidDownstreamResponse(f"Databricks {label} belongs to another catalog")
+    if (
+        schema is not None
+        and "schema_name" in item
+        and _name(item["schema_name"], label="schema name") != schema
+    ):
+        raise InvalidDownstreamResponse(f"Databricks {label} belongs to another schema")
+    name = _name(item["name"], label=f"{label} name") if "name" in item else None
+    if "full_name" not in item:
+        if name is None:
+            raise InvalidDownstreamResponse(f"Databricks {label} lacks a name")
+        return name
+    full_name = _name(item["full_name"], label=f"{label} full name")
+    parts = full_name.split(".")
+    expected_parent = (catalog,) if schema is None else (catalog, schema)
+    if len(parts) != len(expected_parent) + 1 or tuple(parts[:-1]) != expected_parent:
+        raise InvalidDownstreamResponse(f"Databricks {label} full name contradicts its target")
+    if name is not None and name != parts[-1]:
+        raise InvalidDownstreamResponse(f"Databricks {label} name contradicts its full name")
+    return parts[-1]
+
+
 def normalize(
     *,
     action: AdapterAction,
@@ -864,7 +894,7 @@ def normalize(
         catalog = _name(target.catalog_name, label="catalog name")
         parent = _generic_locator("databricks.uc.catalog", f"catalog:{catalog}", catalog)
         for item in _items(payload, "schemas"):
-            name = _name(item.get("name") or item.get("full_name"), label="schema name")
+            name = _uc_child_name(item, catalog=catalog, label="schema")
             locator = _generic_locator("databricks.uc.schema", f"schema:{catalog}.{name}", name)
             body = _generic_payload(item, entity="schema")
             facets.append(
@@ -910,7 +940,12 @@ def normalize(
                 if entity == "relation"
                 else entity
             )
-            name = _name(item.get("name") or item.get("full_name"), label=f"{item_entity} name")
+            name = _uc_child_name(
+                item,
+                catalog=catalog,
+                schema=schema,
+                label=item_entity,
+            )
             locator = _generic_locator(
                 f"databricks.uc.{item_entity}",
                 f"{item_entity}:{catalog}.{schema}.{name}",

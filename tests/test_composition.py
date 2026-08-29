@@ -1378,6 +1378,13 @@ async def test_unity_catalog_metadata_capabilities_cascade_without_content(
 
     await execute("databricks.uc.catalogs.read")
     await execute("databricks.uc.schemas.read")
+    schema_object = next(
+        item for item in runtime.store.list_objects() if item.source_kind == "databricks.uc.schema"
+    )
+    runtime.store._connection.execute(
+        "UPDATE facets SET payload_json = ? WHERE object_id = ? AND facet = 'attributes'",
+        ('{"full_name":"other.sales","name":"sales"}', schema_object.object_id),
+    )
     await execute("databricks.uc.relations.read")
     await execute("databricks.uc.volumes.read")
 
@@ -1387,6 +1394,10 @@ async def test_unity_catalog_metadata_capabilities_cascade_without_content(
         "databricks.uc.relations.read",
         "databricks.uc.volumes.read",
     ]
+    relations_call = next(
+        call for call in runner.calls if call.capability_key == "databricks.uc.relations.read"
+    )
+    assert relations_call.argv[1:5] == ("tables", "list", "main", "sales")
     objects = runtime.store.list_objects()
     assert {item.source_kind for item in objects} >= {
         "databricks.uc.catalog",
