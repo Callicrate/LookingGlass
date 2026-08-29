@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 03:38 ET
+Updated: 2026-08-29 03:39 ET
 
 ## Goal
 
@@ -208,6 +208,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - All facet observations now use transaction-local savepoints; a merge-over-limit regression proves rejected items cannot rename objects, advance presence time, journal provenance, or replace supporting evidence.
 - `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
 - Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
+- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 264 tests and 87% branch coverage, including backup hard-link publication and migration `0011`; the shared Windows `.venv` was untouched.
 
 ## Risks / watch list
 
