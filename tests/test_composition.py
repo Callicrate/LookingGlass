@@ -384,6 +384,7 @@ async def test_expired_action_deadline_never_reaches_cli_runner(tmp_path: Path) 
     (
         ("system", "system_disabled"),
         ("binding", "binding_disabled"),
+        ("binding_revision", "binding_changed"),
         ("capability", "capability_disabled"),
         ("deadline", "action_deadline_expired"),
     ),
@@ -425,6 +426,15 @@ async def test_final_start_authorization_blocks_revoked_remote_dispatch(
                 runtime.store._connection.execute(
                     "UPDATE connection_bindings SET enabled = 0 WHERE system_id = ?",
                     (option.system_id,),
+                )
+            elif boundary == "binding_revision":
+                current_binding = runtime.store.list_connection_bindings(
+                    system_id=option.system_id
+                )[0]
+                rotated_settings = dict(current_binding.non_secret_settings)
+                rotated_settings["profile"] = "ROTATED_PROFILE"
+                runtime.store.upsert_connection_binding(
+                    replace(current_binding, non_secret_settings=rotated_settings)
                 )
             elif boundary == "capability":
                 runtime.store._connection.execute(
@@ -1101,6 +1111,53 @@ def test_composition_failure_closes_open_store(
         build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
 
     assert closed
+
+
+def test_configuration_application_rolls_back_all_systems_on_late_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "state.sqlite3"
+
+    def project(*systems: DatabricksSystemSettings) -> ProjectSettings:
+        return ProjectSettings(
+            app=AppSettings(database_path=database_path),
+            databricks_systems=systems,
+        )
+
+    first = DatabricksSystemSettings("A", "OLD_PROFILE", "/A", "a")
+    retained = DatabricksSystemSettings("B", "B_PROFILE", "/B", "b")
+    initial = build_runtime(project(first, retained), runner=FakeCliRunner(b"[]"))
+    initial.store.close()
+
+    original = SystemBootstrapService.configure_databricks_workspace
+
+    def fail_late(
+        service: SystemBootstrapService,
+        **kwargs: object,
+    ):
+        if kwargs["display_name"] == "C":
+            raise RuntimeError("injected late configuration failure")
+        return original(service, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        SystemBootstrapService,
+        "configure_databricks_workspace",
+        fail_late,
+    )
+    rotated = DatabricksSystemSettings("A", "NEW_PROFILE", "/A", "a")
+    failing = DatabricksSystemSettings("C", "C_PROFILE", "/C", "c")
+
+    with pytest.raises(RuntimeError, match="injected late configuration failure"):
+        build_runtime(project(rotated, failing), runner=FakeCliRunner(b"[]"))
+
+    with SQLiteStore(database_path) as reopened:
+        systems = {system.display_name: system for system in reopened.list_systems()}
+        assert set(systems) == {"A", "B"}
+        assert systems["A"].enabled
+        assert systems["B"].enabled
+        binding = reopened.list_connection_bindings(system_id=systems["A"].system_id)[0]
+        assert binding.non_secret_settings["profile"] == "OLD_PROFILE"
 
 
 @pytest.mark.anyio

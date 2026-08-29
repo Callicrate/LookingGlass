@@ -163,6 +163,21 @@ def _canonical_config_id(value: str) -> str:
     return normalized
 
 
+def _binding_revision(
+    *,
+    adapter_key: str,
+    adapter_version: str,
+    non_secret_settings_json: str,
+    secret_reference: str | None,
+) -> str:
+    material = json.dumps(
+        [adapter_key, adapter_version, non_secret_settings_json, secret_reference],
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
 def backup_sqlite_database(source_path: str | Path, destination_path: str | Path) -> Path:
     """Publish one validated online SQLite snapshot without overwriting a path."""
 
@@ -378,6 +393,18 @@ class SQLiteStore:
     @contextmanager
     def _immediate_transaction(self) -> Iterator[sqlite3.Connection]:
         with self._lock:
+            if self._connection.in_transaction:
+                savepoint = f"nested_{uuid4().hex}"
+                self._connection.execute(f"SAVEPOINT {savepoint}")
+                try:
+                    yield self._connection
+                except BaseException:
+                    self._connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    raise
+                else:
+                    self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+                return
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 yield self._connection
@@ -386,6 +413,13 @@ class SQLiteStore:
                 raise
             else:
                 self._connection.commit()
+
+    @contextmanager
+    def configuration_transaction(self) -> Iterator[None]:
+        """Commit one complete desired-configuration application atomically."""
+
+        with self._immediate_transaction():
+            yield
 
     @staticmethod
     @contextmanager
@@ -1325,6 +1359,12 @@ class SQLiteStore:
             enabled=bool(row["enabled"]),
             non_secret_settings=_json_value(row["non_secret_settings_json"]),  # type: ignore[arg-type]
             secret_reference=row["secret_reference"],
+            revision=_binding_revision(
+                adapter_key=row["adapter_key"],
+                adapter_version=row["adapter_version"],
+                non_secret_settings_json=row["non_secret_settings_json"],
+                secret_reference=row["secret_reference"],
+            ),
         )
 
     def get_capability_binding_sync(
@@ -1482,6 +1522,12 @@ class SQLiteStore:
                 enabled=bool(row["b_enabled"]),
                 non_secret_settings=_json_value(row["b_settings"]),  # type: ignore[arg-type]
                 secret_reference=row["b_secret_reference"],
+                revision=_binding_revision(
+                    adapter_key=row["b_adapter_key"],
+                    adapter_version=row["b_adapter_version"],
+                    non_secret_settings_json=row["b_settings"],
+                    secret_reference=row["b_secret_reference"],
+                ),
             )
             return binding, capability
         return None
@@ -3276,7 +3322,7 @@ class SQLiteStore:
         )
 
     async def authorize_start(
-        self, *, action_id: str, lease_id: str, now: datetime
+        self, *, action_id: str, lease_id: str, binding_revision: str, now: datetime
     ) -> GuardDecision:
         """Atomically revalidate authority and transition an allowed lease to running."""
         return self._evaluate_action_guard(
@@ -3284,6 +3330,7 @@ class SQLiteStore:
             lease_id=lease_id,
             now=now,
             authorize_start=True,
+            binding_revision=require_text(binding_revision, "binding_revision", max_length=64),
         )
 
     def _evaluate_action_guard(
@@ -3293,6 +3340,7 @@ class SQLiteStore:
         lease_id: str,
         now: datetime,
         authorize_start: bool,
+        binding_revision: str | None = None,
     ) -> GuardDecision:
         action_id = require_uuid(action_id, "action_id")
         lease_id = require_uuid(lease_id, "lease_id")
@@ -3302,6 +3350,10 @@ class SQLiteStore:
                 """
                 SELECT action.*, system.enabled AS system_enabled,
                        binding.enabled AS binding_enabled,
+                       binding.adapter_key AS binding_adapter_key,
+                       binding.adapter_version AS binding_adapter_version,
+                       binding.non_secret_settings_json AS binding_settings_json,
+                       binding.secret_reference AS binding_secret_reference,
                        capability.enabled AS capability_enabled,
                        capability.operation_class
                 FROM adapter_actions AS action
@@ -3366,6 +3418,17 @@ class SQLiteStore:
                 return self._guard_cancel(
                     connection, action_id=action_id, reason="binding_disabled"
                 )
+            if authorize_start:
+                current_binding_revision = _binding_revision(
+                    adapter_key=row["binding_adapter_key"],
+                    adapter_version=row["binding_adapter_version"],
+                    non_secret_settings_json=row["binding_settings_json"],
+                    secret_reference=row["binding_secret_reference"],
+                )
+                if current_binding_revision != binding_revision:
+                    return self._guard_cancel(
+                        connection, action_id=action_id, reason="binding_changed"
+                    )
             if row["capability_enabled"] is None:
                 return self._guard_cancel(
                     connection, action_id=action_id, reason="capability_missing"

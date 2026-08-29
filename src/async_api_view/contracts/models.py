@@ -579,6 +579,7 @@ class ConnectionBinding(JSONDTO):
     enabled: bool
     non_secret_settings: Mapping[str, JSONValue] = field(default_factory=dict)
     secret_reference: str | None = None
+    revision: str | None = None
 
     def __post_init__(self) -> None:
         _set_uuid(self, "binding_id")
@@ -593,6 +594,8 @@ class ConnectionBinding(JSONDTO):
         )
         if self.secret_reference is not None:
             require_text(self.secret_reference, "secret_reference", max_length=512)
+        if self.revision is not None:
+            require_text(self.revision, "revision", max_length=64)
 
 
 @dataclass(frozen=True, slots=True)

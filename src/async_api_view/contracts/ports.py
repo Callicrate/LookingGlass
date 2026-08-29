@@ -67,7 +67,7 @@ class PreDispatchGuardPort(Protocol):
     async def evaluate(self, *, action_id: str, lease_id: str, now: datetime) -> GuardDecision: ...
 
     async def authorize_start(
-        self, *, action_id: str, lease_id: str, now: datetime
+        self, *, action_id: str, lease_id: str, binding_revision: str, now: datetime
     ) -> GuardDecision: ...
 
 

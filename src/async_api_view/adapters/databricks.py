@@ -1300,6 +1300,7 @@ class DatabricksWorker:
         final_decision = await self.guard.authorize_start(
             action_id=action.action_id,
             lease_id=lease.lease_id,
+            binding_revision=binding.revision or "missing-binding-revision",
             now=started,
         )
         if final_decision.disposition is not GuardDisposition.DISPATCH:

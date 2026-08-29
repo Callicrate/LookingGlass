@@ -1136,12 +1136,7 @@ def build_runtime(
         raise
 
 
-def _compose_runtime(
-    settings: ProjectSettings,
-    *,
-    store: SQLiteStore,
-    runner: CliRunner | None,
-) -> ApplicationRuntime:
+def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) -> None:
     bootstrap = SystemBootstrapService(store)
     configured_system_ids: set[str] = set()
     configured_binding_ids: set[str] = set()
@@ -1208,6 +1203,16 @@ def _compose_runtime(
         capability_binding_ids=configured_capability_ids,
         scope_ids=configured_scope_ids,
     )
+
+
+def _compose_runtime(
+    settings: ProjectSettings,
+    *,
+    store: SQLiteStore,
+    runner: CliRunner | None,
+) -> ApplicationRuntime:
+    with store.configuration_transaction():
+        _apply_local_configuration(settings, store)
     coordinator = DurableCoordinator(store)
     actual_runner = runner or CliRunner(
         timeout_seconds=settings.app.cli_timeout_seconds,
