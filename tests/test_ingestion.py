@@ -223,6 +223,104 @@ def test_partial_facet_patch_never_clears_unobserved_fields(tmp_path) -> None:
     }
 
 
+def test_rejected_items_roll_back_identity_and_journal_but_keep_valid_sibling(
+    tmp_path,
+) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    membership = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        coverage=RefreshCoverage.FACET,
+    )
+    valid = FacetObservation(
+        observation_id=uuid4(),
+        target=ObjectLocator(
+            object_type="file",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:/Shared/kept.py",
+            display_name="kept.py",
+        ),
+        facet="metadata",
+        facet_version="1",
+        update_mode=UpdateMode.SNAPSHOT,
+        field_coverage=FieldCoverage.COMPLETE,
+        payload={"name": "kept.py"},
+    )
+    rejected = FacetObservation(
+        observation_id=uuid4(),
+        target=ObjectLocator(
+            object_type="file",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:/Shared/phantom.py",
+            display_name="phantom.py",
+        ),
+        facet="metadata",
+        facet_version="1",
+        update_mode=UpdateMode.ABSENCE,
+        field_coverage=FieldCoverage.COMPLETE,
+    )
+    rejected_relationship = RelationshipObservation(
+        observation_id=uuid4(),
+        subject=ObjectLocator(
+            object_type="folder",
+            source_kind="databricks.workspace.folder",
+            external_key="workspace:/Shared/transient",
+            display_name="transient",
+        ),
+        predicate="contains",
+        object=ObjectLocator(object_type="file", object_id=uuid4()),
+        presence=PresenceState.PRESENT,
+    )
+    batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW,
+        facet_observations=(valid, rejected),
+        relationship_observations=(rejected_relationship,),
+        coverage=(
+            CoverageDeclaration(
+                scope=membership,
+                completeness=CollectionCoverage.COMPLETE,
+                absence_authority=(AbsenceAuthority.RELATIONSHIP,),
+            ),
+        ),
+    )
+
+    result = run(store.ingest(batch))
+
+    assert result.status.value == "partial"
+    assert result.accepted_observation_ids == (valid.observation_id,)
+    assert result.issue_count == 2
+    assert {item.external_key for item in store.list_objects()} == {
+        "workspace:/Shared",
+        "workspace:/Shared/kept.py",
+    }
+    journal_ids = {
+        row[0]
+        for row in store._connection.execute(
+            "SELECT observation_id FROM observation_journal WHERE batch_id = ?",
+            (batch.batch_id,),
+        ).fetchall()
+    }
+    assert journal_ids == {valid.observation_id}
+    assert store.latest_qualifying_observation(membership) is None
+    assert (
+        store._connection.execute(
+            "SELECT COUNT(*) FROM ingestion_issues WHERE batch_id = ?", (batch.batch_id,)
+        ).fetchone()[0]
+        == 2
+    )
+
+
 def test_conflicting_observation_id_target_or_payload_is_not_accepted(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(

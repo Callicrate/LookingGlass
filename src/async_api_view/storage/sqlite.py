@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -294,6 +294,21 @@ class SQLiteStore:
                 raise
             else:
                 self._connection.commit()
+
+    @staticmethod
+    @contextmanager
+    def _ingestion_item_savepoint(connection: sqlite3.Connection) -> Iterator[None]:
+        """Roll back one rejected item without discarding valid batch siblings."""
+
+        connection.execute("SAVEPOINT ingestion_item")
+        try:
+            yield
+        except BaseException:
+            connection.execute("ROLLBACK TO SAVEPOINT ingestion_item")
+            connection.execute("RELEASE SAVEPOINT ingestion_item")
+            raise
+        else:
+            connection.execute("RELEASE SAVEPOINT ingestion_item")
 
     def _migrate(self) -> None:
         with self._lock:
@@ -3167,60 +3182,73 @@ class SQLiteStore:
             positive_contains: set[tuple[str, str]] = set()
             for observation in batch.facet_observations:
                 try:
-                    definition = V1_TYPE_DEFINITION_BY_KEY.get(observation.target.object_type)
-                    if definition is None or observation.facet not in {
-                        item.facet for item in definition.facets
-                    }:
-                        raise ValueError("unsupported_facet_observation")
-                    if any(
-                        satisfaction.system_id != batch.system_id
-                        or not self._coverage_contains(declarations, satisfaction)
-                        for satisfaction in observation.satisfies
-                    ):
-                        raise ValueError("undeclared_freshness_claim")
-                    journal_status = self._journal_item_status(
-                        connection,
-                        observation_id=observation.observation_id,
-                        batch=batch,
-                        item_kind="facet",
-                        item=observation,
+                    # Ordinary facet validation and journal serialization happen before
+                    # locator writes. Absence authorization needs the resolved canonical
+                    # ID, so isolate that late-rejection path without taxing large lists.
+                    item_scope = (
+                        self._ingestion_item_savepoint(connection)
+                        if observation.update_mode is UpdateMode.ABSENCE
+                        else nullcontext()
                     )
-                    if journal_status == "duplicate":
-                        continue
-                    if journal_status == "conflict":
-                        raise ValueError("observation_id_collision")
-                    target = self._resolve_locator(
-                        connection,
-                        locator=observation.target,
-                        system_id=batch.system_id,
-                        observed_at=batch.observed_at,
-                    )
-                    recorded_status = self._record_journal_item(
-                        connection,
-                        observation_id=observation.observation_id,
-                        batch=batch,
-                        item_kind="facet",
-                        item=observation,
-                    )
-                    if recorded_status != "recorded":  # pragma: no cover - transaction invariant
-                        raise RuntimeError("observation journal status changed during ingestion")
-                    if observation.update_mode is UpdateMode.ABSENCE:
-                        if not self._absence_is_authorized(
-                            declarations, object_id=target.object_id, observation=observation
+                    with item_scope:
+                        definition = V1_TYPE_DEFINITION_BY_KEY.get(observation.target.object_type)
+                        if definition is None or observation.facet not in {
+                            item.facet for item in definition.facets
+                        }:
+                            raise ValueError("unsupported_facet_observation")
+                        if any(
+                            satisfaction.system_id != batch.system_id
+                            or not self._coverage_contains(declarations, satisfaction)
+                            for satisfaction in observation.satisfies
                         ):
-                            raise ValueError("unauthorized_object_absence")
-                        connection.execute(
-                            "UPDATE remote_objects SET presence = 'absent' WHERE object_id = ?",
-                            (target.object_id,),
-                        )
-                    else:
-                        self._merge_facet_observation(
+                            raise ValueError("undeclared_freshness_claim")
+                        journal_status = self._journal_item_status(
                             connection,
+                            observation_id=observation.observation_id,
                             batch=batch,
-                            observation=observation,
-                            object_id=target.object_id,
+                            item_kind="facet",
+                            item=observation,
                         )
-                    accepted_ids.append(observation.observation_id)
+                        if journal_status == "duplicate":
+                            continue
+                        if journal_status == "conflict":
+                            raise ValueError("observation_id_collision")
+                        target = self._resolve_locator(
+                            connection,
+                            locator=observation.target,
+                            system_id=batch.system_id,
+                            observed_at=batch.observed_at,
+                        )
+                        recorded_status = self._record_journal_item(
+                            connection,
+                            observation_id=observation.observation_id,
+                            batch=batch,
+                            item_kind="facet",
+                            item=observation,
+                        )
+                        if recorded_status != "recorded":  # pragma: no cover - invariant
+                            raise RuntimeError(
+                                "observation journal status changed during ingestion"
+                            )
+                        if observation.update_mode is UpdateMode.ABSENCE:
+                            if not self._absence_is_authorized(
+                                declarations,
+                                object_id=target.object_id,
+                                observation=observation,
+                            ):
+                                raise ValueError("unauthorized_object_absence")
+                            connection.execute(
+                                "UPDATE remote_objects SET presence = 'absent' WHERE object_id = ?",
+                                (target.object_id,),
+                            )
+                        else:
+                            self._merge_facet_observation(
+                                connection,
+                                batch=batch,
+                                observation=observation,
+                                object_id=target.object_id,
+                            )
+                        accepted_ids.append(observation.observation_id)
                 except ValueError as error:
                     issue_count += 1
                     self._record_ingestion_issue(
@@ -3231,51 +3259,54 @@ class SQLiteStore:
                     )
             for observation in batch.relationship_observations:
                 try:
-                    journal_status = self._journal_item_status(
-                        connection,
-                        observation_id=observation.observation_id,
-                        batch=batch,
-                        item_kind="relationship",
-                        item=observation,
-                    )
-                    if journal_status == "duplicate":
-                        continue
-                    if journal_status == "conflict":
-                        raise ValueError("observation_id_collision")
-                    subject = self._resolve_locator(
-                        connection,
-                        locator=observation.subject,
-                        system_id=batch.system_id,
-                        observed_at=batch.observed_at,
-                    )
-                    object_value = self._resolve_locator(
-                        connection,
-                        locator=observation.object,
-                        system_id=batch.system_id,
-                        observed_at=batch.observed_at,
-                    )
-                    recorded_status = self._record_journal_item(
-                        connection,
-                        observation_id=observation.observation_id,
-                        batch=batch,
-                        item_kind="relationship",
-                        item=observation,
-                    )
-                    if recorded_status != "recorded":  # pragma: no cover - transaction invariant
-                        raise RuntimeError("observation journal status changed during ingestion")
-                    self._merge_relationship_observation(
-                        connection,
-                        batch=batch,
-                        observation=observation,
-                        subject_id=subject.object_id,
-                        object_id=object_value.object_id,
-                    )
-                    if (
-                        observation.predicate == "contains"
-                        and observation.presence is PresenceState.PRESENT
-                    ):
-                        positive_contains.add((subject.object_id, object_value.object_id))
-                    accepted_ids.append(observation.observation_id)
+                    with self._ingestion_item_savepoint(connection):
+                        journal_status = self._journal_item_status(
+                            connection,
+                            observation_id=observation.observation_id,
+                            batch=batch,
+                            item_kind="relationship",
+                            item=observation,
+                        )
+                        if journal_status == "duplicate":
+                            continue
+                        if journal_status == "conflict":
+                            raise ValueError("observation_id_collision")
+                        subject = self._resolve_locator(
+                            connection,
+                            locator=observation.subject,
+                            system_id=batch.system_id,
+                            observed_at=batch.observed_at,
+                        )
+                        object_value = self._resolve_locator(
+                            connection,
+                            locator=observation.object,
+                            system_id=batch.system_id,
+                            observed_at=batch.observed_at,
+                        )
+                        recorded_status = self._record_journal_item(
+                            connection,
+                            observation_id=observation.observation_id,
+                            batch=batch,
+                            item_kind="relationship",
+                            item=observation,
+                        )
+                        if recorded_status != "recorded":  # pragma: no cover - invariant
+                            raise RuntimeError(
+                                "observation journal status changed during ingestion"
+                            )
+                        self._merge_relationship_observation(
+                            connection,
+                            batch=batch,
+                            observation=observation,
+                            subject_id=subject.object_id,
+                            object_id=object_value.object_id,
+                        )
+                        if (
+                            observation.predicate == "contains"
+                            and observation.presence is PresenceState.PRESENT
+                        ):
+                            positive_contains.add((subject.object_id, object_value.object_id))
+                        accepted_ids.append(observation.observation_id)
                 except ValueError as error:
                     issue_count += 1
                     self._record_ingestion_issue(

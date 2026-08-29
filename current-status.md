@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 23:33 ET
+Updated: 2026-08-28 23:50 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 208 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 209 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 9 HTTP routes, verified from source.
-- Version control: local `main` includes the verified local-caller authorization, metadata-credit, relationship-reconciliation, and compatibility-process cleanup fixes; completed implementation batches are committed with focused messages.
-- Active review round: repair rejected ingestion-item atomicity, then run the next residual-risk review.
+- Version control: local `main` includes the verified local-caller authorization, metadata-credit, relationship-reconciliation, compatibility cleanup, and rejected-item atomicity fixes; completed batches are committed with focused messages.
+- Active review round: run the next residual-risk review and keep the hourly Murmuration tending checkpoint.
 - Next progress report due: 2026-08-29 00:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -42,6 +42,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Repair direct Workspace metadata coverage so its normalized observation is accepted and credited.
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
+- [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
+- [ ] Tend Murmuration about hourly; the latest pass was read-only because the native project profile is not provisioned.
 
 ## Evidence and decisions
 
@@ -111,6 +113,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - A runtime review reproduced that cancelling a Databricks compatibility check could leave its CLI subprocess alive.
 - Compatibility checks now create explicit reader/wait tasks and share the normal runner's kill, exit-wait, and task-settlement path for cancellation, timeout, and output-limit failures while preserving the original exception.
 - Fake hanging-process regressions cover all three exceptional paths without launching a subprocess; independent review found no blocker and adapter branch coverage increased from 74% to 77%.
+- Late-rejected facet absence and relationship items now use transaction-local savepoints; rollback removes locator, journal, facet, and relationship residue before the durable ingestion issue is written.
+- The atomicity regression combines a valid facet sibling, an unauthorized external absence, a relationship whose second locator is invalid, and complete relationship-absence coverage; only the valid sibling persists, both issues remain durable, and no freshness credit is granted.
+- Savepoint use is limited to late-rejection paths so the 502-object regression remains fast; the full 209-test suite completes in about nine seconds and storage branch coverage is 84%.
+- Independent storage review found no blocker, confirmed nested savepoints remain atomic under `BEGIN IMMEDIATE`, and verified coverage/reconciliation stay suppressed when any item is rejected.
+- Murmuration project identity is now intentionally tracked in `.murmuration/project.toml`; the 23:46 tending pass found no project-specific forum context and could not write because the native identity profile is not provisioned. BookStack remained credential-gated.
 
 ## Risks / watch list
 
