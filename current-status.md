@@ -123,6 +123,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Require an accessible reason for every disabled refresh option.
 - [x] Reap runtime work and close SQLite when lifespan startup is cancelled.
 - [x] Apply the TOML safety contract to direct programmatic settings.
+- [x] Define the action-linked ingestion lease linearization point.
 
 ## Evidence and decisions
 
@@ -234,6 +235,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Lifespan now encloses startup itself in `try/finally`; a scheduler-level regression cancels at the exact post-task-creation yield and proves both background reaping and closed-database behavior. Independent re-review is clear at 423 Windows tests.
 - Direct `AppSettings`, `DatabricksSystemSettings`, and `ProjectSettings` now share the loader's path/type, loopback, numeric-bound, profile, Workspace-root, stable-ID, count, and uniqueness invariants before SQLite creation.
 - Independent focused review closed the programmatic-settings low with no medium-or-higher regression; direct invalid/normalization/duplicate tests bring exact Windows and Ubuntu/WSL parity to 432 passed plus one complementary platform skip.
+- A fresh storage/migration/scale audit found no medium-or-higher defect; its one reproduced low confirmed that a writer can cross wall-clock lease expiry during ingestion only while `BEGIN IMMEDIATE` prevents concurrent reclaim.
+- The architecture now defines new-batch lease authority at that transaction-entry check, distinguishes expiry during the bounded transaction from later lifecycle writes, and preserves lease-free exact replay idempotency.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.

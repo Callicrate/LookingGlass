@@ -1006,6 +1006,8 @@ Incidental authority MUST resolve to one unambiguous enabled capability and one 
 A non-root collection fact MUST be linked by an authorized same-batch `contains` edge from the exact collection subject; direct facet evidence MUST target the exact authorized object.
 Identity, journal, and projection writes occur only after this check.
 
+Lease authority for a new action-linked batch linearizes when the ingester, inside its `BEGIN IMMEDIATE` transaction, verifies the matching unexpired `running` lease. That writer reservation prevents another worker from reclaiming or reassigning the action until the whole ingestion transaction commits or rolls back. Wall-clock expiry during the bounded transaction does not retroactively invalidate evidence admitted at that linearization point; every later attempt, completion, or new batch still performs its own current lease check. Exact replay of an already recorded batch digest remains idempotent and does not require the original lease.
+
 ### Merge rules
 
 - A patch updates only its explicit field mask.
