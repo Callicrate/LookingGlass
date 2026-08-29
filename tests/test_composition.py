@@ -1271,10 +1271,26 @@ async def test_runtime_stop_cancels_in_flight_worker_without_waiting_for_cli_tim
         )
     )
     await asyncio.wait_for(runner.started.wait(), timeout=1)
+    actions = runtime.store.list_actions()
+    assert len(actions) == 1
+    interrupted = actions[0]
+    assert interrupted.state.value == "running"
+    assert interrupted.leased_until is not None
+    assert runtime.store.list_action_attempts(interrupted.action.action_id) == ()
+    database_path = runtime.settings.app.database_path
 
     await asyncio.wait_for(runtime.stop(), timeout=1)
 
     assert runner.cancelled
+
+    with SQLiteStore(database_path) as reopened:
+        recovered = await reopened.lease_next(
+            adapter_key="databricks",
+            worker_id="recovered",
+            now=interrupted.leased_until + timedelta(microseconds=1),
+        )
+        assert recovered is not None
+        assert recovered.action.action_id == interrupted.action.action_id
 
 
 @pytest.mark.anyio
