@@ -21,7 +21,7 @@ async-api-view = "async_api_view.cli:main"
 dev = [
     "coverage[toml]>=7.10,<8",
     "httpx2>=2.12,<3",
-    "pytest>=8.3,<9",
+    "pytest>=9.1.1,<10",
     "ruff>=0.9,<1",
 ]
 

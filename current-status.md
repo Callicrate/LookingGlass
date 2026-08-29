@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 08:36 ET
+Updated: 2026-08-29 08:50 ET
 
 ## Goal
 
@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 331 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: SQLite application identity and complete schema validation are independently clear and applied locally; five release-hardening findings remain queued.
+- Active review round: pytest advisory remediation, locked auditing, immutable CI action pins, and Dependabot are independently clear; three release-hardening findings remain queued.
 - Next progress report due: 2026-08-29 09:03 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 07:40 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 08:40 ET.
+- [ ] Tend Murmuration about hourly; the 08:40 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 09:40 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -93,9 +93,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close independent review of SQLite application identity and complete schema validation.
 - [ ] Verify every packaged runtime asset and smoke-test the installed wheel.
 - [ ] Constrain isolated build dependencies for reproducible release archives.
-- [ ] Upgrade pytest past its reported moderate advisory and audit dependencies in CI.
+- [x] Close review of pytest advisory remediation and locked CI dependency auditing.
 - [ ] Complete a documented first-run path for standalone wheel installation.
-- [ ] Pin CI actions to immutable reviewed commit SHAs.
+- [x] Close review of immutable CI action pins and Dependabot updates.
 
 ## Evidence and decisions
 
@@ -115,6 +115,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - SQLite startup now rejects foreign application IDs and unrecognized schemas before ledger mutation, adopts only recognized markerless Rookery stores, and writes the `ROOK` application ID after successful migrations.
 - Migration-derived initial/current fingerprints cover table columns, types, nullability, primary keys, table constraints, expression/partial indexes, and explicit index DDL; required runtime indexes repair before final validation.
 - The real ignored database now carries application ID `1380929355` (`ROOK`), all 15 migrations, integrity `ok`, and zero foreign-key violations.
+- Pytest is locked at 9.1.1 beyond the 9.0.3 advisory fix; `uv audit --locked` is clean, runs on both CI operating systems, and uses pinned uv 0.12.1.
+- CI action tags were resolved against their official repositories and replaced with immutable commit SHAs; Dependabot is configured to propose weekly GitHub Actions updates.
+- The 08:40 Murmuration tend again found no scoped shared context and remained read-only because native project credentials are absent; notifications and BookStack remain gated.
+- Independent release review confirmed both action SHAs match their official tag refs, pinned uv 0.12.1 supports the exact audit command, Dependabot syntax is coherent, and no mutable executable input was added.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
@@ -251,7 +255,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - All facet observations now use transaction-local savepoints; a merge-over-limit regression proves rejected items cannot rename objects, advance presence time, journal provenance, or replace supporting evidence.
 - `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
 - Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
-- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 319 tests and 87% branch coverage, including non-blocking runtime startup, atomic configuration and binding digests, policy initialization/version ambiguity, 94% coordinator branch coverage, scoped wakeups, drilldown validation, controlled SQLite failures, distribution verification, typed identity, nested DTO validation, and migration `0014`; the shared Windows `.venv` was untouched.
+- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 331 tests and 88% branch coverage, including pytest 9.1.1, a clean locked audit, migration `0015`, SQLite application/full-schema validation, durable membership boundaries, lease fencing, and all prior runtime/security contracts; the shared Windows `.venv` was untouched.
 - The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
 - The 04:43 Murmuration tending pass produced the same read-only result: no scoped public context and no native profile for writes, notifications, or BookStack.
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.

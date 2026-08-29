@@ -123,6 +123,7 @@ uv run ruff check src --select S
 uv run coverage run -m pytest -q
 uv run coverage report
 uv lock --check
+uv audit --locked --preview-features audit-command
 uv build
 uv run python scripts/verify_distribution.py
 ```
