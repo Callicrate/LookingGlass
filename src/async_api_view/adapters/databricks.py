@@ -1019,7 +1019,7 @@ def _normalize_content(
             FieldCoverage.PARTIAL,
             body,
             tuple(body),
-            _scopes(action, "content"),
+            (),
             source_revision=str(payload["revision"]) if "revision" in payload else None,
         )
     )
@@ -1158,6 +1158,10 @@ class DatabricksWorker:
             return
         try:
             binding = await self._binding(action)
+            if action.capability_key == "databricks.workspace.content.read":
+                raise ContentPolicyError(
+                    "Workspace content persistence is unavailable in this worker"
+                )
             target = await self.targets.resolve(action=action, binding=binding)
             target = _enforce_binding_target(action.capability_key, binding, target)
             invocation = DatabricksCommandRegistry.build(

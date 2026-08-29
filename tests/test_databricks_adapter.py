@@ -416,6 +416,7 @@ def test_fixture_normalization_is_deterministic_and_metadata_only(
     )
     if capability == "databricks.workspace.content.read":
         assert first.batch.coverage == ()
+        assert first.batch.facet_observations[0].satisfies == ()
     else:
         expected_coverage = (
             CollectionCoverage.COMPLETE
@@ -780,6 +781,11 @@ class _MetadataTargets:
         )
 
 
+class _UnexpectedTargets:
+    async def resolve(self, **_: object) -> ResolvedTarget:
+        raise AssertionError("content target resolution must remain disabled")
+
+
 class _Runner:
     executable = "databricks"
 
@@ -968,6 +974,46 @@ def test_worker_maps_all_ingestion_statuses_for_complete_object_read(
     asyncio.run(worker.run_once())
     completed = [event[2] for event in lifecycle.events if event[0] == "complete"]
     assert completed[-1].outcome is expected
+
+
+def test_worker_rejects_content_before_cli_without_artifact_persistence() -> None:
+    action = _action("databricks.workspace.content.read", "content")
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {
+            "profile": "local",
+            "workspace_root": "/Shared",
+            "content_capture_enabled": True,
+            "content_max_bytes": 1024,
+        },
+    )
+    lifecycle = _Lifecycle()
+    ingestion = _Ingestion()
+    runner = _TimeoutRunner()
+    worker = DatabricksWorker(
+        worker_id="test",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC))),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=ingestion,
+        targets=_UnexpectedTargets(),
+        runner=runner,
+    )
+
+    assert asyncio.run(worker.run_once())
+
+    completed = [event[2] for event in lifecycle.events if event[0] == "complete"]
+    assert runner.calls == 0
+    assert len(completed) == 1
+    assert completed[0].outcome is ActionOutcome.FAILED
+    assert completed[0].error_class is ErrorClass.ADAPTER_CONTRACT_MISMATCH
+    assert ingestion.batches == []
+    assert not any(event[0] in {"running", "attempt"} for event in lifecycle.events)
 
 
 def test_retryable_failure_schedules_one_durable_attempt_per_lease() -> None:
