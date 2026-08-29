@@ -38,6 +38,39 @@ def test_init_rejects_missing_config(tmp_path: Path) -> None:
     assert result == 2
 
 
+@pytest.mark.parametrize("command", ["init", "run-once", "serve"])
+@pytest.mark.parametrize("corruption", ["bytes", "schema"])
+def test_database_commands_fail_cleanly_on_incompatible_sqlite_state(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    command: str,
+    corruption: str,
+) -> None:
+    database = tmp_path / f"{command}-{corruption}.sqlite3"
+    config = tmp_path / f"{command}-{corruption}.toml"
+    config.write_text(
+        f'[app]\ndatabase_path = "{database.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    if corruption == "bytes":
+        database.write_bytes(b"not a SQLite database")
+    else:
+        malformed = sqlite3.connect(database)
+        try:
+            malformed.execute("CREATE TABLE schema_migrations (wrong_column TEXT)")
+            malformed.commit()
+        finally:
+            malformed.close()
+
+    result = cli.main(["--config", str(config), command])
+
+    assert result == 2
+    assert "local SQLite state could not be opened or updated" in caplog.text
+    moved = database.with_suffix(".moved")
+    database.rename(moved)
+    assert moved.is_file()
+
+
 def test_backup_command_creates_snapshot_and_refuses_overwrite(tmp_path: Path) -> None:
     database = tmp_path / "state.sqlite3"
     output = tmp_path / "snapshots" / "state.sqlite3"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -173,6 +174,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 runtime.store.close()
         else:  # pragma: no cover - argparse owns the command vocabulary
             raise RuntimeError(f"unsupported command {args.command}")
+    except sqlite3.Error:
+        logger.error("local SQLite state could not be opened or updated")
+        return 2
     except (ConfigError, RuntimeError, ValueError, OSError) as exc:
         logger.error("%s", exc)
         return 2
