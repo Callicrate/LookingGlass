@@ -901,6 +901,9 @@ class _Guard:
     async def evaluate(self, **_: object) -> GuardDecision:
         return GuardDecision(GuardDisposition.DISPATCH, "allowed")
 
+    async def authorize_start(self, **_: object) -> GuardDecision:
+        return GuardDecision(GuardDisposition.DISPATCH, "allowed")
+
 
 class _Bindings:
     def __init__(self, binding: ConnectionBinding) -> None:
@@ -1047,7 +1050,6 @@ def test_worker_uses_only_ports() -> None:
     )
     assert asyncio.run(worker.run_once())
     assert ingestion.batches
-    assert any(event[0] == "running" for event in lifecycle.events if isinstance(event, tuple))
     assert all(
         event[1] == worker.queue.lease.lease_id
         for event in lifecycle.events

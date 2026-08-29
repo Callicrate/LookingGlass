@@ -1239,7 +1239,7 @@ class DatabricksWorker:
         )
         if lease is None:
             return False
-        await self.process(lease, now=current)
+        await self.process(lease, now=now)
         return True
 
     async def process(self, lease: ActionLease, *, now: datetime | None = None) -> None:
@@ -1286,9 +1286,6 @@ class DatabricksWorker:
                 current,
             )
             return
-        await self.lifecycle.mark_running(
-            action_id=action.action_id, lease_id=lease.lease_id, started_at=current
-        )
         ordinal = lease.attempt_ordinal
         if ordinal > self.max_attempts:
             await self._complete(
@@ -1299,7 +1296,14 @@ class DatabricksWorker:
                 current,
             )
             return
-        started = datetime.now(UTC)
+        started = current if now is not None else datetime.now(UTC)
+        final_decision = await self.guard.authorize_start(
+            action_id=action.action_id,
+            lease_id=lease.lease_id,
+            now=started,
+        )
+        if final_decision.disposition is not GuardDisposition.DISPATCH:
+            return
         try:
             execution = await self._run_with_heartbeats(lease, invocation)
             if execution is None:

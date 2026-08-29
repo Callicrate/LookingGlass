@@ -51,11 +51,7 @@ class ActionQueuePort(Protocol):
 
 @runtime_checkable
 class ActionLifecyclePort(Protocol):
-    """The only action-state write surface available to API workers."""
-
-    async def mark_running(
-        self, *, action_id: str, lease_id: str, started_at: datetime
-    ) -> None: ...
+    """Lease-authorized attempt/completion writes after guard-owned logical start."""
 
     async def record_attempt(self, attempt: ActionAttempt, *, lease_id: str) -> None: ...
 
@@ -69,6 +65,10 @@ class ActionLifecyclePort(Protocol):
 @runtime_checkable
 class PreDispatchGuardPort(Protocol):
     async def evaluate(self, *, action_id: str, lease_id: str, now: datetime) -> GuardDecision: ...
+
+    async def authorize_start(
+        self, *, action_id: str, lease_id: str, now: datetime
+    ) -> GuardDecision: ...
 
 
 @runtime_checkable

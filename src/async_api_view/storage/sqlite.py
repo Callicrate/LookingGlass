@@ -3173,6 +3173,32 @@ class SQLiteStore:
 
     async def evaluate(self, *, action_id: str, lease_id: str, now: datetime) -> GuardDecision:
         """Run the generic local pre-dispatch guard against a current lease."""
+        return self._evaluate_action_guard(
+            action_id=action_id,
+            lease_id=lease_id,
+            now=now,
+            authorize_start=False,
+        )
+
+    async def authorize_start(
+        self, *, action_id: str, lease_id: str, now: datetime
+    ) -> GuardDecision:
+        """Atomically revalidate authority and transition an allowed lease to running."""
+        return self._evaluate_action_guard(
+            action_id=action_id,
+            lease_id=lease_id,
+            now=now,
+            authorize_start=True,
+        )
+
+    def _evaluate_action_guard(
+        self,
+        *,
+        action_id: str,
+        lease_id: str,
+        now: datetime,
+        authorize_start: bool,
+    ) -> GuardDecision:
         action_id = require_uuid(action_id, "action_id")
         lease_id = require_uuid(lease_id, "lease_id")
         now = require_utc(now, "now")
@@ -3293,6 +3319,18 @@ class SQLiteStore:
                     evidence=evidence,
                 )
                 if decision.kind.value != "satisfied" or decision.satisfying_observation_id is None:
+                    if authorize_start:
+                        result = connection.execute(
+                            """
+                            UPDATE adapter_actions
+                            SET state = 'running', started_at = COALESCE(started_at, ?),
+                                error_class = NULL, redacted_diagnostic = NULL, retry_at = NULL
+                            WHERE action_id = ? AND state = 'leased' AND lease_id = ?
+                            """,
+                            (_utc_text(now), action_id, lease_id),
+                        )
+                        if result.rowcount != 1:  # pragma: no cover - transaction invariant
+                            return GuardDecision(GuardDisposition.FAIL, "invalid_action_lease")
                     return GuardDecision(GuardDisposition.DISPATCH, "dispatch")
                 satisfying_ids.append(decision.satisfying_observation_id)
             connection.execute(

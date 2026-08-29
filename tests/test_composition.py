@@ -379,6 +379,89 @@ async def test_expired_action_deadline_never_reaches_cli_runner(tmp_path: Path) 
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("boundary", "expected_reason"),
+    (
+        ("system", "system_disabled"),
+        ("binding", "binding_disabled"),
+        ("capability", "capability_disabled"),
+        ("deadline", "action_deadline_expired"),
+    ),
+)
+async def test_final_start_authorization_blocks_revoked_remote_dispatch(
+    tmp_path: Path,
+    boundary: str,
+    expected_reason: str,
+) -> None:
+    runner = FakeCliRunner(b"[]")
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.workspace.children.read"
+        and item.target_kind == "configured_scope"
+    )
+    intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=option.system_id,
+            target_kind=option.target_kind,
+            target_id=option.target_id,
+            capability_key=option.capability_key,
+            facet=option.facet,
+        )
+    )
+    admitted = await runtime.coordinator.run_once()
+    assert admitted is not None and admitted.action_id is not None
+    resolver = runtime.worker.targets
+
+    class RevokingResolver:
+        async def resolve(self, **kwargs: object):  # type: ignore[no-untyped-def]
+            resolved = await resolver.resolve(**kwargs)
+            if boundary == "system":
+                runtime.store.set_system_enabled(option.system_id, enabled=False)
+            elif boundary == "binding":
+                runtime.store._connection.execute(
+                    "UPDATE connection_bindings SET enabled = 0 WHERE system_id = ?",
+                    (option.system_id,),
+                )
+            elif boundary == "capability":
+                runtime.store._connection.execute(
+                    """
+                    UPDATE capability_bindings
+                    SET enabled = 0
+                    WHERE capability_key = 'databricks.workspace.children.read'
+                    """
+                )
+            else:
+                deadline = datetime.now(UTC)
+                deadline_text = deadline.isoformat().replace("+00:00", "Z")
+                runtime.store._connection.execute(
+                    "UPDATE adapter_actions SET deadline = ? WHERE action_id = ?",
+                    (deadline_text, admitted.action_id),
+                )
+                runtime.store._connection.execute(
+                    "UPDATE refresh_intents SET expires_at = ? WHERE intent_id = ?",
+                    (deadline_text, intent_id),
+                )
+            return resolved
+
+    runtime.worker.targets = RevokingResolver()
+
+    assert await runtime.worker.run_once()
+
+    assert runner.calls == []
+    stored = runtime.store.get_stored_action(admitted.action_id)
+    assert stored is not None and stored.state.value == "cancelled"
+    assert stored.redacted_diagnostic == expected_reason
+    assert runtime.store.list_action_attempts(admitted.action_id) == ()
+    view = await runtime.backend.intent(intent_id)
+    assert view is not None and view.terminal
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_expired_coalesced_receipt_is_not_overlaid_by_live_action(tmp_path: Path) -> None:
     runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
     dashboard = await runtime.backend.dashboard()
