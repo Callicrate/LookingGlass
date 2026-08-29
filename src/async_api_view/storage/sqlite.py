@@ -2938,6 +2938,45 @@ class SQLiteStore:
         self._refresh_action_parent_aggregates(connection, action_id=action_id)
         return GuardDecision(GuardDisposition.CANCEL, reason)
 
+    def _prune_expired_action_scopes(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        action_id: str,
+        now: datetime,
+    ) -> tuple[sqlite3.Row, ...]:
+        scope_rows = connection.execute(
+            """
+            SELECT scope.*, intent.requested_at, intent.expires_at
+            FROM action_intent_scopes AS link
+            JOIN refresh_intent_scopes AS scope ON scope.intent_scope_id = link.intent_scope_id
+            JOIN refresh_intents AS intent ON intent.intent_id = scope.intent_id
+            WHERE link.action_id = ? AND scope.state IN ('admitted', 'coalesced')
+            """,
+            (action_id,),
+        ).fetchall()
+        live_rows: list[sqlite3.Row] = []
+        for scope_row in scope_rows:
+            expires_at = _dt(scope_row["expires_at"])
+            if expires_at is None or expires_at > now:
+                live_rows.append(scope_row)
+                continue
+            connection.execute(
+                """
+                UPDATE refresh_intent_scopes
+                SET state = 'expired', disposition_reason = 'request_expired',
+                    eligible_at = NULL, lease_id = NULL, lease_worker_id = NULL,
+                    leased_until = NULL
+                WHERE intent_scope_id = ?
+                """,
+                (scope_row["intent_scope_id"],),
+            )
+            self._refresh_intent_aggregate(
+                connection,
+                intent_scope_id=scope_row["intent_scope_id"],
+            )
+        return tuple(live_rows)
+
     async def evaluate(self, *, action_id: str, lease_id: str, now: datetime) -> GuardDecision:
         """Run the generic local pre-dispatch guard against a current lease."""
         action_id = require_uuid(action_id, "action_id")
@@ -2990,6 +3029,22 @@ class SQLiteStore:
                         action_id=action_id,
                         now=now,
                     )
+            try:
+                active_scopes = self._prune_expired_action_scopes(
+                    connection,
+                    action_id=action_id,
+                    now=now,
+                )
+            except (TypeError, ValueError):
+                return self._terminalize_action_contract_failure(
+                    connection,
+                    action_id=action_id,
+                    now=now,
+                )
+            if not active_scopes:
+                return self._guard_cancel(
+                    connection, action_id=action_id, reason="no_live_originating_scope"
+                )
             if not row["system_enabled"]:
                 return self._guard_cancel(connection, action_id=action_id, reason="system_disabled")
             if not row["binding_enabled"]:
@@ -3006,20 +3061,6 @@ class SQLiteStore:
                 )
             if row["operation_class"] != OperationClass.OBSERVE.value:
                 return GuardDecision(GuardDisposition.FAIL, "capability_not_observe")
-            active_scopes = connection.execute(
-                """
-                SELECT scope.*, intent.requested_at
-                FROM action_intent_scopes AS link
-                JOIN refresh_intent_scopes AS scope ON scope.intent_scope_id = link.intent_scope_id
-                JOIN refresh_intents AS intent ON intent.intent_id = scope.intent_id
-                WHERE link.action_id = ? AND scope.state IN ('admitted', 'coalesced')
-                """,
-                (action_id,),
-            ).fetchall()
-            if not active_scopes:
-                return self._guard_cancel(
-                    connection, action_id=action_id, reason="no_live_originating_scope"
-                )
             satisfying_ids: list[str] = []
             for scope_row in active_scopes:
                 scope = _scope_from_row(scope_row)

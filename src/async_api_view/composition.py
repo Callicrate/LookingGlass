@@ -920,17 +920,19 @@ class SQLiteWebBackend:
             state = record.state.value
             failure: str | None = None
             action_id = record.linked_action_id
+            scope_terminal = record.state in _TERMINAL_SCOPE_STATES
             if action_id:
                 action = self._store.get_stored_action(action_id)
                 if action is not None:
-                    state = action.state.value
-                    failure = action.redacted_diagnostic
                     updated_at = action.completed_at or action.started_at or updated_at
-                    terminal = terminal and action.state in _TERMINAL_ACTION_STATES
+                    if not scope_terminal:
+                        state = action.state.value
+                        failure = action.redacted_diagnostic
+                        terminal = terminal and action.state in _TERMINAL_ACTION_STATES
                 else:
-                    terminal = False
+                    terminal = terminal and scope_terminal
             else:
-                terminal = terminal and record.state in _TERMINAL_SCOPE_STATES
+                terminal = terminal and scope_terminal
             target_label = record.scope.target.target_id
             if record.scope.target.kind is TargetKind.CONFIGURED_SCOPE:
                 configured = self._store.get_configured_scope(target_label)

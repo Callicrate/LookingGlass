@@ -423,6 +423,58 @@ def test_guard_expires_dead_action_and_requeues_still_live_coalesced_scope(tmp_p
     assert replacement.action_id != admitted.action_id
 
 
+def test_guard_expires_coalesced_scope_without_cancelling_live_action(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "coalesced-expiry.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    live = run(store.submit_refresh(_intent(scope, NOW)))
+    admitted = run(DurableCoordinator(store, worker_id="first").run_once(now=NOW))
+    assert admitted is not None and admitted.action_id is not None
+    expiring = run(
+        store.submit_refresh(
+            _intent(
+                scope,
+                NOW + timedelta(seconds=1),
+                expires_at=NOW + timedelta(seconds=2),
+            )
+        )
+    )
+    coalesced = run(
+        DurableCoordinator(store, worker_id="coalesced").run_once(now=NOW + timedelta(seconds=1))
+    )
+    assert coalesced is not None and coalesced.state.value == "coalesced"
+    lease = run(
+        store.lease_next(
+            adapter_key="databricks",
+            worker_id="worker",
+            now=NOW + timedelta(seconds=3),
+        )
+    )
+    assert lease is not None
+
+    decision = run(
+        store.evaluate(
+            action_id=lease.action.action_id,
+            lease_id=lease.lease_id,
+            now=NOW + timedelta(seconds=3),
+        )
+    )
+
+    assert decision.disposition.value == "dispatch"
+    live_scope = store.list_intent_scopes(live.intent_id)[0]
+    expired_scope = store.list_intent_scopes(expiring.intent_id)[0]
+    assert live_scope.state.value == "admitted"
+    assert expired_scope.state.value == "expired"
+    assert expired_scope.linked_action_id == admitted.action_id
+    aggregate = store._connection.execute(
+        "SELECT aggregate_state FROM refresh_intents WHERE intent_id = ?",
+        (expiring.intent_id,),
+    ).fetchone()[0]
+    assert aggregate == "complete"
+
+
 def test_guard_satisfaction_completes_attached_parent_intent(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "satisfy.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(

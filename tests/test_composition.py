@@ -15,6 +15,8 @@ from async_api_view.cli import _run_once
 from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
 from async_api_view.contracts import (
+    ActionCompletion,
+    ActionOutcome,
     FacetState,
     KnowledgeState,
     PresenceState,
@@ -368,6 +370,80 @@ async def test_expired_action_deadline_never_reaches_cli_runner(tmp_path: Path) 
     assert runner.calls == []
     assert runtime.store.get_stored_action(admitted.action_id).state.value == "cancelled"
     assert runtime.store.list_intent_scopes(intent.intent_id)[0].state.value == "expired"
+    runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_expired_coalesced_receipt_is_not_overlaid_by_live_action(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    dashboard = await runtime.backend.dashboard()
+    option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.workspace.children.read"
+        and item.target_kind == "configured_scope"
+    )
+    configured = runtime.store.get_configured_scope(option.target_id)
+    assert configured is not None
+    requested_at = datetime(2026, 8, 29, tzinfo=UTC)
+    scope = RefreshScope(
+        system_id=option.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, option.target_id),
+        object_type=configured.object_type,
+        facet=option.facet,
+        capability_key=option.capability_key,
+    )
+    live = RefreshIntent(
+        intent_id=uuid4(),
+        idempotency_key=str(uuid4()),
+        origin=RefreshOrigin.MANUAL,
+        actor_id="local-user",
+        scopes=(scope,),
+        requested_at=requested_at,
+    )
+    expiring = RefreshIntent(
+        intent_id=uuid4(),
+        idempotency_key=str(uuid4()),
+        origin=RefreshOrigin.MANUAL,
+        actor_id="local-user",
+        scopes=(scope,),
+        requested_at=requested_at + timedelta(seconds=1),
+        expires_at=requested_at + timedelta(seconds=2),
+    )
+    await runtime.store.submit_refresh(live)
+    admitted = await runtime.coordinator.run_once(now=requested_at)
+    assert admitted is not None and admitted.action_id is not None
+    await runtime.store.submit_refresh(expiring)
+    coalesced = await runtime.coordinator.run_once(now=requested_at + timedelta(seconds=1))
+    assert coalesced is not None and coalesced.state.value == "coalesced"
+    lease = await runtime.store.lease_next(
+        adapter_key="databricks",
+        worker_id="worker",
+        now=requested_at + timedelta(seconds=3),
+    )
+    assert lease is not None
+    decision = await runtime.store.evaluate(
+        action_id=lease.action.action_id,
+        lease_id=lease.lease_id,
+        now=requested_at + timedelta(seconds=3),
+    )
+    assert decision.disposition.value == "dispatch"
+    await runtime.store.complete_action(
+        ActionCompletion(
+            action_id=lease.action.action_id,
+            outcome=ActionOutcome.SUCCEEDED,
+            completed_at=requested_at + timedelta(seconds=4),
+        ),
+        lease_id=lease.lease_id,
+    )
+
+    live_view = await runtime.backend.intent(str(live.intent_id))
+    expired_view = await runtime.backend.intent(str(expiring.intent_id))
+
+    assert live_view is not None and live_view.scopes[0].state == "succeeded"
+    assert expired_view is not None and expired_view.terminal
+    assert expired_view.scopes[0].state == "expired"
+    assert expired_view.scopes[0].action_id == admitted.action_id
     runtime.store.close()
 
 
