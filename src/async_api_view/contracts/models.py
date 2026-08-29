@@ -11,15 +11,19 @@ from ._validation import (
     JSONDTO,
     JSONValue,
     normalize_enum_tuple,
+    normalize_instance_tuple,
     optional_utc,
     optional_uuid,
+    require_bool,
     require_contract_key,
     require_enum,
+    require_instance,
+    require_int,
     require_positive_duration,
     require_text,
     require_utc,
     require_uuid,
-    validate_json,
+    validate_json_mapping,
 )
 from .enums import (
     AbsenceAuthority,
@@ -143,7 +147,7 @@ class FacetState(JSONDTO):
         require_contract_key(self.facet, "facet")
         require_text(self.facet_version, "facet_version", max_length=32)
         require_enum(self.knowledge, KnowledgeState, "knowledge")
-        object.__setattr__(self, "payload", validate_json(self.payload, "payload"))
+        object.__setattr__(self, "payload", validate_json_mapping(self.payload, "payload"))
         _set_optional_utc(self, "observed_at")
         _set_utc(self, "state_changed_at")
         _set_optional_uuid(self, "supporting_observation_id")
@@ -188,6 +192,7 @@ class RefreshScope(JSONDTO):
 
     def __post_init__(self) -> None:
         _set_uuid(self, "system_id")
+        require_instance(self.target, TargetRef, "target")
         require_contract_key(self.object_type, "object_type")
         require_contract_key(self.facet, "facet")
         require_enum(self.coverage, RefreshCoverage, "coverage")
@@ -219,6 +224,11 @@ class RefreshIntent(JSONDTO):
         _set_uuid(self, "intent_id")
         require_text(self.idempotency_key, "idempotency_key", max_length=512)
         require_text(self.actor_id, "actor_id", max_length=512)
+        object.__setattr__(
+            self,
+            "scopes",
+            normalize_instance_tuple(self.scopes, RefreshScope, "scopes"),
+        )
         require_enum(self.origin, RefreshOrigin, "origin")
         if not self.scopes:
             raise ValueError("scopes must contain at least one refresh scope")
@@ -229,8 +239,7 @@ class RefreshIntent(JSONDTO):
             raise ValueError("automatic refresh requires a live ui_session_id")
         if self.expires_at is not None and self.expires_at <= self.requested_at:
             raise ValueError("expires_at must be later than requested_at")
-        if not 0 <= self.priority <= 100:
-            raise ValueError("priority must be between 0 and 100")
+        require_int(self.priority, "priority", minimum=0, maximum=100)
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +286,16 @@ class AdapterAction(JSONDTO):
         require_text(self.adapter_version, "adapter_version", max_length=64)
         require_contract_key(self.capability_key, "capability_key")
         require_text(self.capability_version, "capability_version", max_length=64)
+        require_instance(self.target, TargetRef, "target")
+        object.__setattr__(
+            self,
+            "requested_scopes",
+            normalize_instance_tuple(
+                self.requested_scopes,
+                RefreshScope,
+                "requested_scopes",
+            ),
+        )
         if not self.requested_scopes:
             raise ValueError("requested_scopes must not be empty")
         if any(scope.system_id != self.system_id for scope in self.requested_scopes):
@@ -291,6 +310,7 @@ class CoverageDeclaration(JSONDTO):
     absence_authority: tuple[AbsenceAuthority, ...] = ()
 
     def __post_init__(self) -> None:
+        require_instance(self.scope, RefreshScope, "scope")
         require_enum(self.completeness, CollectionCoverage, "completeness")
         object.__setattr__(
             self,
@@ -321,15 +341,21 @@ class FacetObservation(JSONDTO):
 
     def __post_init__(self) -> None:
         _set_uuid(self, "observation_id")
+        require_instance(self.target, ObjectLocator, "target")
         require_contract_key(self.facet, "facet")
         require_text(self.facet_version, "facet_version", max_length=32)
         require_enum(self.update_mode, UpdateMode, "update_mode")
         require_enum(self.field_coverage, FieldCoverage, "field_coverage")
-        object.__setattr__(self, "payload", validate_json(self.payload, "payload"))
+        object.__setattr__(self, "payload", validate_json_mapping(self.payload, "payload"))
         normalized_mask = tuple(dict.fromkeys(self.field_mask))
         for name in normalized_mask:
             require_contract_key(name, "field_mask item")
         object.__setattr__(self, "field_mask", normalized_mask)
+        object.__setattr__(
+            self,
+            "satisfies",
+            normalize_instance_tuple(self.satisfies, RefreshScope, "satisfies"),
+        )
         if self.update_mode is UpdateMode.PATCH and not self.field_mask:
             raise ValueError("a patch requires an explicit non-empty field_mask")
         if self.field_coverage is FieldCoverage.PARTIAL and not self.field_mask:
@@ -353,6 +379,8 @@ class RelationshipObservation(JSONDTO):
 
     def __post_init__(self) -> None:
         _set_uuid(self, "observation_id")
+        require_instance(self.subject, ObjectLocator, "subject")
+        require_instance(self.object, ObjectLocator, "object")
         require_contract_key(self.predicate, "predicate")
         require_enum(self.presence, PresenceState, "presence")
         if self.presence is PresenceState.UNKNOWN:
@@ -378,6 +406,29 @@ class ObservationBatch(JSONDTO):
         _check_version(self.contract_version)
         for name in ("batch_id", "system_id", "connection_binding_id"):
             _set_uuid(self, name)
+        object.__setattr__(
+            self,
+            "facet_observations",
+            normalize_instance_tuple(
+                self.facet_observations,
+                FacetObservation,
+                "facet_observations",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "relationship_observations",
+            normalize_instance_tuple(
+                self.relationship_observations,
+                RelationshipObservation,
+                "relationship_observations",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "coverage",
+            normalize_instance_tuple(self.coverage, CoverageDeclaration, "coverage"),
+        )
         _set_optional_uuid(self, "action_id")
         require_contract_key(self.adapter_key, "adapter_key")
         require_text(self.adapter_version, "adapter_version", max_length=64)
@@ -466,6 +517,7 @@ class ActionLease(JSONDTO):
     attempt_ordinal: int = 1
 
     def __post_init__(self) -> None:
+        require_instance(self.action, AdapterAction, "action")
         _set_uuid(self, "lease_id")
         _set_utc(self, "leased_until")
         if (
@@ -515,8 +567,7 @@ class IngestionResult(JSONDTO):
                 for value in self.accepted_observation_ids
             ),
         )
-        if self.issue_count < 0:
-            raise ValueError("issue_count must not be negative")
+        require_int(self.issue_count, "issue_count", minimum=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -532,12 +583,13 @@ class ConnectionBinding(JSONDTO):
     def __post_init__(self) -> None:
         _set_uuid(self, "binding_id")
         _set_uuid(self, "system_id")
+        require_bool(self.enabled, "enabled")
         require_contract_key(self.adapter_key, "adapter_key")
         require_text(self.adapter_version, "adapter_version", max_length=64)
         object.__setattr__(
             self,
             "non_secret_settings",
-            validate_json(self.non_secret_settings, "non_secret_settings"),
+            validate_json_mapping(self.non_secret_settings, "non_secret_settings"),
         )
         if self.secret_reference is not None:
             require_text(self.secret_reference, "secret_reference", max_length=512)
@@ -562,6 +614,7 @@ class CapabilityBinding(JSONDTO):
         _set_uuid(self, "connection_binding_id")
         require_contract_key(self.capability_key, "capability_key")
         require_text(self.capability_version, "capability_version", max_length=64)
+        require_bool(self.enabled, "enabled")
         require_enum(self.operation_class, OperationClass, "operation_class")
         object.__setattr__(
             self,
@@ -574,8 +627,7 @@ class CapabilityBinding(JSONDTO):
             raise ValueError("a capability requires targets and produced facets")
         for facet in self.produced_facets:
             require_contract_key(facet, "produced facet")
-        if self.selection_priority < 0:
-            raise ValueError("selection_priority must not be negative")
+        require_int(self.selection_priority, "selection_priority", minimum=0)
         for effect in self.collateral_effects:
             require_text(effect, "collateral effect", max_length=1024)
         for mitigation in self.mitigations:
@@ -604,6 +656,11 @@ class ObjectTypeDefinition(JSONDTO):
     def __post_init__(self) -> None:
         require_contract_key(self.type_key, "type_key")
         require_text(self.version, "version", max_length=32)
+        object.__setattr__(
+            self,
+            "facets",
+            normalize_instance_tuple(self.facets, FacetDefinition, "facets"),
+        )
         if not self.facets:
             raise ValueError("an object type requires at least one facet")
         facet_names = [facet.facet for facet in self.facets]
@@ -636,6 +693,7 @@ class ScopePolicyState(JSONDTO):
     latest_targeted_action_started_at: datetime | None = None
 
     def __post_init__(self) -> None:
+        require_instance(self.scope, RefreshScope, "scope")
         _set_optional_utc(self, "latest_qualifying_observation_at")
         _set_optional_utc(self, "latest_targeted_action_started_at")
 
@@ -648,6 +706,7 @@ class QualifyingObservation(JSONDTO):
 
     def __post_init__(self) -> None:
         _set_uuid(self, "observation_id")
+        require_instance(self.scope, RefreshScope, "scope")
         _set_utc(self, "observed_at")
 
 

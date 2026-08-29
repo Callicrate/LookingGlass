@@ -71,6 +71,42 @@ def require_positive_duration(value: timedelta, field_name: str) -> timedelta:
     return value
 
 
+def require_instance[T](value: object, expected_type: type[T], field_name: str) -> T:
+    if not isinstance(value, expected_type):
+        raise ValueError(f"{field_name} must be a {expected_type.__name__}")
+    return value
+
+
+def normalize_instance_tuple[T](
+    values: object, expected_type: type[T], field_name: str
+) -> tuple[T, ...]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        raise ValueError(f"{field_name} must be a sequence of {expected_type.__name__} values")
+    return tuple(require_instance(value, expected_type, field_name) for value in values)
+
+
+def require_bool(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean")
+    return value
+
+
+def require_int(
+    value: object,
+    field_name: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be an integer")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{field_name} must be at least {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{field_name} must be at most {maximum}")
+    return value
+
+
 def require_enum[T: Enum](value: object, enum_type: type[T], field_name: str) -> T:
     if not isinstance(value, enum_type):
         raise ValueError(f"{field_name} must be a {enum_type.__name__}")
@@ -107,6 +143,13 @@ def validate_json(value: Any, field_name: str = "payload") -> JSONValue:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [validate_json(item, f"{field_name}[]") for item in value]
     raise ValueError(f"{field_name} must contain only JSON-compatible values")
+
+
+def validate_json_mapping(value: Any, field_name: str) -> dict[str, JSONValue]:
+    normalized = validate_json(value, field_name)
+    if not isinstance(normalized, dict):
+        raise ValueError(f"{field_name} must be a JSON object")
+    return normalized
 
 
 def to_json_value(value: Any) -> JSONValue:

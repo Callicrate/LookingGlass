@@ -18,13 +18,18 @@ from async_api_view.contracts import (
     AdapterAction,
     CapabilityBinding,
     CollectionCoverage,
+    ConnectionBinding,
     CoverageDeclaration,
     ErrorClass,
     FacetObservation,
+    FacetState,
     FieldCoverage,
     GuardDecision,
     IngestionResult,
+    IngestionStatus,
+    KnowledgeState,
     ObjectLocator,
+    ObjectTypeDefinition,
     ObservationBatch,
     OperationClass,
     RefreshCoverage,
@@ -238,6 +243,135 @@ def test_contract_models_reject_primitive_enum_values() -> None:
         )
     with pytest.raises(ValueError, match="ActionState"):
         ActionRecord(uuid4(), "ready", NOW)  # type: ignore[arg-type]
+
+
+def test_contract_models_reject_raw_nested_dto_values() -> None:
+    refresh_scope = scope()
+    with pytest.raises(ValueError, match="facet_observations must be"):
+        ObservationBatch(
+            batch_id=uuid4(),
+            system_id=refresh_scope.system_id,
+            connection_binding_id=uuid4(),
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=NOW,
+            received_at=NOW,
+            facet_observations=({"observation_id": str(uuid4())},),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="scopes must be"):
+        RefreshIntent(
+            intent_id=uuid4(),
+            idempotency_key="raw-scope",
+            origin=RefreshOrigin.MANUAL,
+            actor_id="local-user",
+            scopes=({"facet": "metadata"},),  # type: ignore[arg-type]
+            requested_at=NOW,
+        )
+    with pytest.raises(ValueError, match="target must be"):
+        AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=refresh_scope.system_id,
+            connection_binding_id=uuid4(),
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="example.read",
+            capability_version="1",
+            target={"kind": "object"},  # type: ignore[arg-type]
+            requested_scopes=(refresh_scope,),
+        )
+    with pytest.raises(ValueError, match="action must be"):
+        ActionLease(  # type: ignore[arg-type]
+            action={"action_id": str(uuid4())},
+            lease_id=uuid4(),
+            leased_until=NOW,
+        )
+    with pytest.raises(ValueError, match="facets must be"):
+        ObjectTypeDefinition(
+            type_key="file",
+            version="1",
+            facets=({"facet": "metadata"},),  # type: ignore[arg-type]
+        )
+
+
+def test_contract_models_reject_boolean_integer_coercion() -> None:
+    refresh_scope = scope()
+    with pytest.raises(ValueError, match="priority must be an integer"):
+        RefreshIntent(
+            intent_id=uuid4(),
+            idempotency_key="boolean-priority",
+            origin=RefreshOrigin.MANUAL,
+            actor_id="local-user",
+            scopes=(refresh_scope,),
+            requested_at=NOW,
+            priority=True,  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="issue_count must be an integer"):
+        IngestionResult(uuid4(), status=IngestionStatus.ACCEPTED, issue_count=True)
+    with pytest.raises(ValueError, match="enabled must be a boolean"):
+        ConnectionBinding(
+            binding_id=uuid4(),
+            system_id=uuid4(),
+            adapter_key="databricks",
+            adapter_version="1",
+            enabled=1,  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="enabled must be a boolean"):
+        CapabilityBinding(
+            capability_binding_id=uuid4(),
+            connection_binding_id=uuid4(),
+            capability_key="example.read",
+            capability_version="1",
+            operation_class=OperationClass.OBSERVE,
+            target_kinds=(TargetKind.OBJECT,),
+            produced_facets=("metadata",),
+            enabled=1,  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="selection_priority must be an integer"):
+        CapabilityBinding(
+            capability_binding_id=uuid4(),
+            connection_binding_id=uuid4(),
+            capability_key="example.read",
+            capability_version="1",
+            operation_class=OperationClass.OBSERVE,
+            target_kinds=(TargetKind.OBJECT,),
+            produced_facets=("metadata",),
+            enabled=True,
+            selection_priority=False,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("invalid", [[], "text", 1])
+def test_mapping_contract_fields_require_json_objects(invalid: object) -> None:
+    with pytest.raises(ValueError, match="payload must be a JSON object"):
+        FacetObservation(
+            observation_id=uuid4(),
+            target=ObjectLocator(object_type="file", object_id=uuid4()),
+            facet="metadata",
+            facet_version="1",
+            update_mode=UpdateMode.SNAPSHOT,
+            field_coverage=FieldCoverage.COMPLETE,
+            payload=invalid,  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="payload must be a JSON object"):
+        FacetState(
+            object_id=uuid4(),
+            facet="metadata",
+            facet_version="1",
+            knowledge=KnowledgeState.KNOWN,
+            payload=invalid,  # type: ignore[arg-type]
+            observed_at=NOW,
+            state_changed_at=NOW,
+        )
+    with pytest.raises(ValueError, match="non_secret_settings must be a JSON object"):
+        ConnectionBinding(
+            binding_id=uuid4(),
+            system_id=uuid4(),
+            adapter_key="databricks",
+            adapter_version="1",
+            enabled=True,
+            non_secret_settings=invalid,  # type: ignore[arg-type]
+        )
 
 
 def test_dispatch_and_intent_have_no_command_secret_or_force_fields() -> None:
