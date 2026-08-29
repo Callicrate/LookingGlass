@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 16:00 ET
+Updated: 2026-08-29 16:23 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 397 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
+- Latest checks: 398 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: bounded queue catch-up and migration `0017` are independently clear and applied to the verified real database; dual architecture review of the last known medium, latest-action projection, is running.
-- Next progress report due: 2026-08-29 16:19 ET.
+- Active review round: migration `0018` action-state projections pass the exact full/package gate and await independent million-history/trigger review before commit and real migration.
+- Next progress report due: 2026-08-29 17:22 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 15:18 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 16:19 ET.
+- [ ] Tend Murmuration about hourly; the 16:22 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 17:22 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -208,6 +208,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Exact normalized index DDL is repaired before validation, including predicate, key direction, collation, and partial status; migration `0017` plus all six queue indexes are packaged as the 29th runtime asset.
 - The real ignored database was backed up to `.local/backups/rookery-20260829-1540-pre-0017.sqlite3`, migrated through `0017`, and reports `ROOK`, integrity `ok`, zero foreign-key violations, and all six queue indexes.
 - Fresh final review independently cleared one-million future/due backlogs, 1,001 bounded transactions, 1,000 event-loop yields, exact ordering, caller draining, and real-lease/true-idle semantics.
+- Local migration `0018` backfills and trigger-maintains one exact cooldown anchor plus bounded active/latest-terminal facet candidates; current reads are trace-proven not to access retained action history.
+- Projection DDL validation includes triggers; migration backfill, raw lifecycle transitions, active-over-terminal behavior, cooldown anchors, and 128 focused storage/coordinator/composition tests pass.
+- The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 15:18 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
