@@ -1,6 +1,6 @@
 """Stable public contract exports."""
 
-from ._validation import JSONValue
+from ._validation import JSONValue, canonical_json_bytes
 from .defaults import (
     DATABRICKS_UNITY_CATALOG_SOURCE_KINDS,
     V1_TYPE_DEFINITION_BY_KEY,
@@ -55,6 +55,7 @@ from .models import (
     RemoteObject,
     ScopePolicyState,
     TargetRef,
+    canonical_observation_batch_bytes,
 )
 from .ports import (
     ActionLifecyclePort,
@@ -124,4 +125,6 @@ __all__ = [
     "TargetKind",
     "TargetRef",
     "UpdateMode",
+    "canonical_json_bytes",
+    "canonical_observation_batch_bytes",
 ]

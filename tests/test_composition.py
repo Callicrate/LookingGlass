@@ -276,6 +276,81 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
 
 
 @pytest.mark.anyio
+async def test_ten_thousand_workspace_children_ingest_in_bounded_batches(
+    tmp_path: Path,
+) -> None:
+    runner = FakeCliRunner(
+        json.dumps(
+            [
+                {
+                    "object_id": index,
+                    "object_type": "FILE",
+                    "path": f"/f{index:05d}.py",
+                }
+                for index in range(10_000)
+            ]
+        ).encode()
+    )
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    runtime.worker_available = True
+    initial_object_count = runtime.store._connection.execute(
+        "SELECT COUNT(*) FROM remote_objects"
+    ).fetchone()[0]
+    dashboard = await runtime.backend.dashboard()
+    refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=refresh.system_id,
+            target_kind=refresh.target_kind,
+            target_id=refresh.target_id,
+            capability_key=refresh.capability_key,
+            facet=refresh.facet,
+        )
+    )
+    admitted = await runtime.coordinator.run_once()
+    assert admitted is not None and admitted.action_id is not None
+
+    assert await runtime.worker.run_once()
+
+    batch_rows = runtime.store._connection.execute(
+        """
+        SELECT status, issue_count FROM observation_batches
+        WHERE action_id = ? ORDER BY batch_id
+        """,
+        (admitted.action_id,),
+    ).fetchall()
+    assert len(batch_rows) > 1
+    assert {tuple(row) for row in batch_rows} == {("partial", 0)}
+    assert (
+        runtime.store._connection.execute(
+            "SELECT COUNT(*) FROM remote_objects WHERE system_id = ?",
+            (refresh.system_id,),
+        ).fetchone()[0]
+        == initial_object_count + 10_000
+    )
+    assert (
+        runtime.store._connection.execute(
+            "SELECT COUNT(*) FROM relationships WHERE system_id = ? AND presence = 'present'",
+            (refresh.system_id,),
+        ).fetchone()[0]
+        == 10_000
+    )
+    root_scope = runtime.store.get_configured_scope(refresh.target_id)
+    assert root_scope is not None and root_scope.object_id is not None
+    membership = runtime.store.get_facet_sync(root_scope.object_id, "membership")
+    assert membership is not None and membership.payload["member_count"] == 10_000
+    intent = await runtime.backend.intent(intent_id)
+    assert intent is not None and intent.terminal
+    assert intent.scopes[0].state == "partial"
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_direct_workspace_metadata_refresh_is_accepted_and_credited(
     tmp_path: Path,
 ) -> None:

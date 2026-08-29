@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 14:24 ET
+Updated: 2026-08-29 14:32 ET
 
 ## Goal
 
@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 369 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: byte/unit-bounded multipart collection ingestion is implemented locally after converged dual architecture review; the exact full gate passes and independent high-severity re-review is running, with three medium findings queued behind it.
+- Active review round: byte/unit-bounded multipart collection ingestion is independently clear after the exact full gate; stable Unity Catalog identity is active, followed by queue selection and latest-action projection.
 - Next progress report due: 2026-08-29 15:23 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -113,7 +113,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Keep HTML route failures inside an accessible, navigable Rookery error shell.
 - [x] Stream refresh-credit candidates instead of materializing unbounded scope history.
 - [x] Close review of the verified-backup versus deferred-restore operator boundary.
-- [ ] Ingest supported 10,000-item collections within byte-bounded writer transactions.
+- [x] Ingest supported 10,000-item collections within byte/unit-bounded writer transactions.
 - [x] Fence exact-expiry final dispatch and renew the running lease atomically.
 - [ ] Preserve Unity Catalog schema/relation/volume identity across rename and recreation.
 - [ ] Remove full-backlog temporary sorting from both durable lease selectors.
@@ -191,7 +191,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The 13:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - A 10,000-child Workspace result normalized to about 15.3 MiB while storage rejected batches over 1 MiB; simply raising the cap would have created multi-second writer locks.
 - The local multipart repair shares exact canonical batch bytes, keeps facet/contains pairs indivisible, caps parts at 1,000,000 bytes/250 units beneath storage's 1 MiB guard, puts the root summary last, retains incomplete coverage on every part, and rejects multipart COMPLETE or oversized units before the first write.
-- A real 10,000-child worker/SQLite regression persists all children and edges across deterministic lease-fenced parts, records one partial action outcome, and requires every individual ingestion call to complete within one second.
+- A real 10,000-child worker/SQLite regression persists all children and edges across deterministic lease-fenced parts and records one partial action outcome; byte/unit limits are enforced deterministically while transaction timings remain diagnostic.
+- Independent high-severity review cleared the single-batch fast path after canonicalization/count enforcement: 251/600 children split, 10,000 produce 41 bounded parts, and 1,200→10,000 normalization scales 0.347s→3.222s without quadratic growth.
 - The 14:23 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - Final dispatch accepted `leased_until == now` even though another worker could reclaim at that exact boundary.
 - Final dispatch now rejects exact expiry and atomically renews the running lease; independent two-connection races proved exact-expiry reclaim and just-before-expiry mutual exclusion with no remaining medium-or-higher finding.

@@ -38,6 +38,7 @@ from async_api_view.contracts import (
     FacetObservation,
     FieldCoverage,
     GuardDisposition,
+    IngestionResult,
     ObjectLocator,
     ObservationBatch,
     ObservationIngestionPort,
@@ -46,6 +47,8 @@ from async_api_view.contracts import (
     PresenceState,
     RelationshipObservation,
     UpdateMode,
+    canonical_json_bytes,
+    canonical_observation_batch_bytes,
 )
 
 DATABRICKS_ADAPTER_KEY = "databricks"
@@ -60,6 +63,8 @@ MAX_RETRY_DELAY_SECONDS = 30.0
 MAX_COLLECTION_ITEMS = 10_000
 MAX_TABLE_COLUMNS = 1_000
 MAX_JSON_DEPTH = 32
+MAX_INGESTION_BATCH_BYTES = 1_000_000
+MAX_INGESTION_BATCH_UNITS = 250
 
 CAPABILITIES = frozenset(
     {
@@ -182,8 +187,20 @@ class ContentArtifact:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedResult:
-    batch: ObservationBatch
+    batches: tuple[ObservationBatch, ...]
     artifacts: tuple[ContentArtifact, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.batches or not all(
+            isinstance(batch, ObservationBatch) for batch in self.batches
+        ):
+            raise ValueError("normalized result requires observation batches")
+
+    @property
+    def batch(self) -> ObservationBatch:
+        if len(self.batches) != 1:
+            raise ValueError("multipart normalization must be consumed through batches")
+        return self.batches[0]
 
 
 def _safe_text(value: object, *, name: str, maximum: int = 4096) -> str:
@@ -795,6 +812,186 @@ def _uc_child_name(
     return parts[-1]
 
 
+def _canonical_batch_size(batch: ObservationBatch) -> int:
+    return len(canonical_observation_batch_bytes(batch))
+
+
+def _observation_units(
+    batch: ObservationBatch,
+) -> tuple[tuple[tuple[FacetObservation, ...], tuple[RelationshipObservation, ...]], ...]:
+    facets_by_target: dict[ObjectLocator, list[FacetObservation]] = {}
+    relationships_by_target: dict[ObjectLocator, list[RelationshipObservation]] = {}
+    for observation in batch.facet_observations:
+        facets_by_target.setdefault(observation.target, []).append(observation)
+    for observation in batch.relationship_observations:
+        relationships_by_target.setdefault(observation.object, []).append(observation)
+
+    def target_key(target: ObjectLocator) -> bytes:
+        return canonical_json_bytes(target.to_dict(), "observation target")
+
+    all_targets = set(facets_by_target) | set(relationships_by_target)
+    standalone = sorted(
+        (target for target in all_targets if target not in relationships_by_target),
+        key=target_key,
+    )
+    linked = sorted(
+        (target for target in all_targets if target in relationships_by_target),
+        key=target_key,
+    )
+    return tuple(
+        (
+            tuple(
+                sorted(
+                    facets_by_target.get(target, ()),
+                    key=lambda item: item.observation_id,
+                )
+            ),
+            tuple(
+                sorted(
+                    relationships_by_target.get(target, ()),
+                    key=lambda item: item.observation_id,
+                )
+            ),
+        )
+        for target in (*linked, *standalone)
+    )
+
+
+def _chunk_normalized_batch(
+    *,
+    action: AdapterAction,
+    delivery_id: str,
+    batch: ObservationBatch,
+) -> tuple[ObservationBatch, ...]:
+    units = _observation_units(batch)
+    batch = replace(
+        batch,
+        facet_observations=tuple(
+            observation for unit_facets, _unit_relationships in units for observation in unit_facets
+        ),
+        relationship_observations=tuple(
+            observation
+            for _unit_facets, unit_relationships in units
+            for observation in unit_relationships
+        ),
+    )
+    if (
+        len(units) <= MAX_INGESTION_BATCH_UNITS
+        and _canonical_batch_size(batch) <= MAX_INGESTION_BATCH_BYTES
+    ):
+        return (batch,)
+
+    if not units:
+        raise InvalidDownstreamResponse("normalized collection coverage exceeds the batch limit")
+    packed: list[tuple[tuple[FacetObservation, ...], tuple[RelationshipObservation, ...]]] = []
+    current_facets: tuple[FacetObservation, ...] = ()
+    current_relationships: tuple[RelationshipObservation, ...] = ()
+    current_unit_count = 0
+    current_facet_bytes = 0
+    current_relationship_bytes = 0
+
+    def candidate(
+        index: int,
+        facets: tuple[FacetObservation, ...],
+        relationships: tuple[RelationshipObservation, ...],
+        coverage: tuple[CoverageDeclaration, ...],
+    ) -> ObservationBatch:
+        return replace(
+            batch,
+            batch_id=_id(action, f"batch:{delivery_id}:collection-v1:data:{index}"),
+            facet_observations=facets,
+            relationship_observations=relationships,
+            coverage=coverage,
+        )
+
+    empty_size = _canonical_batch_size(candidate(0, (), (), batch.coverage))
+
+    def observation_size(
+        observation: FacetObservation | RelationshipObservation,
+    ) -> int:
+        value = observation.to_dict()
+        if not value.get("authorized_by"):
+            value.pop("authorized_by", None)
+        return len(canonical_json_bytes(value, "observation item"))
+
+    def packed_size(
+        facet_bytes: int,
+        facet_count: int,
+        relationship_bytes: int,
+        relationship_count: int,
+    ) -> int:
+        return (
+            empty_size
+            + facet_bytes
+            + max(0, facet_count - 1)
+            + relationship_bytes
+            + max(0, relationship_count - 1)
+        )
+
+    for unit_facets, unit_relationships in units:
+        unit_facet_bytes = sum(observation_size(item) for item in unit_facets)
+        unit_relationship_bytes = sum(observation_size(item) for item in unit_relationships)
+        proposed_facets = (*current_facets, *unit_facets)
+        proposed_relationships = (*current_relationships, *unit_relationships)
+        proposed_size = packed_size(
+            current_facet_bytes + unit_facet_bytes,
+            len(proposed_facets),
+            current_relationship_bytes + unit_relationship_bytes,
+            len(proposed_relationships),
+        )
+        if (
+            current_unit_count + 1 <= MAX_INGESTION_BATCH_UNITS
+            and proposed_size <= MAX_INGESTION_BATCH_BYTES
+        ):
+            current_facets = proposed_facets
+            current_relationships = proposed_relationships
+            current_unit_count += 1
+            current_facet_bytes += unit_facet_bytes
+            current_relationship_bytes += unit_relationship_bytes
+            continue
+        if current_facets or current_relationships:
+            packed.append((current_facets, current_relationships))
+            current_facets = unit_facets
+            current_relationships = unit_relationships
+            current_unit_count = 1
+            current_facet_bytes = unit_facet_bytes
+            current_relationship_bytes = unit_relationship_bytes
+            proposed_size = packed_size(
+                current_facet_bytes,
+                len(current_facets),
+                current_relationship_bytes,
+                len(current_relationships),
+            )
+        if proposed_size > MAX_INGESTION_BATCH_BYTES:
+            raise InvalidDownstreamResponse(
+                "one normalized collection item exceeds the ingestion batch limit"
+            )
+    if current_facets or current_relationships:
+        packed.append((current_facets, current_relationships))
+    if len(packed) <= 1:  # pragma: no cover - full batch already exceeded the target
+        raise InvalidDownstreamResponse("normalized collection exceeds the ingestion batch limit")
+    if any(
+        declaration.completeness is CollectionCoverage.COMPLETE or declaration.absence_authority
+        for declaration in batch.coverage
+    ):
+        raise InvalidDownstreamResponse(
+            "complete collection evidence cannot span ingestion batches"
+        )
+
+    parts = tuple(
+        candidate(
+            index,
+            facets,
+            relationships,
+            batch.coverage,
+        )
+        for index, (facets, relationships) in enumerate(packed)
+    )
+    if any(_canonical_batch_size(part) > MAX_INGESTION_BATCH_BYTES for part in parts):
+        raise RuntimeError("normalized collection chunk exceeded its packing boundary")
+    return parts
+
+
 def normalize(
     *,
     action: AdapterAction,
@@ -1086,19 +1283,22 @@ def normalize(
         if capability.endswith("content.read")
         else ()
     )
-    return NormalizedResult(
-        ObservationBatch(
-            **base,
-            facet_observations=tuple(
-                replace(item, authorized_by=action.requested_scopes) for item in facets
-            ),
-            relationship_observations=tuple(
-                replace(item, authorized_by=action.requested_scopes) for item in relationships
-            ),
-            coverage=tuple(coverage),
+    batch = ObservationBatch(
+        **base,
+        facet_observations=tuple(
+            replace(item, authorized_by=action.requested_scopes) for item in facets
         ),
-        artifacts,
+        relationship_observations=tuple(
+            replace(item, authorized_by=action.requested_scopes) for item in relationships
+        ),
+        coverage=tuple(coverage),
     )
+    batches = _chunk_normalized_batch(
+        action=action,
+        delivery_id=delivery_id,
+        batch=batch,
+    )
+    return NormalizedResult(batches, artifacts)
 
 
 def _content_settings(binding: ConnectionBinding) -> tuple[int, str | None]:
@@ -1352,35 +1552,57 @@ class DatabricksWorker:
                 stdout=execution.stdout,
                 observed_at=datetime.now(UTC),
             )
-            result = await self.ingestion.ingest(
-                normalized.batch,
-                lease_id=lease.lease_id,
-            )
-            if result.status.value == "rejected":
-                error = ErrorClass.ADAPTER_CONTRACT_MISMATCH
-                if not await self._record_attempt(
-                    lease,
-                    ActionAttempt(
-                        _id(action, f"attempt:{ordinal}"),
-                        action.action_id,
-                        ordinal,
-                        started,
-                        datetime.now(UTC),
+            ingestion_results: list[IngestionResult] = []
+            for index, batch in enumerate(normalized.batches):
+                if index:
+                    try:
+                        await self.lifecycle.heartbeat(
+                            action_id=action.action_id,
+                            lease_id=lease.lease_id,
+                            worker_id=self.worker_id,
+                            at=datetime.now(UTC),
+                        )
+                    except Exception:
+                        return
+                    await asyncio.sleep(0)
+                result = await self.ingestion.ingest(
+                    batch,
+                    lease_id=lease.lease_id,
+                )
+                if result.status.value == "rejected":
+                    error = ErrorClass.ADAPTER_CONTRACT_MISMATCH
+                    if not await self._record_attempt(
+                        lease,
+                        ActionAttempt(
+                            _id(action, f"attempt:{ordinal}"),
+                            action.action_id,
+                            ordinal,
+                            started,
+                            datetime.now(UTC),
+                            ActionOutcome.FAILED,
+                            error,
+                            redacted_diagnostic=safe_diagnostic(error),
+                        ),
+                    ):
+                        return
+                    await self._complete(
+                        lease,
+                        action,
                         ActionOutcome.FAILED,
                         error,
-                        redacted_diagnostic=safe_diagnostic(error),
-                    ),
-                ):
+                        datetime.now(UTC),
+                    )
                     return
-                await self._complete(lease, action, ActionOutcome.FAILED, error, datetime.now(UTC))
-                return
+                ingestion_results.append(result)
             incomplete = any(
                 declaration.completeness is not CollectionCoverage.COMPLETE
-                for declaration in normalized.batch.coverage
+                for batch in normalized.batches
+                for declaration in batch.coverage
             )
             outcome = (
                 ActionOutcome.PARTIAL
-                if result.status.value == "partial" or incomplete
+                if any(result.status.value == "partial" for result in ingestion_results)
+                or incomplete
                 else ActionOutcome.SUCCEEDED
             )
             if not await self._record_attempt(

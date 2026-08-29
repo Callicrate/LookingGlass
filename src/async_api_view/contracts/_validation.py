@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -143,6 +144,18 @@ def validate_json(value: Any, field_name: str = "payload") -> JSONValue:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [validate_json(item, f"{field_name}[]") for item in value]
     raise ValueError(f"{field_name} must contain only JSON-compatible values")
+
+
+def canonical_json_bytes(value: Any, field_name: str = "payload") -> bytes:
+    """Return the stable compact UTF-8 representation used for integrity boundaries."""
+
+    validated = validate_json(value, field_name)
+    return json.dumps(
+        validated,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
 
 
 def validate_json_mapping(value: Any, field_name: str) -> dict[str, JSONValue]:

@@ -10,6 +10,7 @@ from uuid import UUID
 from ._validation import (
     JSONDTO,
     JSONValue,
+    canonical_json_bytes,
     normalize_enum_tuple,
     normalize_instance_tuple,
     optional_utc,
@@ -461,6 +462,18 @@ class ObservationBatch(JSONDTO):
             for scope in item.authorized_by
         ):
             raise ValueError("item authority scopes must belong to the batch system")
+
+
+def canonical_observation_batch_bytes(batch: ObservationBatch) -> bytes:
+    """Encode the exact normalized envelope bound by storage batch identity."""
+
+    require_instance(batch, ObservationBatch, "batch")
+    value = batch.to_dict()
+    for collection_name in ("facet_observations", "relationship_observations"):
+        for item in value[collection_name]:
+            if not item.get("authorized_by"):
+                item.pop("authorized_by", None)
+    return canonical_json_bytes(value, "observation batch")
 
 
 @dataclass(frozen=True, slots=True)

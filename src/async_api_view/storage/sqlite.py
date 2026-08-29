@@ -64,8 +64,10 @@ from async_api_view.contracts import (
     TargetKind,
     TargetRef,
     UpdateMode,
+    canonical_observation_batch_bytes,
 )
 from async_api_view.contracts._validation import (
+    canonical_json_bytes,
     require_contract_key,
     require_text,
     require_utc,
@@ -350,11 +352,10 @@ def _object_search_pattern(query: str) -> str | None:
 
 
 def _json_text(value: object, *, field_name: str) -> str:
-    validated = validate_json(value, field_name)
-    encoded = json.dumps(validated, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    if len(encoded.encode("utf-8")) > _MAX_JSON_BYTES:
+    encoded = canonical_json_bytes(value, field_name)
+    if len(encoded) > _MAX_JSON_BYTES:
         raise ValueError(f"{field_name} exceeds {_MAX_JSON_BYTES} bytes")
-    return encoded
+    return encoded.decode("utf-8")
 
 
 def _json_value(value: str) -> object:
@@ -363,13 +364,10 @@ def _json_value(value: str) -> object:
 
 def _batch_digest(batch: ObservationBatch) -> str:
     """Bind batch identity to its complete canonical envelope without storing raw input."""
-    batch_value = batch.to_dict()
-    for collection_name in ("facet_observations", "relationship_observations"):
-        for item in batch_value[collection_name]:
-            if not item.get("authorized_by"):
-                item.pop("authorized_by", None)
-    material = _json_text(batch_value, field_name="observation batch")
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+    material = canonical_observation_batch_bytes(batch)
+    if len(material) > _MAX_JSON_BYTES:
+        raise ValueError(f"observation batch exceeds {_MAX_JSON_BYTES} bytes")
+    return hashlib.sha256(material).hexdigest()
 
 
 def _redact(value: str | None) -> str:

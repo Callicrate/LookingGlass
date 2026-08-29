@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -40,6 +41,7 @@ from async_api_view.contracts import (
     GuardDisposition,
     IngestionResult,
     IngestionStatus,
+    ObservationBatch,
     OperationClass,
     RefreshScope,
     TargetKind,
@@ -716,7 +718,11 @@ def test_workspace_listing_accepts_distinct_object_and_resource_ids() -> None:
         ).encode(),
         observed_at=datetime.now(UTC),
     )
-    child = result.batch.facet_observations[1].target
+    child = next(
+        observation.target
+        for observation in result.batch.facet_observations
+        if observation.target.external_key is not None
+    )
     assert child.external_key == "workspace:object_id:202"
 
 
@@ -834,6 +840,153 @@ def test_normalization_rejects_collection_and_column_cap_plus_one() -> None:
                 }
             ).encode(),
             observed_at=datetime.now(UTC),
+        )
+
+
+def test_supported_large_collection_is_deterministically_chunked_with_linked_authority() -> None:
+    action = _action("databricks.workspace.children.read", "membership")
+    target = ResolvedTarget(
+        workspace_path="/Shared",
+        workspace_root="/Shared",
+        canonical_object_id=uuid4(),
+        canonical_object_type="folder",
+    )
+    items = [
+        {
+            "path": f"/Shared/f{index:05d}.py",
+            "object_type": "FILE",
+            "object_id": index,
+        }
+        for index in range(MAX_COLLECTION_ITEMS)
+    ]
+    observed_at = datetime(2026, 8, 29, tzinfo=UTC)
+
+    result = normalize(
+        action=action,
+        binding=_binding(),
+        target=target,
+        stdout=json.dumps({"objects": items}).encode(),
+        observed_at=observed_at,
+    )
+
+    assert len(result.batches) > 1
+    with pytest.raises(ValueError, match="multipart normalization"):
+        _ = result.batch
+    assert len({batch.batch_id for batch in result.batches}) == len(result.batches)
+    assert sum(len(batch.facet_observations) for batch in result.batches) == 10_001
+    assert sum(len(batch.relationship_observations) for batch in result.batches) == 10_000
+    assert all(
+        databricks_adapter._canonical_batch_size(batch)
+        <= databricks_adapter.MAX_INGESTION_BATCH_BYTES
+        for batch in result.batches
+    )
+    assert all(
+        len(batch.relationship_observations) <= databricks_adapter.MAX_INGESTION_BATCH_UNITS
+        for batch in result.batches
+    )
+    assert all(
+        declaration.completeness is CollectionCoverage.UNKNOWN and not declaration.absence_authority
+        for batch in result.batches
+        for declaration in batch.coverage
+    )
+    assert all(batch.coverage for batch in result.batches)
+    assert not any(
+        observation.facet == "membership"
+        for batch in result.batches[:-1]
+        for observation in batch.facet_observations
+    )
+    assert any(
+        observation.facet == "membership" for observation in result.batches[-1].facet_observations
+    )
+    for batch in result.batches:
+        linked_targets = {relationship.object for relationship in batch.relationship_observations}
+        assert all(
+            observation.facet == "membership" or observation.target in linked_targets
+            for observation in batch.facet_observations
+        )
+
+
+def test_chunk_plan_is_source_order_independent_and_rejects_oversized_units() -> None:
+    action = _action("databricks.workspace.children.read", "membership")
+    target = ResolvedTarget(
+        workspace_path="/Shared",
+        workspace_root="/Shared",
+        canonical_object_id=uuid4(),
+        canonical_object_type="folder",
+    )
+    items = [
+        {
+            "path": f"/Shared/f{index:04d}.py",
+            "object_type": "FILE",
+            "object_id": index,
+        }
+        for index in range(1200)
+    ]
+    arguments = {
+        "action": action,
+        "binding": _binding(),
+        "target": target,
+        "observed_at": datetime(2026, 8, 29, tzinfo=UTC),
+    }
+    forward = normalize(stdout=json.dumps({"objects": items}).encode(), **arguments)
+    reverse = normalize(stdout=json.dumps({"objects": items[::-1]}).encode(), **arguments)
+
+    assert [batch.to_dict() for batch in forward.batches] == [
+        batch.to_dict() for batch in reverse.batches
+    ]
+    small_forward = normalize(
+        stdout=json.dumps({"objects": items[:2]}).encode(),
+        **arguments,
+    )
+    small_reverse = normalize(
+        stdout=json.dumps({"objects": items[1::-1]}).encode(),
+        **arguments,
+    )
+    assert small_forward.batch.to_dict() == small_reverse.batch.to_dict()
+    boundary = normalize(
+        stdout=json.dumps({"objects": items[:251]}).encode(),
+        **arguments,
+    )
+    assert len(boundary.batches) > 1
+    assert all(
+        len(batch.relationship_observations) <= databricks_adapter.MAX_INGESTION_BATCH_UNITS
+        for batch in boundary.batches
+    )
+    complete_batch = replace(
+        forward.batches[0],
+        batch_id=uuid4(),
+        facet_observations=tuple(
+            observation for batch in forward.batches for observation in batch.facet_observations
+        ),
+        relationship_observations=tuple(
+            observation
+            for batch in forward.batches
+            for observation in batch.relationship_observations
+        ),
+        coverage=tuple(
+            replace(declaration, completeness=CollectionCoverage.COMPLETE)
+            for declaration in forward.batches[0].coverage
+        ),
+    )
+    with pytest.raises(InvalidDownstreamResponse, match="complete collection evidence"):
+        databricks_adapter._chunk_normalized_batch(
+            action=action,
+            delivery_id=_DELIVERY_ID,
+            batch=complete_batch,
+        )
+
+    oversized_relation = {
+        "name": "orders",
+        "full_name": "main.sales.orders",
+        "columns": [{"name": f"c{index}", "type_text": "X" * 1024} for index in range(1000)],
+    }
+    with pytest.raises(InvalidDownstreamResponse, match="one normalized collection item"):
+        normalize(
+            action=_action("databricks.uc.relations.read"),
+            binding=_binding(),
+            target=ResolvedTarget(catalog_name="main", schema_name="sales"),
+            stdout=json.dumps({"tables": [oversized_relation]}).encode(),
+            observed_at=datetime(2026, 8, 29, tzinfo=UTC),
         )
 
 
@@ -1071,6 +1224,124 @@ def test_worker_uses_only_ports() -> None:
         for event in lifecycle.events
         if isinstance(event, tuple) and event[0] in {"attempt", "complete"}
     )
+
+
+def test_worker_ingests_every_collection_chunk_and_stops_when_heartbeat_is_lost() -> None:
+    action = _action("databricks.workspace.children.read", "membership")
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {"profile": "local", "workspace_root": "/Shared"},
+    )
+    payload = json.dumps(
+        {
+            "objects": [
+                {
+                    "path": f"/Shared/f{index:04d}.py",
+                    "object_type": "FILE",
+                    "object_id": index,
+                }
+                for index in range(1200)
+            ]
+        }
+    ).encode()
+
+    class WorkspaceTargets:
+        async def resolve(self, **_: object) -> ResolvedTarget:
+            return ResolvedTarget(
+                workspace_path="/Shared",
+                workspace_root="/Shared",
+                canonical_object_id=uuid4(),
+                canonical_object_type="folder",
+            )
+
+    class WorkspaceRunner(_Runner):
+        async def run(self, *_: object, **__: object) -> CliExecution:
+            return CliExecution(str(uuid4()), timedelta(), 0, payload, b"")
+
+    lifecycle = _Lifecycle()
+    ingestion = _Ingestion()
+    lease = ActionLease(action, uuid4(), datetime.now(UTC))
+    worker = DatabricksWorker(
+        worker_id="chunk-worker",
+        queue=_Queue(lease),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=ingestion,
+        targets=WorkspaceTargets(),
+        runner=WorkspaceRunner(),
+    )
+
+    assert asyncio.run(worker.run_once())
+    assert len(ingestion.batches) > 1
+    assert ingestion.lease_ids == [lease.lease_id] * len(ingestion.batches)
+    assert (
+        len([event for event in lifecycle.events if event[0] == "heartbeat"])
+        == len(ingestion.batches) - 1
+    )
+    attempts = [event[2] for event in lifecycle.events if event[0] == "attempt"]
+    completions = [event[2] for event in lifecycle.events if event[0] == "complete"]
+    assert len(attempts) == len(completions) == 1
+    assert attempts[0].outcome is ActionOutcome.PARTIAL
+    assert completions[0].outcome is ActionOutcome.PARTIAL
+
+    lost_lifecycle = _HeartbeatLostLifecycle()
+    interrupted_ingestion = _Ingestion()
+    interrupted = DatabricksWorker(
+        worker_id="lost-worker",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC))),
+        lifecycle=lost_lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=interrupted_ingestion,
+        targets=WorkspaceTargets(),
+        runner=WorkspaceRunner(),
+    )
+
+    assert asyncio.run(interrupted.run_once())
+    assert len(interrupted_ingestion.batches) == 1
+    assert not any(event[0] in {"attempt", "complete"} for event in lost_lifecycle.events)
+
+    class RejectSecondIngestion(_Ingestion):
+        async def ingest(
+            self,
+            batch: ObservationBatch,
+            *,
+            lease_id: str | None = None,
+        ) -> IngestionResult:
+            self.batches.append(batch)
+            self.lease_ids.append(lease_id)
+            status = (
+                IngestionStatus.REJECTED if len(self.batches) == 2 else IngestionStatus.ACCEPTED
+            )
+            return IngestionResult(batch.batch_id, status)
+
+    rejected_lifecycle = _Lifecycle()
+    rejected_ingestion = RejectSecondIngestion()
+    rejected = DatabricksWorker(
+        worker_id="rejected-worker",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC))),
+        lifecycle=rejected_lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=rejected_ingestion,
+        targets=WorkspaceTargets(),
+        runner=WorkspaceRunner(),
+    )
+
+    assert asyncio.run(rejected.run_once())
+    assert len(rejected_ingestion.batches) == 2
+    rejected_attempts = [event[2] for event in rejected_lifecycle.events if event[0] == "attempt"]
+    rejected_completions = [
+        event[2] for event in rejected_lifecycle.events if event[0] == "complete"
+    ]
+    assert len(rejected_attempts) == len(rejected_completions) == 1
+    assert rejected_attempts[0].outcome is ActionOutcome.FAILED
+    assert rejected_completions[0].outcome is ActionOutcome.FAILED
 
 
 @pytest.mark.parametrize(
