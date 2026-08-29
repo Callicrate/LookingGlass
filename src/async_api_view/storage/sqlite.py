@@ -17,7 +17,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator, Sequence
-from contextlib import closing, contextmanager, nullcontext
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -3991,15 +3991,7 @@ class SQLiteStore:
             positive_contains: set[tuple[str, str]] = set()
             for observation in batch.facet_observations:
                 try:
-                    # Ordinary facet validation and journal serialization happen before
-                    # locator writes. Absence authorization needs the resolved canonical
-                    # ID, so isolate that late-rejection path without taxing large lists.
-                    item_scope = (
-                        self._ingestion_item_savepoint(connection)
-                        if observation.update_mode is UpdateMode.ABSENCE
-                        else nullcontext()
-                    )
-                    with item_scope:
+                    with self._ingestion_item_savepoint(connection):
                         definition = V1_TYPE_DEFINITION_BY_KEY.get(observation.target.object_type)
                         if definition is None or observation.facet not in {
                             item.facet for item in definition.facets

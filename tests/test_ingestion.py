@@ -451,6 +451,95 @@ def test_rejected_items_roll_back_identity_and_journal_but_keep_valid_sibling(
     )
 
 
+def test_merge_time_facet_rejection_rolls_back_identity_journal_and_projection(
+    tmp_path,
+) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    target = ObjectLocator(
+        object_type="file",
+        source_kind="databricks.workspace.file",
+        external_key="workspace:/Shared/original.py",
+        display_name="original.py",
+    )
+    first = FacetObservation(
+        observation_id=uuid4(),
+        target=target,
+        facet="metadata",
+        facet_version="1",
+        update_mode=UpdateMode.SNAPSHOT,
+        field_coverage=FieldCoverage.COMPLETE,
+        payload={"left": "a" * 600_000},
+    )
+    first_batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW,
+        facet_observations=(first,),
+    )
+    assert run(store.ingest(first_batch)).status.value == "accepted"
+    original = next(
+        item
+        for item in store.list_objects()
+        if item.external_key == "workspace:/Shared/original.py"
+    )
+    original_facet = store.get_facet_sync(original.object_id, "metadata")
+    assert original_facet is not None
+
+    rejected = FacetObservation(
+        observation_id=uuid4(),
+        target=ObjectLocator(
+            object_type="file",
+            source_kind="databricks.workspace.file",
+            external_key="workspace:/Shared/original.py",
+            display_name="changed.py",
+        ),
+        facet="metadata",
+        facet_version="1",
+        update_mode=UpdateMode.PATCH,
+        field_coverage=FieldCoverage.PARTIAL,
+        payload={"right": "b" * 600_000},
+        field_mask=("right",),
+    )
+    rejected_batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW + timedelta(seconds=1),
+        received_at=NOW + timedelta(seconds=1),
+        facet_observations=(rejected,),
+    )
+
+    result = run(store.ingest(rejected_batch))
+
+    assert result.status.value == "partial"
+    assert result.accepted_observation_ids == ()
+    assert result.issue_count == 1
+    unchanged = store.get_object_sync(original.object_id)
+    unchanged_facet = store.get_facet_sync(original.object_id, "metadata")
+    assert unchanged is not None and unchanged.display_name == "original.py"
+    assert unchanged.last_seen_at == NOW
+    assert unchanged_facet is not None
+    assert unchanged_facet.payload == original_facet.payload
+    assert unchanged_facet.supporting_observation_id == first.observation_id
+    assert (
+        store._connection.execute(
+            "SELECT 1 FROM observation_journal WHERE observation_id = ?",
+            (rejected.observation_id,),
+        ).fetchone()
+        is None
+    )
+    assert run(store.ingest(rejected_batch)).status.value == "duplicate"
+
+
 def test_conflicting_observation_id_target_or_payload_is_not_accepted(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
