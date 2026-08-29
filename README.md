@@ -11,6 +11,7 @@ The first adapter uses the existing Databricks CLI.
 - [Source checkout setup](#source-checkout-setup)
 - [Databricks scope](#databricks-scope)
 - [Commands](#commands)
+- [Recovery status](#recovery-status)
 - [Verify](#verify)
 - [Project structure](#project-structure)
 - [Documentation](#documentation)
@@ -137,6 +138,12 @@ The worker rejects content actions before target resolution or CLI execution unt
 Pass `--config <path>` before the subcommand.
 Use `--log-level DEBUG`, `INFO`, `WARNING`, or `ERROR` when needed.
 `backup` uses SQLite's online snapshot operation, so it includes committed WAL state while `serve` is running; the completed copy is integrity-checked before it appears at the requested path.
+
+## Recovery status
+
+`backup` creates a consistent, validated snapshot, but Rookery does not yet provide or verify a restore workflow. Treat a snapshot as protected recovery input, not as proof that end-to-end recovery has been tested.
+
+Do not replace the configured database while any Rookery process is running, and do not copy or combine `-wal` or `-shm` sidecar files from a different database state. If the primary database is damaged, stop Rookery, preserve the database and sidecars, and work only from copies until a supported restore command can validate and publish a replacement atomically. Restore tooling and regression-tested recovery remain deferred operational work.
 
 ## Verify
 

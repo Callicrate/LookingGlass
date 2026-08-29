@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 13:12 ET
+Updated: 2026-08-29 13:23 ET
 
 ## Goal
 
@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 364 tests passed warning-free; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: overlong/dangling-ID quarantine and the shared accessible HTML error shell are independently clear after the exact full gate; no known medium-or-higher finding remains, so fresh residual review resumes.
+- Active review round: the backup/restore operator boundary is independently clear; adapter correctness and SQLite long-run boundedness audits continue with no known medium-or-higher finding open.
 - Next progress report due: 2026-08-29 13:26 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 12:25 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 13:26 ET.
+- [ ] Tend Murmuration about hourly; the 13:22 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 14:23 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -111,6 +111,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close full-gate and independent review of batch-wide observation-ID collision preflight.
 - [x] Make corrupt overlong or dangling durable IDs quarantine once without wedging either queue.
 - [x] Keep HTML route failures inside an accessible, navigable Rookery error shell.
+- [x] Stream refresh-credit candidates instead of materializing unbounded scope history.
+- [x] Close review of the verified-backup versus deferred-restore operator boundary.
 
 ## Evidence and decisions
 
@@ -167,7 +169,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Schema startup now uses one outer immediate transaction for every migration, ledger write, required-index repair, final validation, and application-ID change; any failure restores the pre-startup logical state.
 - The v10 drift regression proves failed startup preserves both duplicate overrides, all ten original ledger entries, absent later schema/indexes, the original drifted DDL, and markerless application ID; partial `0002` recovery and concurrent initialization remain green.
 - Independent review reproduced the rollback and cleared 39 storage tests plus 80 threaded and 48 process-level concurrent opens with no medium-or-higher finding.
-- The exact committed-head Ubuntu/WSL gate now matches Windows at 360 tests and 88% branch coverage with clean locked audit, format, and security lint.
+- The exact committed-head Ubuntu/WSL gate matches Windows at 364 tests and 88% branch coverage with clean locked audit, format, security/performance lint, constrained build, and 80/59/28 distribution verification.
 - The 12:25 Murmuration tend found no scoped Rookery context and remained read-only: the native identity profile is absent, notifications return 403, and BookStack remains 401-gated.
 - A fresh adversarial audit proved a relationship/facet cross-kind observation-ID collision could authorize and persist the facet before the relationship was rejected.
 - The local repair preflights canonical `(item kind, item digest)` identities across the whole batch and rejects every participant in cross-kind or differing-payload collisions before identity, journal, or projection writes; 31 focused ingestion tests pass.
@@ -178,6 +180,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Backend failures and missing records on browser HTML routes rendered FastAPI's raw JSON response with no title, landmark, navigation, or recovery path.
 - Browser-route 400/404/503 failures now render an autoescaped Rookery shell with title, landmarks, alert semantics, dashboard recovery, and safe GET retry links; API intent polling remains JSON-only, and packaged runtime assets rise to 28.
 - Independent desktop/mobile Chrome review cleared overflow, accessibility tree, keyboard order, recovery navigation, auth/host ordering, security headers, hostile input escaping, secret absence, and JSON API preservation.
+- Refresh-credit selection now streams timestamp-ordered candidates and stops at the first scope match; a 50,000-row audit had measured 43.8 MiB from the former `fetchall()`, while 71 focused policy/coordinator/ingestion tests preserve semantics.
+- A documentation audit found that backup consistency was described without warning that restore remains unimplemented and unverified; the README now forbids live replacement/sidecar mixing and treats snapshots as protected recovery input rather than a tested recovery workflow.
+- Independent documentation review confirmed the warning matches online-backup behavior, does not imply an unsupported manual restore, and keeps atomically validated restore explicitly deferred.
+- The 13:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
