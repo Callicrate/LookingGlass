@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 03:55 ET
+Updated: 2026-08-29 04:10 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 269 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
+- Latest checks: 270 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: continue post-fix residual audit after the Unity Catalog identity repair.
@@ -71,6 +71,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Roll back identity, journal, and projection writes for every rejected facet item.
 - [x] Enforce valid terminal outcomes, errors, ordinals, and retry timing at the action DTO boundary.
 - [x] Prevent contradictory Unity Catalog response identity from redirecting later refreshes.
+- [x] Reject primitive string enums across every shared contract DTO boundary.
 
 ## Evidence and decisions
 
@@ -215,6 +216,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Databricks target resolution now derives catalog/schema command arguments from immutable canonical external identity rather than mutable facet payload, and a corruption regression proves later dispatch remains on the intended scope.
 - A fresh audit of the locked runtime-only dependency export reports no known vulnerabilities; the local project package was excluded so the auditor did not substitute an incompatible helper interpreter.
 - The real ignored local database was snapshotted through the new command to `.local/backups/rookery-20260829-0355.sqlite3`; the standalone 315,392-byte copy reports integrity `ok` at migration `0011`.
+- Shared enum validators now cover target kinds, presence/knowledge states, refresh origin/coverage, observation modes, collection/absence coverage, guard decisions, ingestion results, capability operation/targets, and action records.
+- Persisted intent reconstruction explicitly restores `RefreshOrigin`; a raw `"dispatch"` can no longer make the worker silently abandon a live lease, and raw automatic origins cannot bypass session requirements.
 
 ## Risks / watch list
 
