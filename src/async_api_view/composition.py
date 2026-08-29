@@ -46,7 +46,6 @@ from async_api_view.storage import (
     FacetActionStatusRecord,
     OperationalEventRecord,
     SQLiteStore,
-    StoredAction,
     SystemRecord,
 )
 from async_api_view.web import (
@@ -542,7 +541,7 @@ class SQLiteWebBackend:
             limit=query.object_page_size,
             query=query.object_query,
         )
-        actions = self._store.list_dashboard_actions()
+        actions = self._store.list_latest_system_activity()
         latest_facet_actions = {
             (record.system_id, record.object_id, record.facet): record
             for record in self._store.list_latest_facet_actions(
@@ -553,20 +552,20 @@ class SQLiteWebBackend:
             self._event_view(event, system_names)
             for event in self._store.list_operational_events(alertable_only=True, limit=10)
         )
-        actions_by_system: dict[str, list[StoredAction]] = {
+        actions_by_system: dict[str, list[ActionActivityRecord]] = {
             system.system_id: [] for system in systems
         }
         for stored_action in actions:
-            actions_by_system.setdefault(stored_action.action.system_id, []).append(stored_action)
+            actions_by_system.setdefault(stored_action.system_id, []).append(stored_action)
         system_views: list[SystemView] = []
         for system in systems:
             system_actions = actions_by_system.get(system.system_id, ())
             last = system_actions[0] if system_actions else None
             activity = (
                 ActivityView(
-                    state=last.state.value,
-                    occurred_at=last.completed_at or last.started_at,
-                    summary=last.action.capability_key,
+                    state=last.state,
+                    occurred_at=last.completed_at or last.started_at or last.created_at,
+                    summary=last.capability_key,
                     failure=last.redacted_diagnostic,
                 )
                 if last

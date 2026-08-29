@@ -30,7 +30,6 @@ from async_api_view.storage import (
     ActionAttemptRecord,
     FacetActionStatusRecord,
     SQLiteStore,
-    StoredAction,
 )
 from async_api_view.web import (
     ActionHistoryQuery,
@@ -511,11 +510,11 @@ async def test_dashboard_reads_action_and_object_snapshots_once(
     assert await runtime.worker.run_once()
 
     calls = {"actions": 0, "objects": 0, "facet_actions": 0}
-    list_actions = runtime.store.list_dashboard_actions
+    list_actions = runtime.store.list_latest_system_activity
     list_objects = runtime.store.list_objects_page
     list_facet_actions = runtime.store.list_latest_facet_actions
 
-    def counted_actions() -> tuple[StoredAction, ...]:
+    def counted_actions() -> tuple[ActionActivityRecord, ...]:
         calls["actions"] += 1
         return list_actions()
 
@@ -529,7 +528,7 @@ async def test_dashboard_reads_action_and_object_snapshots_once(
         calls["facet_actions"] += 1
         return list_facet_actions(object_ids)
 
-    monkeypatch.setattr(runtime.store, "list_dashboard_actions", counted_actions)
+    monkeypatch.setattr(runtime.store, "list_latest_system_activity", counted_actions)
     monkeypatch.setattr(runtime.store, "list_objects_page", counted_objects)
     monkeypatch.setattr(runtime.store, "list_latest_facet_actions", counted_facet_actions)
 

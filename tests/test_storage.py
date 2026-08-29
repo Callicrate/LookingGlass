@@ -616,6 +616,14 @@ def test_malformed_action_contract_terminalizes_once_and_queue_progresses(tmp_pa
     assert events[0].redacted_summary == "malformed_action_contract"
 
     assert len(store.list_operational_events(alertable_only=True)) == 1
+    store._connection.execute(
+        "UPDATE adapter_actions SET record_created_at = ? WHERE action_id = ?",
+        ("2026-08-24T12:00:02.000000Z", poisoned.action_id),
+    )
+    latest_activity = store.list_latest_system_activity()
+    assert len(latest_activity) == 1
+    assert latest_activity[0].action_id == poisoned.action_id
+    assert latest_activity[0].state == "failed"
 
 
 def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> None:

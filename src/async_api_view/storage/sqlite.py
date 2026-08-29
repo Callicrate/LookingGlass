@@ -2143,6 +2143,27 @@ class SQLiteStore:
             ).fetchall()
         return tuple(self._stored_action_from_row(row) for row in rows)
 
+    def list_latest_system_activity(self) -> tuple[ActionActivityRecord, ...]:
+        """Return one raw action summary per system without contract reconstruction."""
+
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT action.*
+                FROM systems AS system
+                JOIN adapter_actions AS action
+                  ON action.action_id = (
+                      SELECT candidate.action_id
+                      FROM adapter_actions AS candidate
+                      WHERE candidate.system_id = system.system_id
+                      ORDER BY candidate.record_created_at DESC, candidate.action_id
+                      LIMIT 1
+                  )
+                ORDER BY action.record_created_at DESC, action.action_id
+                """
+            ).fetchall()
+        return tuple(self._action_activity_from_row(row) for row in rows)
+
     def _insert_action(
         self,
         connection: sqlite3.Connection,
