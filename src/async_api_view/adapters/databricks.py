@@ -1281,22 +1281,29 @@ class DatabricksWorker:
         task = asyncio.create_task(
             self.runner.run(invocation, correlation_id=lease.action.correlation_id)
         )
-        while not task.done():
-            try:
-                return await asyncio.wait_for(asyncio.shield(task), timeout=self.heartbeat_seconds)
-            except TimeoutError:
+        try:
+            while not task.done():
                 try:
-                    await self.lifecycle.heartbeat(
-                        action_id=lease.action.action_id,
-                        lease_id=lease.lease_id,
-                        worker_id=self.worker_id,
-                        at=datetime.now(UTC),
+                    return await asyncio.wait_for(
+                        asyncio.shield(task), timeout=self.heartbeat_seconds
                     )
-                except Exception:
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
-                    return None
-        return await task
+                except TimeoutError:
+                    try:
+                        await self.lifecycle.heartbeat(
+                            action_id=lease.action.action_id,
+                            lease_id=lease.lease_id,
+                            worker_id=self.worker_id,
+                            at=datetime.now(UTC),
+                        )
+                    except Exception:
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                        return None
+            return await task
+        except asyncio.CancelledError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
 
     async def _record_attempt(self, lease: ActionLease, attempt: ActionAttempt) -> bool:
         try:

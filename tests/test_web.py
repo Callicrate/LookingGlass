@@ -69,7 +69,7 @@ def client_for(backend: FakeBackend) -> TestClient:
     return TestClient(
         create_app(
             backend,
-            allowed_hosts=("127.0.0.1", "localhost", "[::1]", "testserver"),
+            allowed_hosts=("127.0.0.1", "localhost", "testserver"),
         )
     )
 

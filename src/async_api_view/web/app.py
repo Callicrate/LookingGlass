@@ -176,7 +176,7 @@ def _intent_payload(view: IntentView) -> dict[str, object]:
 def create_app(
     backend: WebBackend | None = None,
     *,
-    allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost", "[::1]"),
+    allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost"),
 ) -> FastAPI:
     """Create a loopback-oriented app around an injected application facade."""
 

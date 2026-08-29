@@ -64,8 +64,8 @@ uv run async-api-view --config config.local.toml serve
 ```
 
 Open [http://127.0.0.1:8765](http://127.0.0.1:8765).
-The dashboard is intentionally bound to loopback.
-Stop it with `Ctrl+C`.
+The dashboard accepts `localhost` or an IPv4 loopback address only.
+Stop it with `Ctrl+C`; an in-flight local CLI process is cancelled and its durable lease remains recoverable.
 
 ## Databricks scope
 

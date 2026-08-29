@@ -1302,6 +1302,7 @@ SSH authentication, host-key, timeout, connection, and remote-command failures u
 | Invalid observation item | Quarantine the item; ingest unrelated safe items; disable affected absence reconciliation. |
 | Store unavailable before durable action start | Do not perform the remote call. |
 | Crash after remote read before ingestion | The read may repeat; ingestion remains idempotent. |
+| Orderly process shutdown during a remote read | Cancel the local worker task and subprocess promptly; leave durable action recovery to the ordinary lease path. |
 | Expired queue lease | Reclaim and revalidate before work. |
 | Out-of-order result | Use comparable source revision or trusted local observation order; do not overwrite known newer evidence. |
 | Projection failure after journal write | Replay the durable observation into the projection. |

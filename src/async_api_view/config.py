@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -57,7 +58,7 @@ def _positive_float(value: object, field_name: str, *, maximum: float) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ConfigError(f"{field_name} must be a number")
     normalized = float(value)
-    if normalized <= 0 or normalized > maximum:
+    if not math.isfinite(normalized) or normalized <= 0 or normalized > maximum:
         raise ConfigError(f"{field_name} must be greater than 0 and at most {maximum}")
     return normalized
 
@@ -77,9 +78,9 @@ def _loopback_host(value: object) -> str:
     try:
         address = ipaddress.ip_address(host)
     except ValueError as exc:
-        raise ConfigError("app.host must be localhost or a loopback IP address") from exc
-    if not address.is_loopback:
-        raise ConfigError("app.host must be a loopback address")
+        raise ConfigError("app.host must be localhost or an IPv4 loopback address") from exc
+    if address.version != 4 or not address.is_loopback:
+        raise ConfigError("app.host must be an IPv4 loopback address")
     return host
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import timedelta
 from pathlib import Path
@@ -9,6 +10,8 @@ import pytest
 from async_api_view.adapters.databricks import CliExecution, CliInvocation, CliRunner
 from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
+from async_api_view.contracts import RemoteObject
+from async_api_view.storage import StoredAction
 from async_api_view.web import RefreshRequest
 
 
@@ -51,6 +54,23 @@ class CapabilityCliRunner(FakeCliRunner):
             stdout=self.outputs[invocation.capability_key],
             stderr=b"",
         )
+
+
+class BlockingCliRunner(FakeCliRunner):
+    def __init__(self) -> None:
+        super().__init__(b"[]")
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def run(self, invocation: CliInvocation, *, correlation_id: str) -> CliExecution:
+        del invocation, correlation_id
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        raise AssertionError("blocking runner unexpectedly resumed")
 
 
 def settings(tmp_path: Path) -> ProjectSettings:
@@ -143,6 +163,56 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
 
 
 @pytest.mark.anyio
+async def test_dashboard_reads_action_and_object_snapshots_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = build_runtime(
+        settings(tmp_path),
+        runner=FakeCliRunner(b'[{"object_id":101,"object_type":"DIRECTORY","path":"/Shared"}]'),
+    )
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=refresh.system_id,
+            target_kind=refresh.target_kind,
+            target_id=refresh.target_id,
+            capability_key=refresh.capability_key,
+            facet=refresh.facet,
+        )
+    )
+    assert await runtime.coordinator.run_once() is not None
+    assert await runtime.worker.run_once()
+
+    calls = {"actions": 0, "objects": 0}
+    list_actions = runtime.store.list_actions
+    list_objects = runtime.store.list_objects
+
+    def counted_actions(*, system_id: str | None = None) -> tuple[StoredAction, ...]:
+        calls["actions"] += 1
+        return list_actions(system_id=system_id)
+
+    def counted_objects(*, system_id: str | None = None) -> tuple[RemoteObject, ...]:
+        calls["objects"] += 1
+        return list_objects(system_id=system_id)
+
+    monkeypatch.setattr(runtime.store, "list_actions", counted_actions)
+    monkeypatch.setattr(runtime.store, "list_objects", counted_objects)
+
+    rendered = await runtime.backend.dashboard()
+
+    assert rendered.objects
+    assert calls == {"actions": 1, "objects": 1}
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_background_failure_is_durable_and_reports_unavailable(tmp_path: Path) -> None:
     runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
 
@@ -165,6 +235,36 @@ async def test_background_failure_is_durable_and_reports_unavailable(tmp_path: P
     assert "untrusted detail" not in events[-1].redacted_summary
 
     await runtime.stop()
+
+
+@pytest.mark.anyio
+async def test_runtime_stop_cancels_in_flight_worker_without_waiting_for_cli_timeout(
+    tmp_path: Path,
+) -> None:
+    runner = BlockingCliRunner()
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    await runtime.start()
+    dashboard = await runtime.backend.dashboard()
+    refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=refresh.system_id,
+            target_kind=refresh.target_kind,
+            target_id=refresh.target_id,
+            capability_key=refresh.capability_key,
+            facet=refresh.facet,
+        )
+    )
+    await asyncio.wait_for(runner.started.wait(), timeout=1)
+
+    await asyncio.wait_for(runtime.stop(), timeout=1)
+
+    assert runner.cancelled
 
 
 @pytest.mark.anyio

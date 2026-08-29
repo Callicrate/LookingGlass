@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -34,11 +34,12 @@ from async_api_view.contracts import (
     RefreshIntent,
     RefreshOrigin,
     RefreshScope,
+    RemoteObject,
     TargetKind,
     TargetRef,
 )
 from async_api_view.ingestion import SQLiteObservationIngestor
-from async_api_view.storage import SQLiteStore
+from async_api_view.storage import SQLiteStore, StoredAction, SystemRecord
 from async_api_view.web import (
     ActivityView,
     DashboardView,
@@ -192,25 +193,14 @@ class SQLiteWebBackend:
         self._worker_status = worker_status
         self._wake_worker = wake_worker
 
-    def _active_action(
-        self, *, system_id: str, target_kind: str, target_id: str, facet: str
-    ) -> bool:
-        return any(
-            action.action.target.kind.value == target_kind
-            and action.action.target.target_id == target_id
-            and any(scope.facet == facet for scope in action.action.requested_scopes)
-            and action.state
-            in {
-                ActionState.READY,
-                ActionState.LEASED,
-                ActionState.RUNNING,
-                ActionState.RETRY_WAIT,
-            }
-            for action in self._store.list_actions(system_id=system_id)
-        )
-
     def _facet_view(
-        self, *, system_id: str, object_id: str, object_type: str, facet: Any
+        self,
+        *,
+        system_id: str,
+        object_id: str,
+        object_type: str,
+        facet: Any,
+        refreshing: bool,
     ) -> FacetView:
         interval_text = "Unknown"
         freshness = "unobserved"
@@ -231,12 +221,7 @@ class SQLiteWebBackend:
                 )
             except ValueError:
                 freshness = "unsupported"
-        if self._active_action(
-            system_id=system_id,
-            target_kind=TargetKind.OBJECT.value,
-            target_id=object_id,
-            facet=facet.facet,
-        ):
+        if refreshing:
             freshness = "refreshing"
         value = json.dumps(dict(facet.payload), ensure_ascii=False, sort_keys=True, default=str)
         return FacetView(
@@ -249,7 +234,12 @@ class SQLiteWebBackend:
             provenance=facet.supporting_observation_id or "Unknown",
         )
 
-    def _refresh_options(self) -> tuple[RefreshOption, ...]:
+    def _refresh_options(
+        self,
+        *,
+        systems: Sequence[SystemRecord],
+        objects: Sequence[RemoteObject],
+    ) -> tuple[RefreshOption, ...]:
         options: list[RefreshOption] = []
         worker_available, worker_error = self._worker_status()
         capabilities_by_system = {
@@ -258,11 +248,11 @@ class SQLiteWebBackend:
                 for capability in self._store.list_capability_bindings(system_id=system.system_id)
                 if capability.enabled
             }
-            for system in self._store.list_systems()
+            for system in systems
         }
         bindings_by_system = {
             system.system_id: self._store.list_connection_bindings(system_id=system.system_id)
-            for system in self._store.list_systems()
+            for system in systems
         }
 
         for configured in self._store.list_configured_scopes():
@@ -290,7 +280,7 @@ class SQLiteWebBackend:
                     )
                 )
 
-        for remote_object in self._store.list_objects():
+        for remote_object in objects:
             if remote_object.presence is PresenceState.ABSENT:
                 continue
             capabilities = capabilities_by_system.get(remote_object.system_id, {})
@@ -384,10 +374,35 @@ class SQLiteWebBackend:
 
     async def dashboard(self) -> DashboardView:
         worker_available, worker_error = self._worker_status()
+        systems = self._store.list_systems()
+        objects = self._store.list_objects()
+        actions = self._store.list_actions()
+        actions_by_system: dict[str, list[StoredAction]] = {
+            system.system_id: [] for system in systems
+        }
+        active_action_keys: set[tuple[str, str, str, str]] = set()
+        for stored_action in actions:
+            actions_by_system.setdefault(stored_action.action.system_id, []).append(stored_action)
+            if stored_action.state not in {
+                ActionState.READY,
+                ActionState.LEASED,
+                ActionState.RUNNING,
+                ActionState.RETRY_WAIT,
+            }:
+                continue
+            active_action_keys.update(
+                (
+                    stored_action.action.system_id,
+                    stored_action.action.target.kind.value,
+                    stored_action.action.target.target_id,
+                    scope.facet,
+                )
+                for scope in stored_action.action.requested_scopes
+            )
         system_views: list[SystemView] = []
-        for system in self._store.list_systems():
-            actions = self._store.list_actions(system_id=system.system_id)
-            last = actions[0] if actions else None
+        for system in systems:
+            system_actions = actions_by_system.get(system.system_id, ())
+            last = system_actions[0] if system_actions else None
             activity = (
                 ActivityView(
                     state=last.state.value,
@@ -415,7 +430,7 @@ class SQLiteWebBackend:
             )
 
         object_views: list[ObjectView] = []
-        for remote_object in self._store.list_objects():
+        for remote_object in objects:
             facets = self._store.list_facets(remote_object.object_id)
             facet_views = tuple(
                 self._facet_view(
@@ -423,6 +438,13 @@ class SQLiteWebBackend:
                     object_id=remote_object.object_id,
                     object_type=remote_object.object_type,
                     facet=facet,
+                    refreshing=(
+                        remote_object.system_id,
+                        TargetKind.OBJECT.value,
+                        remote_object.object_id,
+                        facet.facet,
+                    )
+                    in active_action_keys,
                 )
                 for facet in facets
             )
@@ -446,7 +468,7 @@ class SQLiteWebBackend:
         return DashboardView(
             systems=tuple(system_views),
             objects=tuple(object_views),
-            refresh_options=self._refresh_options(),
+            refresh_options=self._refresh_options(systems=systems, objects=objects),
             loaded_at=datetime.now(UTC),
             disconnected=not worker_available,
             error=worker_error,
@@ -620,9 +642,14 @@ class ApplicationRuntime:
             self._stop_event.set()
         if self._wake_event is not None:
             self._wake_event.set()
+        task = self._background_task
+        if task is not None and not task.done():
+            task.cancel()
         try:
-            if self._background_task is not None:
-                await self._background_task
+            if task is not None:
+                await task
+        except asyncio.CancelledError:
+            pass
         finally:
             self.store.close()
 
@@ -736,7 +763,6 @@ def build_runtime(
             (
                 settings.app.host,
                 "localhost",
-                "[::1]",
             )
         )
     )

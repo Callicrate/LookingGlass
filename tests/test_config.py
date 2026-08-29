@@ -35,11 +35,20 @@ workspace_root = "/Shared"
     assert settings.databricks_systems[0].workspace_root == "/Shared"
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.25", "example.com"])
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.25", "::1", "example.com"])
 def test_rejects_non_loopback_host(tmp_path: Path, host: str) -> None:
     path = write_config(tmp_path, f'[app]\nhost = "{host}"\n')
 
     with pytest.raises(ConfigError, match="loopback"):
+        load_settings(path)
+
+
+@pytest.mark.parametrize("field", ["worker_poll_seconds", "cli_timeout_seconds"])
+@pytest.mark.parametrize("value", ["nan", "+nan", "-nan", "inf", "+inf", "-inf"])
+def test_rejects_non_finite_timing_settings(tmp_path: Path, field: str, value: str) -> None:
+    path = write_config(tmp_path, f"[app]\n{field} = {value}\n")
+
+    with pytest.raises(ConfigError, match="greater than 0"):
         load_settings(path)
 
 
