@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 05:25 ET
+Updated: 2026-08-29 05:26 ET
 
 ## Goal
 
@@ -218,7 +218,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - All facet observations now use transaction-local savepoints; a merge-over-limit regression proves rejected items cannot rename objects, advance presence time, journal provenance, or replace supporting evidence.
 - `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
 - Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
-- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 291 tests and 87% branch coverage, including final-start authority revocation, typed remote identity, backup publication, nested DTO validation, and migration `0011`; the shared Windows `.venv` was untouched.
+- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 297 tests and 87% branch coverage, including controlled SQLite failures, distribution verification, final-start authority revocation, typed identity, nested DTO validation, and migration `0011`; the shared Windows `.venv` was untouched.
 - The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
 - The 04:43 Murmuration tending pass produced the same read-only result: no scoped public context and no native profile for writes, notifications, or BookStack.
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
