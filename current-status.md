@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 21:37 ET
+Updated: 2026-08-28 21:41 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 176 tests passed warning-free; Ruff format, standard/security lint, lock validation, and the branch-coverage gate passed.
+- Latest checks: 177 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
 - Version control: local `main` is clean; every completed implementation batch is committed with focused messages.
 - Active review round: fresh residual-risk audit, package smoke validation, and low-coverage boundary triage.
@@ -72,6 +72,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - CI now runs Ruff's source security rules in addition to the normal lint suite; all SQL construction is static and all values remain bound parameters.
 - The second structured critical-review report is schema-valid in `.local/review-round2/` and records four resolved findings plus the live-validation gate.
 - Direct runner tests prove manually assembled wrong subcommands, extra flags, unsafe profiles, missing fixed flags, and traversal paths are rejected before subprocess creation; adapter branch coverage rose from 69% to 74%.
+- The tracked-file secret scan is clean; its sole redaction-fixture false positive is explicitly allowlisted and asserted not to persist.
+- Storage tests now document idempotent close behavior and literal backslash search, covering two operational assumptions used by CLI cleanup and filtering.
 
 ## Risks / watch list
 

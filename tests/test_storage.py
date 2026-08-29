@@ -58,6 +58,13 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
         ]
 
 
+def test_store_close_is_idempotent(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+
+    store.close()
+    store.close()
+
+
 def test_existing_v1_database_upgrades_scope_capability_columns(tmp_path) -> None:
     path = tmp_path / "legacy.sqlite3"
     legacy = sqlite3.connect(path)
@@ -268,7 +275,7 @@ def test_object_page_search_escapes_wildcards_and_bounds_results(tmp_path) -> No
         seeded = SystemBootstrapService(store).configure_databricks_workspace(
             display_name="local", profile="DEFAULT", workspace_root="/", now=NOW
         )
-        for index, name in enumerate(("100% real", "under_score", "ordinary")):
+        for index, name in enumerate(("100% real", "under_score", "back\\slash", "ordinary")):
             store.upsert_object(
                 RemoteObject(
                     object_id=uuid4(),
@@ -288,6 +295,7 @@ def test_object_page_search_escapes_wildcards_and_bounds_results(tmp_path) -> No
         assert [
             item.display_name for item in store.list_objects_page(offset=0, limit=10, query="_")
         ] == ["under_score"]
+        assert store.count_objects(query="\\") == 1
         assert len(store.list_objects_page(offset=1, limit=2)) == 2
 
 
