@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 04:39 ET
+Updated: 2026-08-29 04:43 ET
 
 ## Goal
 
@@ -215,6 +215,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
 - The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 281 tests and 87% branch coverage, including typed Workspace/Unity Catalog identity checks, backup publication, DTO invariants, and migration `0011`; the shared Windows `.venv` was untouched.
 - The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
+- The 04:43 Murmuration tending pass produced the same read-only result: no scoped public context and no native profile for writes, notifications, or BookStack.
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
 - Databricks target resolution now derives catalog/schema command arguments from immutable canonical external identity rather than mutable facet payload, and a corruption regression proves later dispatch remains on the intended scope.
 - A fresh audit of the locked runtime-only dependency export reports no known vulnerabilities; the local project package was excluded so the auditor did not substitute an incompatible helper interpreter.
