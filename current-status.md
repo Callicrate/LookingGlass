@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 06:09 ET
+Updated: 2026-08-29 06:12 ET
 
 ## Goal
 
@@ -12,8 +12,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 310 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: no medium-or-higher defect open; continue fresh post-fix residual audits against the clean 291-test head.
-- Next progress report due: 2026-08-29 06:12 ET.
+- Active review round: no medium-or-higher defect open; continue fresh post-fix residual audits against the clean cross-platform 310-test head.
+- Next progress report due: 2026-08-29 07:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
