@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -10,6 +11,8 @@ from typing import Any
 
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_DATABRICKS_SYSTEMS = 32
+MIN_WORKER_POLL_SECONDS = 0.05
+_DATABRICKS_PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 class ConfigError(ValueError):
@@ -25,6 +28,18 @@ class AppSettings:
     cli_timeout_seconds: float = 30.0
     cli_output_limit_bytes: int = 8 * 1024 * 1024
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "worker_poll_seconds",
+            _positive_float(
+                self.worker_poll_seconds,
+                "app.worker_poll_seconds",
+                maximum=60.0,
+                minimum=MIN_WORKER_POLL_SECONDS,
+            ),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class DatabricksSystemSettings:
@@ -32,6 +47,13 @@ class DatabricksSystemSettings:
     profile: str
     workspace_root: str
     config_id: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "profile",
+            validate_databricks_profile(self.profile, "profile"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,11 +76,24 @@ def _bounded_text(value: object, field_name: str, *, max_length: int) -> str:
     return value
 
 
-def _positive_float(value: object, field_name: str, *, maximum: float) -> float:
+def _positive_float(
+    value: object,
+    field_name: str,
+    *,
+    maximum: float,
+    minimum: float = 0.0,
+) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ConfigError(f"{field_name} must be a number")
     normalized = float(value)
-    if not math.isfinite(normalized) or normalized <= 0 or normalized > maximum:
+    if (
+        not math.isfinite(normalized)
+        or normalized <= 0
+        or normalized < minimum
+        or normalized > maximum
+    ):
+        if minimum > 0:
+            raise ConfigError(f"{field_name} must be at least {minimum} and at most {maximum}")
         raise ConfigError(f"{field_name} must be greater than 0 and at most {maximum}")
     return normalized
 
@@ -100,6 +135,18 @@ def canonical_config_id(value: object, field_name: str = "Databricks system ID")
     """Validate and case-normalize one stable local configuration identity."""
 
     return _identifier(value, field_name).casefold()
+
+
+def validate_databricks_profile(value: object, field_name: str) -> str:
+    """Validate one named CLI profile before any durable configuration work."""
+
+    profile = _bounded_text(value, field_name, max_length=128)
+    if _DATABRICKS_PROFILE.fullmatch(profile) is None:
+        raise ConfigError(
+            f"{field_name} must start with a letter or digit and contain only "
+            "letters, digits, periods, underscores, and hyphens"
+        )
+    return profile
 
 
 def load_settings(path: Path) -> ProjectSettings:
@@ -145,6 +192,7 @@ def load_settings(path: Path) -> ProjectSettings:
             app_raw.get("worker_poll_seconds", 1.0),
             "app.worker_poll_seconds",
             maximum=60.0,
+            minimum=MIN_WORKER_POLL_SECONDS,
         ),
         cli_timeout_seconds=_positive_float(
             app_raw.get("cli_timeout_seconds", 30.0),
@@ -174,7 +222,9 @@ def load_settings(path: Path) -> ProjectSettings:
         systems.append(
             DatabricksSystemSettings(
                 name=_bounded_text(entry.get("name"), f"{field_prefix}.name", max_length=128),
-                profile=_identifier(entry.get("profile"), f"{field_prefix}.profile"),
+                profile=validate_databricks_profile(
+                    entry.get("profile"), f"{field_prefix}.profile"
+                ),
                 workspace_root=_workspace_root(
                     entry.get("workspace_root", "/"),
                     f"{field_prefix}.workspace_root",

@@ -83,6 +83,26 @@ def test_init_rejects_missing_config(tmp_path: Path) -> None:
     assert result == 2
 
 
+def test_init_rejects_invalid_profile_before_database_creation(tmp_path: Path) -> None:
+    database = tmp_path / "state.sqlite3"
+    config = tmp_path / "invalid-profile.toml"
+    config.write_text(
+        f"""
+[app]
+database_path = "{database.as_posix()}"
+
+[[databricks]]
+name = "workspace"
+profile = "-bad"
+workspace_root = "/"
+""",
+        encoding="utf-8",
+    )
+
+    assert cli.main(["--config", str(config), "init"]) == 2
+    assert not database.exists()
+
+
 @pytest.mark.parametrize("command", ["init", "run-once", "serve"])
 @pytest.mark.parametrize("corruption", ["bytes", "schema"])
 def test_database_commands_fail_cleanly_on_incompatible_sqlite_state(
@@ -107,7 +127,10 @@ def test_database_commands_fail_cleanly_on_incompatible_sqlite_state(
         finally:
             malformed.close()
 
-    result = cli.main(["--config", str(config), command])
+    argv = ["--config", str(config), command]
+    if command == "serve":
+        argv.append("--allow-redirected-activation")
+    result = cli.main(argv)
 
     assert result == 2
     assert "local SQLite state could not be opened or updated" in caplog.text
@@ -185,39 +208,69 @@ def test_serve_refuses_to_disclose_activation_to_redirected_stdout(
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class FakeStore:
-        closed = False
-
-        def close(self) -> None:
-            self.closed = True
-
-    store = FakeStore()
-    runtime = SimpleNamespace(
-        app=object(),
-        store=store,
-        local_authorizer=LocalCallerAuthorizer(),
-    )
-    settings = ProjectSettings(
-        app=AppSettings(database_path=tmp_path / "state.sqlite3"),
-        databricks_systems=(),
-    )
-    monkeypatch.setattr(cli, "_load", lambda _path: settings)
-    monkeypatch.setattr(cli, "build_runtime", lambda _settings: runtime)
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False)
     monkeypatch.setattr(
-        cli.uvicorn,
-        "run",
-        lambda *_args, **_kwargs: pytest.fail("server started without activation disclosure"),
+        cli,
+        "_load",
+        lambda _path: pytest.fail("redirected serve loaded configuration"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_runtime",
+        lambda _settings: pytest.fail("redirected serve built the runtime"),
     )
 
     result = cli.main(["serve"])
 
     captured = capsys.readouterr()
     assert result == 2
-    assert store.closed
     assert captured.out == ""
     assert "--allow-redirected-activation" in caplog.text
     assert "/bootstrap#" not in captured.err + caplog.text
+
+
+def test_redirected_serve_does_not_apply_configuration_rotation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "state.sqlite3"
+    config = tmp_path / "config.toml"
+
+    def write_root(root: str) -> None:
+        config.write_text(
+            f"""
+[app]
+database_path = "{database.as_posix()}"
+
+[[databricks]]
+id = "workspace"
+name = "workspace"
+profile = "TEST_PROFILE"
+workspace_root = "{root}"
+""",
+            encoding="utf-8",
+        )
+
+    write_root("/Old")
+    assert cli.main(["--config", str(config), "init"]) == 0
+    with sqlite3.connect(database) as before_connection:
+        before = tuple(
+            before_connection.execute(
+                "SELECT system_id, display_name, enabled FROM systems ORDER BY system_id"
+            ).fetchall()
+        )
+    write_root("/New")
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False)
+
+    assert cli.main(["--config", str(config), "serve"]) == 2
+
+    with sqlite3.connect(database) as after_connection:
+        after = tuple(
+            after_connection.execute(
+                "SELECT system_id, display_name, enabled FROM systems ORDER BY system_id"
+            ).fetchall()
+        )
+    assert after == before
 
 
 def test_doctor_runs_compatibility_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

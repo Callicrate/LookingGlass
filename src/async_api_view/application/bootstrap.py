@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from async_api_view.config import validate_databricks_profile
 from async_api_view.contracts import (
     AbsenceAuthority,
     CapabilityBinding,
@@ -22,8 +22,6 @@ from async_api_view.contracts import (
 )
 from async_api_view.contracts._validation import JSONValue, require_text
 from async_api_view.storage import ConfiguredScopeRecord, SQLiteStore, SystemRecord
-
-_PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,9 +121,7 @@ class SystemBootstrapService:
         now: datetime | None = None,
     ) -> DatabricksBootstrapResult:
         """Seed a Workspace root as a canonical unknown folder and configured scope."""
-        require_text(profile, "profile", max_length=128)
-        if _PROFILE.fullmatch(profile) is None:
-            raise ValueError("profile must be a simple named Databricks CLI profile")
+        profile = validate_databricks_profile(profile, "profile")
         require_text(workspace_root, "workspace_root", max_length=4096)
         capability_keys = tuple(dict.fromkeys(enabled_capability_keys))
         unknown_capabilities = set(capability_keys) - set(_CAPABILITIES)

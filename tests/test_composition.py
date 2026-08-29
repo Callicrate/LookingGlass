@@ -1180,7 +1180,7 @@ def test_configuration_application_rolls_back_all_systems_on_late_failure(
 @pytest.mark.anyio
 async def test_coordinator_failure_is_durable_and_recovers_automatically(tmp_path: Path) -> None:
     runtime = build_runtime(
-        settings(tmp_path, worker_poll_seconds=0.01), runner=FakeCliRunner(b"[]")
+        settings(tmp_path, worker_poll_seconds=0.05), runner=FakeCliRunner(b"[]")
     )
 
     class FlakyCoordinator:
@@ -1227,7 +1227,7 @@ async def test_worker_startup_retries_with_one_event_and_clears_dashboard_error(
 ) -> None:
     runner = FlakyStartupCliRunner(failures=2)
     runtime = build_runtime(
-        settings(tmp_path, worker_poll_seconds=0.01),
+        settings(tmp_path, worker_poll_seconds=0.05),
         runner=runner,
     )
 
@@ -1398,7 +1398,7 @@ async def test_blocked_worker_startup_does_not_hold_cached_authenticated_dashboa
 @pytest.mark.anyio
 async def test_repeated_worker_loop_failures_do_not_flood_events(tmp_path: Path) -> None:
     runtime = build_runtime(
-        settings(tmp_path, worker_poll_seconds=0.01), runner=FakeCliRunner(b"[]")
+        settings(tmp_path, worker_poll_seconds=0.05), runner=FakeCliRunner(b"[]")
     )
 
     class FlakyWorker:
@@ -1583,7 +1583,7 @@ async def test_action_detail_maps_bounded_attempt_evidence(
 
 def test_runtime_recovery_backoff_has_a_floor(tmp_path: Path) -> None:
     runtime = build_runtime(
-        settings(tmp_path, worker_poll_seconds=1e-9), runner=FakeCliRunner(b"[]")
+        settings(tmp_path, worker_poll_seconds=0.05), runner=FakeCliRunner(b"[]")
     )
     runtime._failure_counts["worker"] = 1
 

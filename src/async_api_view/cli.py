@@ -149,11 +149,7 @@ def _show_browser_activation(
     *,
     allow_redirected: bool,
 ) -> None:
-    if not sys.stdout.isatty() and not allow_redirected:
-        raise RuntimeError(
-            "refusing to write the browser activation link to redirected stdout; "
-            "use an interactive terminal or pass --allow-redirected-activation"
-        )
+    _require_browser_activation_output(allow_redirected=allow_redirected)
     token = runtime.local_authorizer.take_bootstrap_token()
     url = f"http://{runtime.local_authorizer.browser_host}:{settings.app.port}/bootstrap#{token}"
     # The one-time capability must reach the controlling terminal without entering
@@ -164,6 +160,14 @@ def _show_browser_activation(
         "Keep this link private. Restart serve to issue a new link.\n"
     )
     sys.stdout.flush()
+
+
+def _require_browser_activation_output(*, allow_redirected: bool) -> None:
+    if not sys.stdout.isatty() and not allow_redirected:
+        raise RuntimeError(
+            "refusing to write the browser activation link to redirected stdout; "
+            "use an interactive terminal or pass --allow-redirected-activation"
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -177,6 +181,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "init-config":
             _initialize_config(args.output)
             return 0
+        if args.command == "serve":
+            _require_browser_activation_output(allow_redirected=args.allow_redirected_activation)
         settings = _load(args.config)
         if args.command == "init":
             _initialize(settings)

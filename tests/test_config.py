@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from async_api_view.config import ConfigError, load_settings
+from async_api_view.config import (
+    AppSettings,
+    ConfigError,
+    DatabricksSystemSettings,
+    load_settings,
+)
 
 
 def write_config(tmp_path: Path, content: str) -> Path:
@@ -50,8 +55,23 @@ def test_rejects_non_loopback_host(tmp_path: Path, host: str) -> None:
 def test_rejects_non_finite_timing_settings(tmp_path: Path, field: str, value: str) -> None:
     path = write_config(tmp_path, f"[app]\n{field} = {value}\n")
 
-    with pytest.raises(ConfigError, match="greater than 0"):
+    with pytest.raises(ConfigError, match="at most"):
         load_settings(path)
+
+
+@pytest.mark.parametrize("value", ["5e-324", "0.049999"])
+def test_rejects_worker_poll_interval_below_practical_floor(tmp_path: Path, value: str) -> None:
+    path = write_config(tmp_path, f"[app]\nworker_poll_seconds = {value}\n")
+
+    with pytest.raises(ConfigError, match=r"at least 0\.05"):
+        load_settings(path)
+
+
+def test_programmatic_settings_enforce_poll_and_profile_boundaries(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"at least 0\.05"):
+        AppSettings(database_path=tmp_path / "state.sqlite3", worker_poll_seconds=1e-12)
+    with pytest.raises(ConfigError, match="must start with a letter or digit"):
+        DatabricksSystemSettings("workspace", "-bad", "/")
 
 
 @pytest.mark.parametrize(
@@ -79,6 +99,22 @@ workspace_root = "{value if field == "workspace_root" else "/"}"
     )
 
     with pytest.raises(ConfigError, match=message):
+        load_settings(path)
+
+
+@pytest.mark.parametrize("profile", ["-bad", ".bad", "_bad"])
+def test_rejects_profile_that_bootstrap_cannot_use(tmp_path: Path, profile: str) -> None:
+    path = write_config(
+        tmp_path,
+        f"""
+[[databricks]]
+name = "workspace"
+profile = "{profile}"
+workspace_root = "/"
+""",
+    )
+
+    with pytest.raises(ConfigError, match="must start with a letter or digit"):
         load_settings(path)
 
 
