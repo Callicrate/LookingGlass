@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 03:39 ET
+Updated: 2026-08-29 03:45 ET
 
 ## Goal
 
@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 264 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: continue residual-risk review after documentation truth and protected-web failure semantics were independently cleared.
+- Active review round: broad post-fix residual audit against the clean 264-test cross-platform head.
 - Next progress report due: 2026-08-29 04:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -209,6 +209,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
 - Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
 - The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 264 tests and 87% branch coverage, including backup hard-link publication and migration `0011`; the shared Windows `.venv` was untouched.
+- The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
 
 ## Risks / watch list
 
