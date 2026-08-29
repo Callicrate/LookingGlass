@@ -73,6 +73,20 @@ class BlockingCliRunner(FakeCliRunner):
         raise AssertionError("blocking runner unexpectedly resumed")
 
 
+class FlakyStartupCliRunner(FakeCliRunner):
+    def __init__(self, failures: int) -> None:
+        super().__init__(b"[]")
+        self.failures = failures
+        self.doctor_calls = 0
+        self.ready = asyncio.Event()
+
+    async def doctor(self) -> None:
+        self.doctor_calls += 1
+        if self.doctor_calls <= self.failures:
+            raise RuntimeError("temporary startup failure")
+        self.ready.set()
+
+
 def settings(
     tmp_path: Path,
     *,
@@ -80,9 +94,13 @@ def settings(
     name: str = "test-workspace",
     profile: str = "TEST_PROFILE",
     workspace_root: str = "/",
+    worker_poll_seconds: float = 1.0,
 ) -> ProjectSettings:
     return ProjectSettings(
-        app=AppSettings(database_path=tmp_path / "state.sqlite3"),
+        app=AppSettings(
+            database_path=tmp_path / "state.sqlite3",
+            worker_poll_seconds=worker_poll_seconds,
+        ),
         databricks_systems=(
             DatabricksSystemSettings(
                 config_id=config_id,
@@ -392,28 +410,124 @@ def test_workspace_root_change_creates_new_authority_and_pauses_predecessor(
 
 
 @pytest.mark.anyio
-async def test_background_failure_is_durable_and_reports_unavailable(tmp_path: Path) -> None:
-    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+async def test_coordinator_failure_is_durable_and_recovers_automatically(tmp_path: Path) -> None:
+    runtime = build_runtime(
+        settings(tmp_path, worker_poll_seconds=0.01), runner=FakeCliRunner(b"[]")
+    )
 
-    class FailingCoordinator:
+    class FlakyCoordinator:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.recovered = asyncio.Event()
+
         async def run_once(self) -> None:
-            raise RuntimeError("untrusted detail must not be persisted")
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("untrusted detail must not be persisted")
+            self.recovered.set()
+            return None
 
-    runtime.coordinator = FailingCoordinator()  # type: ignore[assignment]
+    coordinator = FlakyCoordinator()
+    runtime.coordinator = coordinator  # type: ignore[assignment]
     await runtime.start()
-    task = runtime._background_task
-    assert task is not None
-    await task
+    await asyncio.wait_for(coordinator.recovered.wait(), timeout=1)
+    await asyncio.sleep(0)
 
     available, error = runtime.status()
-    assert not available
-    assert error == "coordinator stopped unexpectedly (RuntimeError)"
+    assert available
+    assert error is None
     events = runtime.store.list_operational_events(alertable_only=True)
-    assert events[-1].event_type == "queue.coordinator.failed"
-    assert events[-1].redacted_summary == error
-    assert "untrusted detail" not in events[-1].redacted_summary
+    coordinator_events = [
+        event for event in events if event.event_type == "queue.coordinator.failed"
+    ]
+    assert len(coordinator_events) == 1
+    assert coordinator_events[0].redacted_summary == (
+        "coordinator stopped unexpectedly (RuntimeError)"
+    )
+    assert "untrusted detail" not in coordinator_events[0].redacted_summary
 
     await runtime.stop()
+
+
+@pytest.mark.anyio
+async def test_worker_startup_retries_with_one_event_and_clears_dashboard_error(
+    tmp_path: Path,
+) -> None:
+    runner = FlakyStartupCliRunner(failures=2)
+    runtime = build_runtime(
+        settings(tmp_path, worker_poll_seconds=0.01),
+        runner=runner,
+    )
+
+    await runtime.start()
+    unavailable = await runtime.backend.dashboard()
+    assert unavailable.disconnected
+    assert unavailable.error == "worker stopped unexpectedly (RuntimeError)"
+    await asyncio.wait_for(runner.ready.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    recovered = await runtime.backend.dashboard()
+    assert runner.doctor_calls == 3
+    assert not recovered.disconnected
+    assert recovered.error is None
+    worker_events = [
+        event
+        for event in runtime.store.list_operational_events(alertable_only=True)
+        if event.event_type == "queue.adapter_worker.failed"
+    ]
+    assert len(worker_events) == 1
+
+    await runtime.stop()
+
+
+@pytest.mark.anyio
+async def test_repeated_worker_loop_failures_do_not_flood_events(tmp_path: Path) -> None:
+    runtime = build_runtime(
+        settings(tmp_path, worker_poll_seconds=0.01), runner=FakeCliRunner(b"[]")
+    )
+
+    class FlakyWorker:
+        def __init__(self) -> None:
+            self.startup_calls = 0
+            self.run_calls = 0
+            self.recovered = asyncio.Event()
+
+        async def startup(self) -> None:
+            self.startup_calls += 1
+
+        async def run_once(self) -> bool:
+            self.run_calls += 1
+            if self.run_calls <= 2:
+                raise RuntimeError("temporary worker loop failure")
+            self.recovered.set()
+            return False
+
+    worker = FlakyWorker()
+    runtime.worker = worker  # type: ignore[assignment]
+    await runtime.start()
+    await asyncio.wait_for(worker.recovered.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert worker.startup_calls == 3
+    assert runtime.status() == (True, None)
+    worker_events = [
+        event
+        for event in runtime.store.list_operational_events(alertable_only=True)
+        if event.event_type == "queue.adapter_worker.failed"
+    ]
+    assert len(worker_events) == 1
+
+    await runtime.stop()
+
+
+def test_runtime_recovery_backoff_has_a_floor(tmp_path: Path) -> None:
+    runtime = build_runtime(
+        settings(tmp_path, worker_poll_seconds=1e-9), runner=FakeCliRunner(b"[]")
+    )
+    runtime._failure_counts["worker"] = 1
+
+    assert runtime._retry_delay("worker") == 0.1
+    runtime.store.close()
 
 
 @pytest.mark.anyio

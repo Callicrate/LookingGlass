@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -612,6 +612,9 @@ class ApplicationRuntime:
     _stop_event: asyncio.Event | None = field(default=None, init=False)
     _wake_event: asyncio.Event | None = field(default=None, init=False)
     _background_task: asyncio.Task[None] | None = field(default=None, init=False)
+    _worker_started: bool = field(default=False, init=False)
+    _component_errors: dict[str, str] = field(default_factory=dict, init=False)
+    _failure_counts: dict[str, int] = field(default_factory=dict, init=False)
 
     def status(self) -> tuple[bool, str | None]:
         return self.worker_available, self.worker_error
@@ -623,15 +626,16 @@ class ApplicationRuntime:
     async def start(self) -> None:
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
+        self._component_errors.clear()
+        self._failure_counts.clear()
         try:
             await self.worker.startup()
         except Exception as exc:
-            self.worker_available = False
-            self.worker_error = f"Databricks worker unavailable: {type(exc).__name__}"
-            logger.warning(self.worker_error)
+            self._worker_started = False
+            self._record_background_failure("worker", exc)
         else:
-            self.worker_available = True
-            self.worker_error = None
+            self._worker_started = True
+            self._record_component_recovery("worker")
         self._background_task = asyncio.create_task(
             self._run_background(),
             name="async-api-view-runtime",
@@ -655,23 +659,60 @@ class ApplicationRuntime:
 
     def _record_background_failure(self, component: str, error: BaseException) -> None:
         summary = f"{component} stopped unexpectedly ({type(error).__name__})"
+        first_failure = component not in self._component_errors
+        self._component_errors[component] = summary
+        self._failure_counts[component] = self._failure_counts.get(component, 0) + 1
         self.worker_available = False
         self.worker_error = summary
-        logger.error("%s", summary)
+        if not first_failure:
+            logger.warning("%s; retrying", summary)
+            return
+        logger.error("%s; retrying", summary)
         event_type = {
             "coordinator": "queue.coordinator.failed",
             "worker": "queue.adapter_worker.failed",
         }[component]
-        self.store.record_runtime_failure(
-            event_type=event_type,
-            summary=summary,
-            occurred_at=datetime.now(UTC),
-        )
+        try:
+            self.store.record_runtime_failure(
+                event_type=event_type,
+                summary=summary,
+                occurred_at=datetime.now(UTC),
+            )
+        except Exception:
+            logger.exception("Could not persist the redacted %s outage event", component)
+
+    def _record_component_recovery(self, component: str) -> None:
+        if component in self._component_errors:
+            logger.info("%s recovered", component)
+        self._component_errors.pop(component, None)
+        self._failure_counts.pop(component, None)
+        self.worker_available = self._worker_started and not self._component_errors
+        self.worker_error = next(reversed(self._component_errors.values()), None)
+
+    def _retry_delay(self, component: str) -> float:
+        failures = self._failure_counts.get(component, 1)
+        base = max(0.1, min(self.settings.app.worker_poll_seconds, 5.0))
+        return min(30.0, base * (2 ** min(failures - 1, 5)))
+
+    async def _wait_for_activity(self, timeout: float) -> None:
+        if self._wake_event is None:
+            raise RuntimeError("runtime was not started")
+        self._wake_event.clear()
+        with suppress(TimeoutError):
+            await asyncio.wait_for(self._wake_event.wait(), timeout=timeout)
 
     async def _run_background(self) -> None:
         if self._stop_event is None or self._wake_event is None:
             raise RuntimeError("runtime was not started")
         while not self._stop_event.is_set():
+            if not self._worker_started:
+                try:
+                    await self.worker.startup()
+                except Exception as exc:
+                    self._record_background_failure("worker", exc)
+                    await self._wait_for_activity(self._retry_delay("worker"))
+                    continue
+                self._worker_started = True
             worked = False
             try:
                 for _ in range(100):
@@ -681,26 +722,23 @@ class ApplicationRuntime:
                     worked = True
             except Exception as exc:
                 self._record_background_failure("coordinator", exc)
-                return
-            if self.worker_available:
-                try:
-                    for _ in range(100):
-                        if not await self.worker.run_once():
-                            break
-                        worked = True
-                except Exception as exc:
-                    self._record_background_failure("worker", exc)
-                    return
+                await self._wait_for_activity(self._retry_delay("coordinator"))
+                continue
+            self._record_component_recovery("coordinator")
+            try:
+                for _ in range(100):
+                    if not await self.worker.run_once():
+                        break
+                    worked = True
+            except Exception as exc:
+                self._worker_started = False
+                self._record_background_failure("worker", exc)
+                await self._wait_for_activity(self._retry_delay("worker"))
+                continue
+            self._record_component_recovery("worker")
             if worked:
                 continue
-            self._wake_event.clear()
-            try:
-                await asyncio.wait_for(
-                    self._wake_event.wait(),
-                    timeout=self.settings.app.worker_poll_seconds,
-                )
-            except TimeoutError:
-                continue
+            await self._wait_for_activity(self.settings.app.worker_poll_seconds)
 
 
 def build_runtime(

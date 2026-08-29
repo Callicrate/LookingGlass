@@ -1294,6 +1294,7 @@ SSH authentication, host-key, timeout, connection, and remote-command failures u
 | Request before minimum interval | Defer until `eligible_at`, then re-evaluate. |
 | New incidental evidence while deferred | Ingest it; mark the intent satisfied if coverage is sufficient. |
 | Adapter unavailable or version mismatch | Fail or defer explicitly; never select an unrelated adapter. |
+| Transient coordinator or worker runtime failure | Keep cached reads available, emit one event per outage transition, and retry with bounded backoff until recovery or orderly shutdown. |
 | Authentication or authorization failure | Preserve cached facts; record the action failure and redacted class. |
 | Timeout or rate limit | Preserve cached facts; let the adapter apply retry/backoff and guidance. |
 | Terminal worker or action failure | Preserve cached facts, record the final state, and emit one idempotent alertable operational event. |

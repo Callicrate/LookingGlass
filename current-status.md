@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 20:49 ET
+Updated: 2026-08-28 20:57 ET
 
 ## Goal
 
@@ -9,9 +9,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 152 tests passed warning-free; Ruff format, Ruff lint, `uv lock --check`, and package build passed.
+- Latest checks: 155 tests passed warning-free; Ruff format and lint passed; lock and package build remain green from the preceding batch.
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
-- Version control: local `main` history has five coherent commits ending at `6f5d76a`; the next reviewed commit is ready.
+- Version control: local `main` history has six coherent commits ending at `9d08703`; the next reviewed runtime commit is ready.
 - Active review round: configuration desired-state reconciliation, runtime supervision, bounded dashboard reads, and migration concurrency.
 - Next progress report due: 2026-08-28 21:49 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -27,6 +27,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Re-run format, lint, tests, lock validation, package build, and a rendered UI smoke check.
 - [x] Review the final diff critically and commit coherent changes.
 - [x] Make orderly shutdown cancel and reap in-flight CLI work promptly.
+- [x] Supervise and recover transient worker startup, coordinator, and worker-loop failures.
 - [x] Reconcile configuration identity and refresh authority across restarts.
 - [x] Eliminate repeated full action/object reads from per-facet dashboard rendering.
 - [ ] Bound dashboard reads for large object and action histories.
@@ -48,6 +49,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - A durable configuration identity mapping adopts existing cached system UUIDs before desired-state reconciliation.
 - Removing a config entry now disables stale refresh authority; queued stale work is cancelled by the pre-dispatch guard without a CLI call.
 - Eight concurrent store constructors now complete the migration ledger safely in the regression test.
+- Runtime retries use a 0.1 to 30 second bounded exponential backoff, remain wakeable, and emit one event per uninterrupted outage.
+- Successful component recovery clears the dashboard error automatically; the independent follow-up review confirmed the retry-floor blocker is resolved.
 
 ## Risks / watch list
 
