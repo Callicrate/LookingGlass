@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 06:41 ET
+Updated: 2026-08-29 06:44 ET
 
 ## Goal
 
@@ -223,7 +223,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - All facet observations now use transaction-local savepoints; a merge-over-limit regression proves rejected items cannot rename objects, advance presence time, journal provenance, or replace supporting evidence.
 - `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
 - Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
-- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 316 tests and 87% branch coverage, including policy initialization/version ambiguity, 94% coordinator branch coverage, scoped wakeups, drilldown validation, controlled SQLite failures, distribution verification, final-start authority revocation, typed identity, nested DTO validation, and migration `0014`; the shared Windows `.venv` was untouched.
+- The latest Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 316 tests and 87% branch coverage, including policy initialization/version ambiguity, 94% coordinator branch coverage, scoped wakeups, drilldown validation, controlled SQLite failures, distribution verification, final-start authority revocation, typed identity, nested DTO validation, and migration `0014`; the shared Windows `.venv` was untouched.
 - The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
 - The 04:43 Murmuration tending pass produced the same read-only result: no scoped public context and no native profile for writes, notifications, or BookStack.
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
@@ -255,6 +255,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The ignored local database is migrated through `0014_coverage_policy_initialization`; integrity and foreign keys are clean, and all seven configured capability rows are initialized.
 - All system/binding/capability/scope/identity upserts and reconciliation now share one outer `BEGIN IMMEDIATE`; a late bootstrap failure rolls profile rotation and removal state back completely.
 - Final remote-start authorization compares a SHA-256 digest of the exact adapter/settings/secret-reference binding used to build argv; a concurrent profile rotation cancels stale dispatch with zero runner calls.
+- The 06:43 Murmuration tending pass again found no Rookery-specific public context and remained read-only because the native project profile is unavailable.
 - A fresh multi-process storage/runtime audit cleared transaction, lease recovery, aggregate, configuration reconciliation, backup, and poison-row behavior with 92 focused tests.
 
 ## Risks / watch list
