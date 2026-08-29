@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 03:12 ET
+Updated: 2026-08-29 03:27 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 260 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 261 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: reconcile current documentation and roadmap claims against the 260-test implementation, then continue residual-risk review.
@@ -66,6 +66,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Wake deferred requests for coordinator re-evaluation when refresh policy changes.
 - [x] Enforce one NULL-safe durable identity for broad refresh overrides.
 - [x] Present the user-facing product consistently as Rookery without breaking package/CLI compatibility.
+- [x] Record every failed action attempt as linked, redacted, non-alertable operational history.
+- [x] Distinguish current metadata support from deferred Workspace content contracts in operator docs.
 
 ## Evidence and decisions
 
@@ -197,6 +199,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Migration `0011` deterministically retains the latest duplicate broad override and adds a NULL-safe unique identity; the setter also replaces one logical key atomically rather than relying on SQLite's nullable composite primary key.
 - The ignored local database is migrated through `0011_refresh_override_identity`; `PRAGMA integrity_check` is `ok` with zero foreign-key violations.
 - Browser titles, the dashboard masthead, favicon label, package description, and README now use Rookery; the `async-api-view` package and CLI remain stable compatibility interfaces.
+- Each newly persisted failed attempt now creates one idempotent warning event linked to its system, action, and attempt; retries remain non-alertable while terminal failure remains the sole alertable action event.
+- Operational-event replay tests prove duplicate attempt writes cannot duplicate history or mutate retry state, and all diagnostics remain redacted.
+- README and architecture now state that Workspace content is parser/future-contract work only; the executable worker rejects it before target resolution or CLI execution.
 
 ## Risks / watch list
 
