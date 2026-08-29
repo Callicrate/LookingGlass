@@ -3149,6 +3149,7 @@ class SQLiteStore:
         locator: ObjectLocator,
         system_id: str,
         observed_at: datetime,
+        mark_present: bool = True,
     ) -> RemoteObject:
         if locator.object_id is not None:
             row = connection.execute(
@@ -3175,6 +3176,19 @@ class SQLiteStore:
                 raise ValueError("unknown_object_locator")
             if row["object_type"] != locator.object_type:
                 raise ValueError("object_locator_type_mismatch")
+            previous_seen = _dt(row["last_seen_at"])
+            if mark_present and (previous_seen is None or observed_at >= previous_seen):
+                connection.execute(
+                    """
+                    UPDATE remote_objects
+                    SET presence = 'present', last_seen_at = ?
+                    WHERE object_id = ?
+                    """,
+                    (_utc_text(observed_at), row["object_id"]),
+                )
+                row = connection.execute(
+                    "SELECT * FROM remote_objects WHERE object_id = ?", (row["object_id"],)
+                ).fetchone()
             return self._object_from_row(row)
         if (
             locator.source_kind is None
@@ -3190,6 +3204,8 @@ class SQLiteStore:
             (system_id, locator.source_kind, locator.external_key),
         ).fetchone()
         if row is None:
+            if not mark_present:
+                raise ValueError("unknown_absence_object_locator")
             object_id = str(uuid4())
             connection.execute(
                 """
@@ -3218,7 +3234,7 @@ class SQLiteStore:
             if row["object_type"] != locator.object_type:
                 raise ValueError("external_identity_type_mismatch")
             previous_seen = _dt(row["last_seen_at"])
-            if previous_seen is None or observed_at >= previous_seen:
+            if mark_present and (previous_seen is None or observed_at >= previous_seen):
                 connection.execute(
                     """
                     UPDATE remote_objects
@@ -3756,6 +3772,7 @@ class SQLiteStore:
                             locator=observation.target,
                             system_id=batch.system_id,
                             observed_at=batch.observed_at,
+                            mark_present=observation.update_mode is not UpdateMode.ABSENCE,
                         )
                         recorded_status = self._record_journal_item(
                             connection,

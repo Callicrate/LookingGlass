@@ -242,7 +242,9 @@ def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:
         display_name="report.py",
     )
 
-    def present_batch(*, observed_at: datetime) -> ObservationBatch:
+    def present_batch(
+        *, observed_at: datetime, target: ObjectLocator = locator
+    ) -> ObservationBatch:
         return ObservationBatch(
             batch_id=uuid4(),
             system_id=seeded.system.system_id,
@@ -254,7 +256,7 @@ def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:
             facet_observations=(
                 FacetObservation(
                     observation_id=uuid4(),
-                    target=locator,
+                    target=target,
                     facet="metadata",
                     facet_version="1",
                     update_mode=UpdateMode.SNAPSHOT,
@@ -321,8 +323,16 @@ def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:
     assert remote_object.presence is PresenceState.ABSENT
     assert remote_object.last_seen_at == newer_absence_at
 
+    canonical_locator = ObjectLocator(object_type="file", object_id=remote_object.object_id)
     assert (
-        run(store.ingest(present_batch(observed_at=NOW + timedelta(minutes=15)))).status.value
+        run(
+            store.ingest(
+                present_batch(
+                    observed_at=NOW + timedelta(minutes=15),
+                    target=canonical_locator,
+                )
+            )
+        ).status.value
         == "accepted"
     )
     remote_object = store.get_object_sync(remote_object.object_id)
@@ -332,7 +342,10 @@ def test_object_presence_projection_is_timestamp_monotonic(tmp_path) -> None:
 
     latest_present_at = NOW + timedelta(minutes=40)
     assert (
-        run(store.ingest(present_batch(observed_at=latest_present_at))).status.value == "accepted"
+        run(
+            store.ingest(present_batch(observed_at=latest_present_at, target=canonical_locator))
+        ).status.value
+        == "accepted"
     )
     remote_object = store.get_object_sync(remote_object.object_id)
     assert remote_object is not None

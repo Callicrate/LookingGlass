@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 01:50 ET
+Updated: 2026-08-29 01:56 ET
 
 ## Goal
 
@@ -11,8 +11,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
 - Latest checks: 241 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, and monotonic projection slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: continue residual-risk review after closing incompatible intent handling.
+- Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
+- Active review round: continue post-fix residual-risk review.
 - Next progress report due: 2026-08-29 02:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -53,6 +53,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Keep object presence monotonic across delayed present and absence observations.
 - [x] Distinguish due, refreshing, failed-last-attempt, and current facet state truthfully.
 - [x] Terminalize incompatible persisted intents once so valid coordinator work can progress.
+- [x] Let newer canonical-ID observations revive presence without allowing delayed resurrection.
 
 ## Evidence and decisions
 
@@ -161,6 +162,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Coordinator and CLI run-once regressions prove the valid intent admits and only its capability reaches the runner; injected SQLite operational failure still propagates and rolls back.
 - Strict parent-envelope decoding remains intact, while a tolerant requested-time read lets the protected receipt page show durable rejected scopes plus an explicit unsupported-contract notice; independent follow-up marked the 241-test diff commit-ready.
 - The 01:43 Murmuration pass again found no Rookery-specific public context; native writes, notifications, and BookStack remained unavailable without the project profile.
+- Canonical-ID and external-locator non-absence observations now share the same `last_seen_at` watermark; only newer/equal evidence can mark an object present.
+- Absence resolution no longer creates or transiently revives unknown objects, and the existing guarded absence update remains timestamp-monotonic.
+- Regression coverage proves older canonical evidence cannot resurrect a newer absence while later canonical evidence restores operational presence; independent review found no blocker at 241 tests.
 
 ## Risks / watch list
 
