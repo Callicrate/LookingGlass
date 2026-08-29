@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 339 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: per-item action/incidental ingestion authority is independently clear; eight medium config/projection/product findings remain queued.
+- Active review round: partial facet mask enforcement is independently clear; seven medium config/projection/product findings remain queued.
 - Next progress report due: 2026-08-29 11:03 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -97,7 +97,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close review of checkout-free standalone wheel first-run behavior and guidance.
 - [x] Close review of lease-scoped action delivery batch identity and crash recovery.
 - [x] Require every ingested fact to prove action or incidental capability/scope authority.
-- [ ] Enforce partial facet masks at construction and merge.
+- [x] Close review of exact partial/patch field-mask enforcement.
 - [ ] Define source-revision and equal-time projection ordering.
 - [ ] Render refresh-worker degradation without claiming local disconnection.
 - [ ] Expose bounded adapter/action provenance for displayed facts.
@@ -143,6 +143,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Every normalized evidence item is also delivery-scoped, eliminating cross-batch journal collisions while preserving action/ordinal attempt identity; post-fix recovery review found no remaining issue.
 - Every new facet/relationship item now proves an exact action scope or unambiguous enabled incidental capability before identity, journal, or projection writes; adversarial wrong-facet/target/relationship batches leave no residue.
 - Collection-derived facets additionally require an authorized same-batch `contains` edge from the exact collection subject; source namespace, predicate, capability version, produced facet, and absence authority are all fail-closed.
+- Partial/patch observations now require payload keys to equal the declared field mask, and storage defensively merges only those masked keys.
+- Independent mask review cleared empty/null/absence interactions, complete snapshots, normalizer compatibility, JSON DTO roundtrips, and preservation of unobserved known fields.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.

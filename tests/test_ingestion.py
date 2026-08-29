@@ -3,6 +3,8 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
+
 from async_api_view.application import SystemBootstrapService
 from async_api_view.contracts import (
     AbsenceAuthority,
@@ -800,6 +802,8 @@ def test_partial_facet_patch_never_clears_unobserved_fields(tmp_path) -> None:
         field_mask=("name",),
         authorized_by=(authority,),
     )
+    with pytest.raises(ValueError, match="exactly match field_mask"):
+        replace(second, payload={"name": "renamed.py", "digest": "not-observed"})
     ingestor = SQLiteObservationIngestor(store)
     for offset, observation in enumerate((first, second)):
         at = NOW + timedelta(minutes=offset)

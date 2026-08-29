@@ -365,6 +365,10 @@ class FacetObservation(JSONDTO):
             raise ValueError("an absence observation cannot contain facet payload")
         if self.field_mask and not set(self.field_mask).issubset(self.payload):
             raise ValueError("field_mask entries must be present in payload")
+        if (
+            self.update_mode is UpdateMode.PATCH or self.field_coverage is FieldCoverage.PARTIAL
+        ) and set(self.payload) != set(self.field_mask):
+            raise ValueError("partial or patch payload keys must exactly match field_mask")
         _set_optional_utc(self, "remote_as_of")
         if self.source_revision is not None:
             require_text(self.source_revision, "source_revision", max_length=512)

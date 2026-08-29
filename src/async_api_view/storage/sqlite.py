@@ -39,6 +39,7 @@ from async_api_view.contracts import (
     ErrorClass,
     FacetObservation,
     FacetState,
+    FieldCoverage,
     GuardDecision,
     GuardDisposition,
     IngestionResult,
@@ -4479,7 +4480,13 @@ class SQLiteStore:
         # This is deliberately conservative: no capability contract currently grants
         # field-complete clearing authority, so omission never clears a known value.
         merged = dict(prior_payload)
-        merged.update(observation.payload)
+        update_payload = (
+            {name: observation.payload[name] for name in observation.field_mask}
+            if observation.update_mode is UpdateMode.PATCH
+            or observation.field_coverage is FieldCoverage.PARTIAL
+            else observation.payload
+        )
+        merged.update(update_payload)
         changed = existing is None or merged != prior_payload
         state_changed_at = batch.observed_at if changed else _dt(existing["state_changed_at"])
         connection.execute(
