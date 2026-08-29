@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 23:08 ET
+Updated: 2026-08-28 23:22 ET
 
 ## Goal
 
@@ -9,11 +9,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 203 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 204 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 9 HTTP routes, verified from source.
-- Version control: local `main` includes the verified ephemeral local-caller authorization batch; completed implementation batches are committed with focused messages.
-- Active review round: repair the demonstrated direct Workspace metadata ingestion defect, then the out-of-order relationship reconciliation and doctor-cancellation defects.
-- Next progress report due: 2026-08-28 23:12 ET.
+- Version control: local `main` includes the verified local-caller authorization and direct Workspace metadata fixes; completed implementation batches are committed with focused messages.
+- Active review round: repair out-of-order relationship reconciliation, then doctor cancellation.
+- Next progress report due: 2026-08-29 00:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -39,7 +39,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Choose bounded object/containment navigation over lower-value full alert history filtering.
 - [x] Add bounded, filterable full alert history without expanding dashboard query cost.
 - [x] Require an ephemeral, process-local browser session before exposing cached data or refresh authority.
-- [ ] Repair direct Workspace metadata coverage so its normalized observation is accepted and credited.
+- [x] Repair direct Workspace metadata coverage so its normalized observation is accepted and credited.
 - [ ] Prevent older complete collection omissions from overwriting newer relationships.
 - [ ] Make Databricks compatibility checks reap their subprocess on cancellation.
 
@@ -99,9 +99,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Refresh CSRF nonces are per-session, and manual intents now durably record the non-secret UI session UUID without persisting authentication material.
 - Redirected activation output fails closed unless `serve --allow-redirected-activation` explicitly opts in; the denial path closes the runtime store and exposes no capability.
 - Actual Chrome QA over plain `http://127.0.0.1` proved fragment scrubbing, one-time exchange, subsequent authorization, an `HttpOnly` cookie hidden from JavaScript, no console errors, and token-free access-log targets.
-- The bootstrap page scored 100 for Lighthouse accessibility, best practices, SEO, and agentic browsing; the full suite now passes 203 tests at 84% branch coverage.
+- The bootstrap page scored 100 for Lighthouse accessibility, best practices, SEO, and agentic browsing; the full suite now passes 204 tests at 84% branch coverage.
 - Independent security follow-up found no release blocker after tracing bootstrap expiry/replay, cookie/session fixation, middleware order, route coverage, CSRF, attribution, and logging.
 - A separate storage review demonstrated that direct Workspace metadata normalization emits no coverage declaration, so ingestion rejects its only observation after spending the remote call.
+- Direct Workspace metadata reads now declare complete exact-scope coverage with no absence authority while retaining partial field coverage; the path updates SQLite, records refresh credit, succeeds its action, and completes its intent in the vertical regression.
+- A second exact metadata request is now satisfied from fresh evidence without another CLI call; independent review confirmed the metadata-only diff is commit-ready.
+- Workspace content intentionally receives no freshness coverage because artifact bytes still have no persistence consumer; a critical-review blocker prevented that unsupported claim from entering the fix.
 - The same review demonstrated that delayed older complete collection evidence can mark a newer relationship absent; both medium defects are queued ahead of feature work.
 - A runtime review reproduced that cancelling a Databricks compatibility check can leave its CLI subprocess alive; the bounded cleanup fix remains queued.
 

@@ -830,6 +830,10 @@ def normalize(
                 _scopes(action, "metadata"),
             )
         )
+        coverage.extend(
+            CoverageDeclaration(scope, CollectionCoverage.COMPLETE)
+            for scope in _scopes(action, "metadata")
+        )
     elif capability == "databricks.workspace.content.read":
         payload = _mapping_payload(payload, capability=capability)
         _normalize_content(action, binding, target, payload, facets)

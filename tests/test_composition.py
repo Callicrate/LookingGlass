@@ -206,6 +206,102 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
 
 
 @pytest.mark.anyio
+async def test_direct_workspace_metadata_refresh_is_accepted_and_credited(
+    tmp_path: Path,
+) -> None:
+    runner = CapabilityCliRunner(
+        {
+            "databricks.workspace.children.read": (
+                b'[{"object_id":102,"object_type":"NOTEBOOK","path":"/Demo","language":"PYTHON"}]'
+            ),
+            "databricks.workspace.metadata.read": (
+                b'{"object_id":102,"object_type":"NOTEBOOK","path":"/Demo","language":"SQL"}'
+            ),
+        }
+    )
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    children_refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=children_refresh.system_id,
+            target_kind=children_refresh.target_kind,
+            target_id=children_refresh.target_id,
+            capability_key=children_refresh.capability_key,
+            facet=children_refresh.facet,
+        )
+    )
+    assert await runtime.coordinator.run_once() is not None
+    assert await runtime.worker.run_once()
+
+    root_scope = runtime.store.get_configured_scope(children_refresh.target_id)
+    assert root_scope is not None and root_scope.object_id is not None
+    root = await runtime.backend.object_detail(root_scope.object_id)
+    assert root is not None
+    child = root.children[0]
+    child_detail = await runtime.backend.object_detail(child.object_id)
+    assert child_detail is not None
+    metadata_refresh = next(
+        option
+        for option in child_detail.refresh_options
+        if option.capability_key == "databricks.workspace.metadata.read"
+    )
+    intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=metadata_refresh.system_id,
+            target_kind=metadata_refresh.target_kind,
+            target_id=metadata_refresh.target_id,
+            capability_key=metadata_refresh.capability_key,
+            facet=metadata_refresh.facet,
+        )
+    )
+    assert await runtime.coordinator.run_once() is not None
+    assert await runtime.worker.run_once()
+
+    metadata = runtime.store.get_facet_sync(child.object_id, "metadata")
+    intent = await runtime.backend.intent(intent_id)
+    intent_scope = runtime.store.list_intent_scopes(intent_id)[0]
+    assert intent_scope.linked_action_id is not None
+    stored_action = runtime.store.get_stored_action(intent_scope.linked_action_id)
+    assert stored_action is not None
+    assert metadata is not None
+    assert metadata.payload["language"] == "SQL"
+    assert intent is not None and intent.terminal
+    assert intent.scopes[0].state == "succeeded"
+    assert stored_action.state.value == "succeeded"
+    assert runtime.store.latest_qualifying_observation(stored_action.action.requested_scopes[0])
+
+    second_intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=metadata_refresh.system_id,
+            target_kind=metadata_refresh.target_kind,
+            target_id=metadata_refresh.target_id,
+            capability_key=metadata_refresh.capability_key,
+            facet=metadata_refresh.facet,
+        )
+    )
+    satisfied = await runtime.coordinator.run_once()
+    second_intent = await runtime.backend.intent(second_intent_id)
+    assert satisfied is not None and satisfied.action_id is None
+    assert satisfied.state.value == "satisfied"
+    assert not await runtime.worker.run_once()
+    assert second_intent is not None and second_intent.terminal
+    assert second_intent.scopes[0].state == "satisfied"
+    assert [call.capability_key for call in runner.calls] == [
+        "databricks.workspace.children.read",
+        "databricks.workspace.metadata.read",
+    ]
+
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_dashboard_reads_action_and_object_snapshots_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

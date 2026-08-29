@@ -330,10 +330,18 @@ def test_fixture_normalization_is_deterministic_and_metadata_only(
         for item in first.batch.facet_observations
         if capability.endswith("children.read")
     )
-    assert all(
-        declaration.completeness is CollectionCoverage.UNKNOWN
-        for declaration in first.batch.coverage
-    )
+    if capability == "databricks.workspace.content.read":
+        assert first.batch.coverage == ()
+    else:
+        expected_coverage = (
+            CollectionCoverage.COMPLETE
+            if capability == "databricks.workspace.metadata.read"
+            else CollectionCoverage.UNKNOWN
+        )
+        assert len(first.batch.coverage) == 1
+        assert first.batch.coverage[0].scope == action.requested_scopes[0]
+        assert first.batch.coverage[0].completeness is expected_coverage
+        assert first.batch.coverage[0].absence_authority == ()
     assert "storage_location" not in str(first.batch.to_dict())
 
 
