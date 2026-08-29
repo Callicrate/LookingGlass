@@ -907,9 +907,11 @@ def normalize(
                     PresenceState.PRESENT,
                 )
             )
-        for scope in action.requested_scopes:
-            if scope.facet == "membership":
-                coverage.append(CoverageDeclaration(scope, CollectionCoverage.UNKNOWN))
+        coverage.extend(
+            CoverageDeclaration(scope, CollectionCoverage.UNKNOWN)
+            for scope in action.requested_scopes
+            if scope.facet == "membership"
+        )
     elif capability == "databricks.workspace.metadata.read":
         payload = _mapping_payload(payload, capability=capability)
         item = payload.get("object", payload)
