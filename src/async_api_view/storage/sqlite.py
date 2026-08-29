@@ -2296,15 +2296,15 @@ class SQLiteStore:
                 ORDER BY observed_at DESC, received_at DESC, rowid ASC
                 """,
                 base[:7],
-            ).fetchall()
-        for row in rows:
-            evidence_scope = _scope_from_row(row)
-            if scope_covers(evidence_scope, scope):
-                return QualifyingObservation(
-                    observation_id=row["observation_id"],
-                    scope=evidence_scope,
-                    observed_at=_dt(row["observed_at"]),  # type: ignore[arg-type]
-                )
+            )
+            for row in rows:
+                evidence_scope = _scope_from_row(row)
+                if scope_covers(evidence_scope, scope):
+                    return QualifyingObservation(
+                        observation_id=row["observation_id"],
+                        scope=evidence_scope,
+                        observed_at=_dt(row["observed_at"]),  # type: ignore[arg-type]
+                    )
         return None
 
     def scope_policy_state(self, scope: RefreshScope) -> ScopePolicyState:
