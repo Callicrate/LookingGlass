@@ -69,7 +69,7 @@ Implemented and covered by automated tests:
 - durable SQLite intents, actions, leases, observations, projections, and alertable failures;
 - generic local-only coordination and idempotent observation ingestion;
 - closed Databricks CLI command mapping, bounded execution, error redaction, and Workspace/Unity Catalog metadata normalizers;
-- loopback operational UI with bounded inventory pages, recent alertable failures, registered refresh controls, intent polling, stale/error states, CSRF, Origin/Host checks, and output escaping;
+- loopback operational UI with bounded inventory and containment pages, object facet/provenance detail, recent alertable failures, registered refresh controls, intent polling, stale/error states, CSRF, Origin/Host checks, and output escaping;
 - local configuration, initialization, doctor, one-shot worker, and serve commands;
 - an end-to-end fake-CLI test covering request, admission, execution, ingestion, display, and duplicate suppression.
 
@@ -1110,6 +1110,7 @@ The first useful client SHOULD support:
 
 Object inventory views MUST use bounded pages and keep every cached object reachable through pagination or filtering.
 Refresh controls for objects SHOULD follow the displayed page; configured-scope refreshes remain visible independently.
+Object detail views MUST bound current outgoing containment pages and SHOULD expose facets, provenance, presence, type filtering, and object-specific refresh controls.
 
 ### Freshness presentation
 

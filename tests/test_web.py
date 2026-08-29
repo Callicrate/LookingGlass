@@ -14,16 +14,21 @@ from async_api_view.web import (
     FacetView,
     IntentScopeView,
     IntentView,
+    ObjectDetailQuery,
+    ObjectDetailView,
     ObjectView,
     OperationalEventView,
     RefreshOption,
     RefreshRequest,
+    RelatedObjectView,
     SystemView,
     create_app,
 )
 from async_api_view.web.models import display_text
 
 NOW = datetime(2026, 8, 24, 14, 35, 9, tzinfo=UTC)
+DETAIL_ID = "11111111-1111-4111-8111-111111111111"
+CHILD_ID = "33333333-3333-4333-8333-333333333333"
 OPTION = RefreshOption(
     system_id="system-1",
     target_kind="configured_scope",
@@ -47,11 +52,14 @@ OBJECT_OPTION = RefreshOption(
 class FakeBackend:
     dashboard_view: DashboardView = field(default_factory=DashboardView)
     intent_view: IntentView | None = None
+    object_view: ObjectDetailView | None = None
     intent_id: str = "intent-1"
     dashboard_error: Exception | None = None
     intent_error: Exception | None = None
+    object_error: Exception | None = None
     submitted: list[RefreshRequest] = field(default_factory=list)
     dashboard_queries: list[DashboardQuery] = field(default_factory=list)
+    object_queries: list[tuple[str, ObjectDetailQuery]] = field(default_factory=list)
 
     async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView:
         if self.dashboard_error:
@@ -91,6 +99,23 @@ class FakeBackend:
         if intent_id != self.intent_id:
             return None
         return self.intent_view
+
+    async def object_detail(
+        self, object_id: str, query: ObjectDetailQuery | None = None
+    ) -> ObjectDetailView | None:
+        if self.object_error:
+            raise self.object_error
+        normalized_query = query or ObjectDetailQuery()
+        self.object_queries.append((object_id, normalized_query))
+        return (
+            replace(
+                self.object_view,
+                relationship_page=normalized_query.relationship_page,
+                object_type_filter=normalized_query.object_type,
+            )
+            if self.object_view is not None
+            else None
+        )
 
 
 def client_for(backend: FakeBackend) -> TestClient:
@@ -165,6 +190,37 @@ def ready_dashboard(*, hostile_name: str = "Workspace root") -> DashboardView:
     )
 
 
+def ready_object_detail() -> ObjectDetailView:
+    source = ready_dashboard().objects[0]
+    object_view = replace(
+        source,
+        object_id=DETAIL_ID,
+        object_type_version="1",
+        source_kind="databricks.workspace.folder",
+        first_seen_at=NOW,
+    )
+    return ObjectDetailView(
+        object=object_view,
+        system_name="Data workspace",
+        children=(
+            RelatedObjectView(
+                object_id=CHILD_ID,
+                name="Child notebook",
+                object_type="file",
+                predicate="contains",
+                relationship_presence="present",
+                object_presence="present",
+                observed_at=NOW,
+            ),
+        ),
+        refresh_options=(replace(OBJECT_OPTION, target_id=DETAIL_ID),),
+        relationship_total=1,
+        relationship_page_start=1,
+        relationship_page_end=1,
+        loaded_at=NOW,
+    )
+
+
 def test_empty_dashboard_explains_unknown_state() -> None:
     response = client_for(FakeBackend()).get("/")
 
@@ -220,6 +276,55 @@ def test_dashboard_rejects_invalid_query_contract(query: str) -> None:
 
     assert response.status_code == 400
     assert backend.dashboard_queries == []
+
+
+def test_object_page_shows_facets_containment_and_refresh_controls() -> None:
+    backend = FakeBackend(object_view=ready_object_detail())
+
+    response = client_for(backend).get(f"/objects/{DETAIL_ID}?page=1&type=file")
+
+    assert response.status_code == 200
+    assert "Facets and provenance" in response.text
+    assert "Child notebook" in response.text
+    assert f"/objects/{CHILD_ID}" in response.text
+    assert "Data workspace" in response.text
+    assert "databricks.workspace.folder" in response.text
+    assert "Object refreshes" in response.text
+    assert 'value="file"' in response.text
+    assert "Raw content is not displayed" in response.text
+    assert csrf_from(response.text)
+    assert backend.object_queries == [(DETAIL_ID, ObjectDetailQuery(object_type="file"))]
+
+
+@pytest.mark.parametrize(
+    ("url", "status"),
+    [
+        ("/objects/not-a-uuid", 404),
+        (f"/objects/{DETAIL_ID}?page=0", 400),
+        (f"/objects/{DETAIL_ID}?page=1&page=2", 400),
+        (f"/objects/{DETAIL_ID}?type=FILE", 400),
+        (f"/objects/{DETAIL_ID}?type=file&type=folder", 400),
+        (f"/objects/{DETAIL_ID}?unknown=x", 400),
+    ],
+)
+def test_object_page_rejects_invalid_path_and_query(url: str, status: int) -> None:
+    backend = FakeBackend(object_view=ready_object_detail())
+
+    response = client_for(backend).get(url)
+
+    assert response.status_code == status
+    assert backend.object_queries == []
+
+
+def test_object_page_returns_safe_not_found_and_unavailable_states() -> None:
+    missing = client_for(FakeBackend()).get(f"/objects/{DETAIL_ID}")
+    failed = client_for(FakeBackend(object_error=RuntimeError("secret profile token"))).get(
+        f"/objects/{DETAIL_ID}"
+    )
+
+    assert missing.status_code == 404
+    assert failed.status_code == 503
+    assert "secret profile token" not in failed.text
 
 
 def test_dashboard_recovers_to_disconnected_error_without_leaking_exception() -> None:

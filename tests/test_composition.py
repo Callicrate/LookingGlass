@@ -14,7 +14,7 @@ from async_api_view.composition import build_runtime
 from async_api_view.config import AppSettings, DatabricksSystemSettings, ProjectSettings
 from async_api_view.contracts import PresenceState, RemoteObject
 from async_api_view.storage import SQLiteStore, StoredAction
-from async_api_view.web import DashboardQuery, RefreshRequest
+from async_api_view.web import DashboardQuery, ObjectDetailQuery, RefreshRequest
 
 
 @pytest.fixture
@@ -159,6 +159,16 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
     assert root_scope is not None
     assert root_scope.object_id is not None
     assert runtime.store.get_facet_sync(root_scope.object_id, "membership") is not None
+    detail = await runtime.backend.object_detail(root_scope.object_id)
+    assert detail is not None
+    assert detail.relationship_total == 2
+    assert {child.name for child in detail.children} == {"Shared", "Demo"}
+    assert any(option.target_id == root_scope.object_id for option in detail.refresh_options)
+    filtered_detail = await runtime.backend.object_detail(
+        root_scope.object_id, ObjectDetailQuery(object_type="file")
+    )
+    assert filtered_detail is not None
+    assert [child.name for child in filtered_detail.children] == ["Demo"]
     intent = await runtime.backend.intent(intent_id)
     assert intent is not None
     assert intent.terminal
@@ -245,8 +255,9 @@ async def test_dashboard_paginates_and_filters_large_cached_inventory(tmp_path: 
     runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
     observed_at = datetime(2026, 8, 28, tzinfo=UTC)
     system_id = runtime.store.list_systems()[0].system_id
+    object_ids: list[str] = []
     for index in range(500):
-        runtime.store.upsert_object(
+        stored = runtime.store.upsert_object(
             RemoteObject(
                 object_id=uuid4(),
                 system_id=system_id,
@@ -260,6 +271,36 @@ async def test_dashboard_paginates_and_filters_large_cached_inventory(tmp_path: 
                 last_seen_at=observed_at,
             )
         )
+        object_ids.append(str(stored.object_id))
+    root_scope = next(
+        scope
+        for scope in runtime.store.list_configured_scopes(system_id=system_id)
+        if scope.object_type == "folder"
+    )
+    assert root_scope.object_id is not None
+    runtime.store._connection.executemany(
+        """
+        INSERT INTO relationships (
+            relationship_id, system_id, subject_id, predicate, object_id,
+            presence, observed_at, supporting_observation_id
+        ) VALUES (?, ?, ?, 'contains', ?, 'present', ?, ?)
+        """,
+        (
+            (
+                str(uuid4()),
+                system_id,
+                root_scope.object_id,
+                object_id,
+                observed_at.isoformat(),
+                str(uuid4()),
+            )
+            for object_id in object_ids[:120]
+        ),
+    )
+    runtime.store._connection.execute(
+        "UPDATE relationships SET presence = 'absent' WHERE subject_id = ? AND object_id = ?",
+        (root_scope.object_id, object_ids[0]),
+    )
     runtime.worker_available = True
 
     selects: list[str] = []
@@ -299,6 +340,24 @@ async def test_dashboard_paginates_and_filters_large_cached_inventory(tmp_path: 
             facet=object_refresh.facet,
         )
     )
+    first_detail = await runtime.backend.object_detail(root_scope.object_id)
+    last_detail = await runtime.backend.object_detail(
+        root_scope.object_id, ObjectDetailQuery(relationship_page=3)
+    )
+    assert first_detail is not None and len(first_detail.children) == 50
+    assert first_detail.relationship_total == 119
+    assert first_detail.next_page_url == f"/objects/{root_scope.object_id}?page=2"
+    assert last_detail is not None and len(last_detail.children) == 19
+    assert last_detail.relationship_page_start == 101
+    assert last_detail.next_page_url is None
+    type_filtered = await runtime.backend.object_detail(
+        root_scope.object_id,
+        ObjectDetailQuery(object_type="file"),
+    )
+    assert type_filtered is not None
+    assert type_filtered.relationship_total == 119
+    assert type_filtered.object_type_filter == "file"
+    assert type_filtered.next_page_url == (f"/objects/{root_scope.object_id}?type=file&page=2")
     runtime.store.close()
 
 

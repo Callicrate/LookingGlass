@@ -48,10 +48,13 @@ from async_api_view.web import (
     FacetView,
     IntentScopeView,
     IntentView,
+    ObjectDetailQuery,
+    ObjectDetailView,
     ObjectView,
     OperationalEventView,
     RefreshOption,
     RefreshRequest,
+    RelatedObjectView,
     SystemView,
     create_app,
 )
@@ -237,6 +240,75 @@ class SQLiteWebBackend:
             provenance=facet.supporting_observation_id or "Unknown",
         )
 
+    @staticmethod
+    def _active_action_keys(
+        actions: Sequence[StoredAction],
+    ) -> set[tuple[str, str, str, str]]:
+        active_states = {
+            ActionState.READY,
+            ActionState.LEASED,
+            ActionState.RUNNING,
+            ActionState.RETRY_WAIT,
+        }
+        return {
+            (
+                str(stored_action.action.system_id),
+                stored_action.action.target.kind.value,
+                str(stored_action.action.target.target_id),
+                scope.facet,
+            )
+            for stored_action in actions
+            if stored_action.state in active_states
+            for scope in stored_action.action.requested_scopes
+        }
+
+    def _object_view(
+        self,
+        remote_object: RemoteObject,
+        *,
+        active_action_keys: set[tuple[str, str, str, str]],
+    ) -> ObjectView:
+        object_id = str(remote_object.object_id)
+        system_id = str(remote_object.system_id)
+        facets = self._store.list_facets(object_id)
+        facet_views = tuple(
+            self._facet_view(
+                system_id=system_id,
+                object_id=object_id,
+                object_type=remote_object.object_type,
+                facet=facet,
+                refreshing=(
+                    system_id,
+                    TargetKind.OBJECT.value,
+                    object_id,
+                    facet.facet,
+                )
+                in active_action_keys,
+            )
+            for facet in facets
+        )
+        path = next(
+            (
+                candidate
+                for facet in facets
+                if isinstance((candidate := facet.payload.get("path")), str)
+            ),
+            "",
+        )
+        return ObjectView(
+            object_id=object_id,
+            system_id=system_id,
+            name=remote_object.display_name,
+            object_type=remote_object.object_type,
+            object_type_version=remote_object.object_type_version,
+            source_kind=remote_object.source_kind,
+            path=path,
+            presence=remote_object.presence.value,
+            first_seen_at=remote_object.first_seen_at,
+            last_seen_at=remote_object.last_seen_at,
+            facets=facet_views,
+        )
+
     def _refresh_options(
         self,
         *,
@@ -393,6 +465,17 @@ class SQLiteWebBackend:
         encoded = urlencode(parameters)
         return f"/?{encoded}" if encoded else "/"
 
+    @staticmethod
+    def _object_page_url(object_id: str, query: ObjectDetailQuery, page: int) -> str:
+        parameters: dict[str, str | int] = {}
+        if query.object_type:
+            parameters["type"] = query.object_type
+        if page > 1:
+            parameters["page"] = page
+        encoded = urlencode(parameters)
+        base = f"/objects/{object_id}"
+        return f"{base}?{encoded}" if encoded else base
+
     async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView:
         query = query or DashboardQuery()
         worker_available, worker_error = self._worker_status()
@@ -425,25 +508,9 @@ class SQLiteWebBackend:
         actions_by_system: dict[str, list[StoredAction]] = {
             system.system_id: [] for system in systems
         }
-        active_action_keys: set[tuple[str, str, str, str]] = set()
+        active_action_keys = self._active_action_keys(actions)
         for stored_action in actions:
             actions_by_system.setdefault(stored_action.action.system_id, []).append(stored_action)
-            if stored_action.state not in {
-                ActionState.READY,
-                ActionState.LEASED,
-                ActionState.RUNNING,
-                ActionState.RETRY_WAIT,
-            }:
-                continue
-            active_action_keys.update(
-                (
-                    stored_action.action.system_id,
-                    stored_action.action.target.kind.value,
-                    stored_action.action.target.target_id,
-                    scope.facet,
-                )
-                for scope in stored_action.action.requested_scopes
-            )
         system_views: list[SystemView] = []
         for system in systems:
             system_actions = actions_by_system.get(system.system_id, ())
@@ -474,42 +541,10 @@ class SQLiteWebBackend:
                 )
             )
 
-        object_views: list[ObjectView] = []
-        for remote_object in objects:
-            facets = self._store.list_facets(remote_object.object_id)
-            facet_views = tuple(
-                self._facet_view(
-                    system_id=remote_object.system_id,
-                    object_id=remote_object.object_id,
-                    object_type=remote_object.object_type,
-                    facet=facet,
-                    refreshing=(
-                        remote_object.system_id,
-                        TargetKind.OBJECT.value,
-                        remote_object.object_id,
-                        facet.facet,
-                    )
-                    in active_action_keys,
-                )
-                for facet in facets
-            )
-            path = ""
-            for facet in facets:
-                candidate = facet.payload.get("path")
-                if isinstance(candidate, str):
-                    path = candidate
-                    break
-            object_views.append(
-                ObjectView(
-                    object_id=remote_object.object_id,
-                    system_id=remote_object.system_id,
-                    name=remote_object.display_name,
-                    object_type=remote_object.object_type,
-                    path=path,
-                    presence=remote_object.presence.value,
-                    facets=facet_views,
-                )
-            )
+        object_views = [
+            self._object_view(remote_object, active_action_keys=active_action_keys)
+            for remote_object in objects
+        ]
         return DashboardView(
             systems=tuple(system_views),
             objects=tuple(object_views),
@@ -528,6 +563,87 @@ class SQLiteWebBackend:
                 self._page_url(query, object_page + 1) if object_page < object_page_count else None
             ),
             alerts=alerts,
+        )
+
+    async def object_detail(
+        self, object_id: str, query: ObjectDetailQuery | None = None
+    ) -> ObjectDetailView | None:
+        query = query or ObjectDetailQuery()
+        remote_object = self._store.get_object_sync(object_id)
+        if remote_object is None:
+            return None
+        systems = self._store.list_systems()
+        actions = self._store.list_dashboard_actions()
+        active_action_keys = self._active_action_keys(actions)
+        relationship_total = self._store.count_related_objects_sync(
+            object_id,
+            predicate="contains",
+            object_type=query.object_type or None,
+        )
+        relationship_page_count = max(
+            1,
+            (relationship_total + query.relationship_page_size - 1) // query.relationship_page_size,
+        )
+        relationship_page = min(query.relationship_page, relationship_page_count)
+        relationship_offset = (relationship_page - 1) * query.relationship_page_size
+        related_children = self._store.list_related_objects_page_sync(
+            object_id,
+            offset=relationship_offset,
+            limit=query.relationship_page_size,
+            predicate="contains",
+            object_type=query.object_type or None,
+        )
+        children = tuple(
+            RelatedObjectView(
+                object_id=str(record.object.object_id),
+                name=record.object.display_name,
+                object_type=record.object.object_type,
+                predicate=record.relationship.predicate,
+                relationship_presence=record.relationship.presence.value,
+                object_presence=record.object.presence.value,
+                observed_at=record.relationship.observed_at,
+            )
+            for record in related_children
+        )
+        object_view = self._object_view(remote_object, active_action_keys=active_action_keys)
+        refresh_options = tuple(
+            option
+            for option in self._refresh_options(systems=systems, objects=(remote_object,))
+            if option.target_kind == TargetKind.OBJECT.value and option.target_id == object_id
+        )
+        worker_available, worker_error = self._worker_status()
+        system_name = next(
+            (
+                system.display_name
+                for system in systems
+                if system.system_id == str(remote_object.system_id)
+            ),
+            "Unknown system",
+        )
+        return ObjectDetailView(
+            object=object_view,
+            system_name=system_name,
+            children=children,
+            refresh_options=refresh_options,
+            relationship_total=relationship_total,
+            relationship_page=relationship_page,
+            relationship_page_count=relationship_page_count,
+            relationship_page_start=relationship_offset + 1 if children else 0,
+            relationship_page_end=relationship_offset + len(children),
+            object_type_filter=query.object_type,
+            previous_page_url=(
+                self._object_page_url(object_id, query, relationship_page - 1)
+                if relationship_page > 1
+                else None
+            ),
+            next_page_url=(
+                self._object_page_url(object_id, query, relationship_page + 1)
+                if relationship_page < relationship_page_count
+                else None
+            ),
+            loaded_at=datetime.now(UTC),
+            disconnected=not worker_available,
+            error=worker_error,
         )
 
     async def is_refresh_registered(self, request: RefreshRequest) -> bool:

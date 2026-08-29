@@ -55,7 +55,26 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0003_observation_batch_digest",
             "0004_configured_system_identities",
             "0005_operational_event_recency",
+            "0006_relationship_navigation",
         ]
+        child_plan = reopened._connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT relationships.object_id, objects.display_name
+            FROM relationships AS relationships
+            INNER JOIN remote_objects AS objects
+                ON objects.object_id = relationships.object_id
+            WHERE relationships.subject_id = ?
+                AND relationships.predicate = ?
+                AND relationships.presence = 'present'
+                AND objects.object_type = ?
+            ORDER BY relationships.object_id
+            LIMIT 50
+            """,
+            (str(uuid4()), "contains", "file"),
+        ).fetchall()
+        assert any("ix_relationships_subject_predicate" in row[3] for row in child_plan)
+        assert not any("TEMP B-TREE" in row[3] for row in child_plan)
 
 
 def test_store_close_is_idempotent(tmp_path) -> None:
@@ -114,6 +133,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0003_observation_batch_digest",
         "0004_configured_system_identities",
         "0005_operational_event_recency",
+        "0006_relationship_navigation",
     )
     assert versions == (expected,) * workers
 
@@ -208,6 +228,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0003_observation_batch_digest",
             "0004_configured_system_identities",
             "0005_operational_event_recency",
+            "0006_relationship_navigation",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":

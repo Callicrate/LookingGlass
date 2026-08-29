@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Cached object facets, containment relationships, and refresh actions.">
+  <title>{{ view.object.name|display }} · Async API View</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to object state</a>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Cached object</p>
+      <h1>{{ view.object.name|display }}</h1>
+    </div>
+    <a class="back-link" href="/">← Remote state</a>
+  </header>
+
+  <main id="main">
+    {% if view.error %}
+    <section class="notice notice--error" role="alert">
+      <strong>{% if view.disconnected %}Refresh unavailable{% else %}State query failed{% endif %}</strong>
+      <span>{{ view.error|display }}</span>
+    </section>
+    {% endif %}
+
+    <section class="object-summary" aria-labelledby="object-heading">
+      <div>
+        <p class="eyebrow">Canonical identity</p>
+        <h2 id="object-heading">{{ view.object.object_type|display }}</h2>
+      </div>
+      <dl class="facts facts--wide">
+        <div><dt>System</dt><dd>{{ view.system_name|display }}</dd></div>
+        <div><dt>Presence</dt><dd><span class="badge badge--{{ view.object.presence|display }}">{{ view.object.presence|display }}</span></dd></div>
+        <div><dt>Schema</dt><dd><code>{{ view.object.object_type|display }}@{{ view.object.object_type_version|display }}</code></dd></div>
+        <div><dt>Source kind</dt><dd><code>{{ view.object.source_kind|display }}</code></dd></div>
+        <div><dt>Path</dt><dd>{% if view.object.path %}<code>{{ view.object.path|display }}</code>{% else %}Unknown{% endif %}</dd></div>
+        <div><dt>First seen</dt><dd><time>{{ view.object.first_seen_at|timestamp }}</time></dd></div>
+        <div><dt>Last seen</dt><dd><time>{{ view.object.last_seen_at|timestamp }}</time></dd></div>
+        <div><dt>Snapshot</dt><dd><time>{{ view.loaded_at|timestamp }}</time></dd></div>
+      </dl>
+    </section>
+
+    <section aria-labelledby="facets-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">Known state</p><h2 id="facets-heading">Facets and provenance</h2></div>
+        <span class="count">{{ view.object.facets|length }} facets</span>
+      </div>
+      {% if view.object.facets %}
+      <div class="table-scroll" tabindex="0" aria-label="Scrollable object facet table">
+        <table>
+          <thead><tr><th>Facet</th><th>Knowledge</th><th>Cached value</th><th>Known as of</th><th>Freshness</th><th>Source</th></tr></thead>
+          <tbody>
+          {% for facet in view.object.facets %}
+            <tr>
+              <td data-label="Facet"><code>{{ facet.name|display }}</code></td>
+              <td data-label="Knowledge">{{ facet.knowledge|display }}</td>
+              <td data-label="Cached value" class="cached-value">{% if facet.name == 'content' %}<span class="unknown">Raw content is not displayed</span>{% elif facet.value %}{{ facet.value|display }}{% else %}<span class="unknown">No value observed</span>{% endif %}</td>
+              <td data-label="Known as of"><time>{{ facet.known_as_of|timestamp }}</time></td>
+              <td data-label="Freshness"><span class="badge badge--{{ facet.freshness|display }}">{{ facet.freshness|display }}</span><span class="subtle">Interval {{ facet.effective_interval|display }}</span></td>
+              <td data-label="Source">{{ facet.provenance|display }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state"><strong>No facet knowledge recorded</strong><p>The object exists in the local identity graph but has no accepted facet evidence yet.</p></div>
+      {% endif %}
+    </section>
+
+    <section aria-labelledby="children-heading">
+      <div class="section-heading">
+        <div><p class="eyebrow">Containment</p><h2 id="children-heading">Children</h2></div>
+        <span class="count">{% if view.relationship_total %}{{ view.relationship_page_start }}-{{ view.relationship_page_end }} of {{ view.relationship_total }}{% else %}0{% endif %}</span>
+      </div>
+      <form class="inventory-toolbar" method="get" action="/objects/{{ view.object.object_id|display }}" role="search">
+        <label for="child-type-filter">Filter direct children by canonical type</label>
+        <div class="inventory-search">
+          <input id="child-type-filter" name="type" value="{{ view.object_type_filter|display }}" maxlength="128" pattern="[a-z][a-z0-9_.-]{0,127}" placeholder="folder, file, generic_object">
+          <button type="submit">Filter</button>
+          {% if view.object_type_filter %}<a href="/objects/{{ view.object.object_id|display }}">Clear</a>{% endif %}
+        </div>
+      </form>
+      {% if view.children %}
+      <div class="relationship-list">
+        {% for relation in view.children %}
+        <a class="relationship-row" href="/objects/{{ relation.object_id|display }}"><strong>{{ relation.name|display }}</strong><span>{{ relation.object_type|display }} · relationship {{ relation.relationship_presence|display }} · object {{ relation.object_presence|display }} · observed {{ relation.observed_at|timestamp }}</span></a>
+        {% endfor %}
+      </div>
+      {% if view.relationship_page_count > 1 %}
+      <nav class="pagination" aria-label="Contained object pages">
+        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← Previous</a>{% else %}<span></span>{% endif %}
+        <span>Page {{ view.relationship_page }} of {{ view.relationship_page_count }}</span>
+        {% if view.next_page_url %}<a href="{{ view.next_page_url }}">Next →</a>{% else %}<span></span>{% endif %}
+      </nav>
+      {% endif %}
+      {% else %}
+      <div class="empty-state"><strong>No current cached containment relationships</strong><p>{% if view.object_type_filter %}No present direct child matches this canonical type.{% else %}No accepted present containment relationship currently starts from this object. This does not prove the remote collection is empty.{% endif %}</p></div>
+      {% endif %}
+    </section>
+
+    <section aria-labelledby="refresh-heading">
+      <div class="section-heading"><div><p class="eyebrow">Ordinary refresh path</p><h2 id="refresh-heading">Object refreshes</h2></div></div>
+      {% if view.refresh_options %}
+      <div class="refresh-list">
+        {% for option in view.refresh_options %}
+        <form class="refresh-row" method="post" action="/refresh">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="system_id" value="{{ option.system_id|display }}">
+          <input type="hidden" name="target_kind" value="{{ option.target_kind|display }}">
+          <input type="hidden" name="target_id" value="{{ option.target_id|display }}">
+          <input type="hidden" name="capability_key" value="{{ option.capability_key|display }}">
+          <input type="hidden" name="facet" value="{{ option.facet|display }}">
+          <div><strong>{{ option.label|display }}</strong><span class="subtle"><code>{{ option.capability_key|display }}</code> · facet {{ option.facet|display }}</span><span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span></div>
+          <button type="submit" {% if not option.enabled %}disabled aria-describedby="object-reason-{{ loop.index }}"{% endif %}>Request refresh</button>
+          {% if option.disabled_reason %}<span id="object-reason-{{ loop.index }}" class="failure">{{ option.disabled_reason|display }}</span>{% endif %}
+        </form>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state"><strong>No object refresh available</strong><p>The object remains readable from cache.</p></div>
+      {% endif %}
+    </section>
+  </main>
+  <footer>Containment is cached evidence, not a live remote listing.</footer>
+</body>
+</html>

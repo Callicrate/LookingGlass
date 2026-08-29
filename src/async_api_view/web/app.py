@@ -7,6 +7,7 @@ import re
 import secrets
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -18,6 +19,7 @@ from .models import (
     DashboardQuery,
     DashboardView,
     IntentView,
+    ObjectDetailQuery,
     RefreshRequest,
     UnavailableBackend,
     WebBackend,
@@ -51,6 +53,13 @@ def _intent_id(value: str) -> str:
     if not SAFE_INTENT_ID.fullmatch(value):
         raise HTTPException(status_code=404, detail="Intent not found")
     return value
+
+
+def _object_id(value: str) -> str:
+    try:
+        return str(UUID(value))
+    except (AttributeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Object not found") from exc
 
 
 def _url_matches_request_origin(
@@ -102,6 +111,21 @@ def _dashboard_query(request: Request) -> DashboardQuery:
         return DashboardQuery(object_query=query, object_page=page)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid dashboard query") from exc
+
+
+def _object_detail_query(request: Request) -> ObjectDetailQuery:
+    values = list(request.query_params.multi_items())
+    if any(name not in {"page", "type"} for name, _value in values):
+        raise HTTPException(status_code=400, detail="Unexpected object query parameter")
+    if len({name for name, _value in values}) != len(values):
+        raise HTTPException(status_code=400, detail="Duplicate object query parameter")
+    try:
+        return ObjectDetailQuery(
+            relationship_page=int(request.query_params.get("page", "1")),
+            object_type=request.query_params.get("type", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid object query") from exc
 
 
 async def _parse_refresh_form(request: Request, csrf_token: str) -> RefreshRequest:
@@ -213,6 +237,21 @@ def create_app(
     @app.get("/favicon.ico", response_class=FileResponse, include_in_schema=False)
     async def favicon() -> FileResponse:
         return FileResponse(root / "static" / "favicon.svg", media_type="image/svg+xml")
+
+    @app.get("/objects/{object_id}", response_class=HTMLResponse)
+    async def object_page(request: Request, object_id: str) -> HTMLResponse:
+        normalized_id = _object_id(object_id)
+        query = _object_detail_query(request)
+        try:
+            view = await app.state.backend.object_detail(normalized_id, query)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Object state is unavailable") from exc
+        if view is None:
+            raise HTTPException(status_code=404, detail="Object not found")
+        content = templates.get_template("object.html").render(
+            request=request, view=view, csrf_token=app.state.csrf_token
+        )
+        return HTMLResponse(content)
 
     @app.post("/refresh")
     async def refresh(request: Request) -> Response:

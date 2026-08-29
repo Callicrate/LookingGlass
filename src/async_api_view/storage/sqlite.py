@@ -73,6 +73,7 @@ from .models import (
     IntentScopeRecord,
     IntentScopeWork,
     OperationalEventRecord,
+    RelatedObjectRecord,
     StoredAction,
     SystemRecord,
 )
@@ -985,6 +986,94 @@ class SQLiteStore:
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._relationship_from_row(row) for row in rows)
+
+    def count_related_objects_sync(
+        self,
+        subject_id: str,
+        *,
+        predicate: str = "contains",
+        object_type: str | None = None,
+    ) -> int:
+        subject_id = require_uuid(subject_id, "subject_id")
+        require_contract_key(predicate, "predicate")
+        if object_type is None:
+            statement = (
+                "SELECT COUNT(*) FROM relationships AS relationships "
+                "INNER JOIN remote_objects AS objects "
+                "ON objects.object_id = relationships.object_id "
+                "WHERE relationships.subject_id = ? AND relationships.predicate = ? "
+                "AND relationships.presence = 'present'"
+            )
+            parameters: tuple[object, ...] = (subject_id, predicate)
+        else:
+            require_contract_key(object_type, "object_type")
+            statement = (
+                "SELECT COUNT(*) FROM relationships AS relationships "
+                "INNER JOIN remote_objects AS objects "
+                "ON objects.object_id = relationships.object_id "
+                "WHERE relationships.subject_id = ? AND relationships.predicate = ? "
+                "AND relationships.presence = 'present' AND objects.object_type = ?"
+            )
+            parameters = (subject_id, predicate, object_type)
+        with self._lock:
+            row = self._connection.execute(statement, parameters).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def list_related_objects_page_sync(
+        self,
+        subject_id: str,
+        *,
+        offset: int,
+        limit: int,
+        predicate: str = "contains",
+        object_type: str | None = None,
+    ) -> tuple[RelatedObjectRecord, ...]:
+        subject_id = require_uuid(subject_id, "subject_id")
+        require_contract_key(predicate, "predicate")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("relationship offset must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("relationship limit must be between 1 and 100")
+        statement = (
+            "SELECT relationships.relationship_id AS r_relationship_id, "
+            "relationships.system_id AS r_system_id, "
+            "relationships.subject_id AS r_subject_id, "
+            "relationships.predicate AS r_predicate, "
+            "relationships.object_id AS r_object_id, "
+            "relationships.presence AS r_presence, "
+            "relationships.observed_at AS r_observed_at, "
+            "relationships.supporting_observation_id AS r_supporting_observation_id, "
+            "objects.* FROM relationships AS relationships "
+            "INNER JOIN remote_objects AS objects "
+            "ON objects.object_id = relationships.object_id "
+            "WHERE relationships.subject_id = ? AND relationships.predicate = ? "
+            "AND relationships.presence = 'present'"
+        )
+        if object_type is None:
+            parameters: tuple[object, ...] = (subject_id, predicate, limit, offset)
+        else:
+            require_contract_key(object_type, "object_type")
+            statement += " AND objects.object_type = ?"
+            parameters = (subject_id, predicate, object_type, limit, offset)
+        statement += " ORDER BY relationships.object_id LIMIT ? OFFSET ?"
+        with self._lock:
+            rows = self._connection.execute(statement, parameters).fetchall()
+        return tuple(
+            RelatedObjectRecord(
+                relationship=RelationshipState(
+                    relationship_id=row["r_relationship_id"],
+                    system_id=row["r_system_id"],
+                    subject_id=row["r_subject_id"],
+                    predicate=row["r_predicate"],
+                    object_id=row["r_object_id"],
+                    presence=PresenceState(row["r_presence"]),
+                    observed_at=_dt(row["r_observed_at"]),  # type: ignore[arg-type]
+                    supporting_observation_id=row["r_supporting_observation_id"],
+                ),
+                object=self._object_from_row(row),
+            )
+            for row in rows
+        )
 
     async def get_object(self, object_id: str) -> RemoteObject | None:
         return self.get_object_sync(object_id)

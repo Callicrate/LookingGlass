@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 21:42 ET
+Updated: 2026-08-28 22:04 ET
 
 ## Goal
 
@@ -9,8 +9,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 177 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, and the branch-coverage gate passed.
-- Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
+- Latest checks: 185 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, and the branch-coverage gate passed.
+- Runtime surface: 4 CLI commands and 6 HTTP routes, verified from source.
 - Version control: local `main` is clean; every completed implementation batch is committed with focused messages.
 - Active review round: fresh residual-risk audit, package smoke validation, and low-coverage boundary triage.
 - Next progress report due: 2026-08-28 22:42 ET.
@@ -36,7 +36,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Independently review and verify each consequential change set before committing.
 - [x] Surface a bounded recent projection of durable alertable failures.
 - [x] Enforce an aggregate branch-coverage floor in CI.
-- [ ] Add full alert history filtering only if it remains higher value than deeper object navigation.
+- [x] Choose bounded object/containment navigation over lower-value full alert history filtering.
 
 ## Evidence and decisions
 
@@ -75,6 +75,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The tracked-file secret scan is clean; its sole redaction-fixture false positive is explicitly allowlisted and asserted not to persist.
 - Storage tests now document idempotent close behavior and literal backslash search, covering two operational assumptions used by CLI cleanup and filtering.
 - The paused example-config QA system was removed from local state after proving it contained no actions, observations, facets, relationships, or alerts; a recoverable pre-cleanup backup remains under `.local/`.
+- Dashboard objects now link to a bounded detail route with canonical identity, facets, provenance, current direct children, type filtering, and object-specific refresh actions.
+- Containment pages include only present relationships, show relationship and child-object presence separately, and use one indexed join without temporary sorting or per-child lookups.
+- The object page passed desktop/mobile interaction and screenshot checks with no console or network errors; Lighthouse scored 100 in every audited category on both profiles.
 
 ## Risks / watch list
 

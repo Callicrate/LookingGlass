@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol
@@ -27,6 +28,7 @@ _BIDI_CONTROLS = frozenset(
         "\u2069",
     }
 )
+_OBJECT_TYPE = re.compile(r"[a-z][a-z0-9_.-]{0,127}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,21 @@ class DashboardQuery:
             raise ValueError(f"object page must be between 1 and {MAX_OBJECT_PAGE}")
         if not 1 <= self.object_page_size <= 100:
             raise ValueError("object page size must be between 1 and 100")
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectDetailQuery:
+    relationship_page: int = 1
+    relationship_page_size: int = DEFAULT_OBJECT_PAGE_SIZE
+    object_type: str = ""
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.relationship_page <= MAX_OBJECT_PAGE:
+            raise ValueError(f"relationship page must be between 1 and {MAX_OBJECT_PAGE}")
+        if not 1 <= self.relationship_page_size <= 100:
+            raise ValueError("relationship page size must be between 1 and 100")
+        if self.object_type and _OBJECT_TYPE.fullmatch(self.object_type) is None:
+            raise ValueError("object type filter is invalid")
 
 
 def display_text(value: object | None, *, limit: int = MAX_DISPLAY_LENGTH) -> str:
@@ -115,9 +132,43 @@ class ObjectView:
     system_id: str
     name: str
     object_type: str
+    object_type_version: str = ""
+    source_kind: str = ""
     path: str = ""
     presence: str = "unknown"
+    first_seen_at: datetime | str | None = None
+    last_seen_at: datetime | str | None = None
     facets: tuple[FacetView, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RelatedObjectView:
+    object_id: str
+    name: str
+    object_type: str
+    predicate: str
+    relationship_presence: str
+    object_presence: str
+    observed_at: datetime | str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectDetailView:
+    object: ObjectView
+    system_name: str = "Unknown system"
+    children: tuple[RelatedObjectView, ...] = ()
+    refresh_options: tuple[RefreshOption, ...] = ()
+    relationship_total: int = 0
+    relationship_page: int = 1
+    relationship_page_count: int = 1
+    relationship_page_start: int = 0
+    relationship_page_end: int = 0
+    object_type_filter: str = ""
+    previous_page_url: str | None = None
+    next_page_url: str | None = None
+    loaded_at: datetime | str | None = None
+    disconnected: bool = False
+    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +254,10 @@ class WebBackend(Protocol):
 
     async def is_refresh_registered(self, request: RefreshRequest) -> bool: ...
 
+    async def object_detail(
+        self, object_id: str, query: ObjectDetailQuery | None = None
+    ) -> ObjectDetailView | None: ...
+
     async def submit_refresh(self, request: RefreshRequest) -> str: ...
 
     async def intent(self, intent_id: str) -> IntentView | None: ...
@@ -225,6 +280,12 @@ class UnavailableBackend:
     async def is_refresh_registered(self, request: RefreshRequest) -> bool:
         del request
         return False
+
+    async def object_detail(
+        self, object_id: str, query: ObjectDetailQuery | None = None
+    ) -> ObjectDetailView | None:
+        del object_id, query
+        return None
 
     async def submit_refresh(self, request: RefreshRequest) -> str:
         del request

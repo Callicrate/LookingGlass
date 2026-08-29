@@ -16,6 +16,8 @@ from async_api_view.contracts import (
     IntentScopeState,
     RefreshIntent,
     RefreshScope,
+    RelationshipState,
+    RemoteObject,
 )
 
 
@@ -90,3 +92,9 @@ class OperationalEventRecord:
     error_class: str | None
     redacted_summary: str
     occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RelatedObjectRecord:
+    relationship: RelationshipState
+    object: RemoteObject

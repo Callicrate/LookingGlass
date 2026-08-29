@@ -51,6 +51,7 @@ main > section { margin-bottom: 30px; }
 .pagination > :last-child { justify-self: end; }
 .system-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(330px, 100%), 1fr)); gap: 10px; }
 .system-card, .scope-row { padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.object-summary { display: grid; grid-template-columns: minmax(180px, 0.45fr) minmax(0, 1fr); align-items: start; gap: 24px; padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
 .system-title, .scope-title { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .facts { display: grid; gap: 7px; margin: 14px 0 0; }
 .facts div { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 10px; }
@@ -83,6 +84,10 @@ td { max-width: 300px; padding: 10px 11px; border-top: 1px solid var(--line); ve
 .alert-list { display: grid; gap: 8px; }
 .alert-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; padding: 12px 14px; border: 1px solid #e7b9b5; border-radius: 7px; background: #fffafa; }
 .alert-row > div { display: grid; gap: 3px; min-width: 0; }
+.relationship-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 8px; }
+.relationship-row { display: grid; gap: 3px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); text-decoration: none; }
+.relationship-row:hover { border-color: #9db8b1; background: #fbfdfc; }
+.relationship-row span { color: var(--muted); font-size: 0.78rem; }
 
 .refresh-list, .scope-list { display: grid; gap: 8px; }
 .refresh-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
@@ -102,6 +107,7 @@ footer { padding: 16px 24px 28px; color: var(--muted); text-align: center; font-
   .topbar, .section-heading { align-items: start; flex-direction: column; }
   .snapshot { display: none; }
   .system-title, .scope-title { align-items: start; flex-direction: column; }
+  .object-summary { grid-template-columns: 1fr; gap: 8px; }
   .section-heading time { max-width: 100%; overflow-wrap: anywhere; }
   .notice, .intent-summary { align-items: start; flex-direction: column; }
   .inventory-toolbar { align-items: stretch; flex-direction: column; }

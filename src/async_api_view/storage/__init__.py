@@ -11,6 +11,7 @@ from .models import (
     IntentScopeRecord,
     IntentScopeWork,
     OperationalEventRecord,
+    RelatedObjectRecord,
     StoredAction,
     SystemRecord,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "IntentScopeRecord",
     "IntentScopeWork",
     "OperationalEventRecord",
+    "RelatedObjectRecord",
     "SQLiteStore",
     "StoredAction",
     "SystemRecord",

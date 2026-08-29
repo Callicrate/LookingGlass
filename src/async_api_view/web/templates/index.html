@@ -135,7 +135,7 @@
               {% for facet in object.facets %}
               <tr>
                 <td data-label="Object">
-                  <strong>{{ object.name|display }}</strong>
+                  <strong><a href="/objects/{{ object.object_id|display }}">{{ object.name|display }}</a></strong>
                   <span class="subtle">{{ object.object_type|display }}{% if object.path %} · {{ object.path|display }}{% endif %}</span>
                 </td>
                 <td data-label="Facet"><code>{{ facet.name|display }}</code></td>
@@ -150,7 +150,7 @@
               </tr>
               {% endfor %}
             {% else %}
-              <tr><td data-label="Object"><strong>{{ object.name|display }}</strong><span class="subtle">{{ object.object_type|display }}</span></td><td colspan="6" class="unknown">No facet knowledge recorded</td></tr>
+              <tr><td data-label="Object"><strong><a href="/objects/{{ object.object_id|display }}">{{ object.name|display }}</a></strong><span class="subtle">{{ object.object_type|display }}</span></td><td colspan="6" class="unknown">No facet knowledge recorded</td></tr>
             {% endif %}
           {% endfor %}
           </tbody>
