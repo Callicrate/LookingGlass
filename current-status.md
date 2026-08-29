@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 06:29 ET
+Updated: 2026-08-29 06:41 ET
 
 ## Goal
 
@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 316 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
+- Latest checks: 318 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 87% branch coverage.
 - Runtime surface: 5 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: no medium-or-higher defect open; continue fresh post-fix residual audits against the clean 316-test head.
@@ -84,6 +84,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Scope refresh-policy wakeups to the affected system/object and facet with indexed plans.
 - [x] Persist and enforce least-privilege capability coverage/completeness/absence policy.
 - [x] Distinguish legacy policy hydration from intentional deny-all and freeze policy by version.
+- [x] Apply complete desired configuration atomically and bind dispatch to settings revision.
 
 ## Evidence and decisions
 
@@ -252,6 +253,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The ignored local database is migrated through `0013_capability_coverage_policy`; integrity is `ok`, foreign keys are clean, and six configured capabilities carry non-empty explicit policies.
 - Migration `0014` adds an explicit policy-initialization bit: legacy rows may hydrate once, intentional empty policy remains deny-all, and same-version changes are rejected after initialization.
 - The ignored local database is migrated through `0014_coverage_policy_initialization`; integrity and foreign keys are clean, and all seven configured capability rows are initialized.
+- All system/binding/capability/scope/identity upserts and reconciliation now share one outer `BEGIN IMMEDIATE`; a late bootstrap failure rolls profile rotation and removal state back completely.
+- Final remote-start authorization compares a SHA-256 digest of the exact adapter/settings/secret-reference binding used to build argv; a concurrent profile rotation cancels stale dispatch with zero runner calls.
 - A fresh multi-process storage/runtime audit cleared transaction, lease recovery, aggregate, configuration reconciliation, backup, and poison-row behavior with 92 focused tests.
 
 ## Risks / watch list
