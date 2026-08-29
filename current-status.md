@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 04:03 ET
+Updated: 2026-08-29 03:55 ET
 
 ## Goal
 
@@ -214,6 +214,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
 - Databricks target resolution now derives catalog/schema command arguments from immutable canonical external identity rather than mutable facet payload, and a corruption regression proves later dispatch remains on the intended scope.
 - A fresh audit of the locked runtime-only dependency export reports no known vulnerabilities; the local project package was excluded so the auditor did not substitute an incompatible helper interpreter.
+- The real ignored local database was snapshotted through the new command to `.local/backups/rookery-20260829-0355.sqlite3`; the standalone 315,392-byte copy reports integrity `ok` at migration `0011`.
 
 ## Risks / watch list
 
