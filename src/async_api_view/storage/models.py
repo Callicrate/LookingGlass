@@ -130,6 +130,7 @@ class OperationalEventRecord:
     alertable: bool
     system_id: str | None
     action_id: str | None
+    attempt_id: str | None
     error_class: str | None
     redacted_summary: str
     occurred_at: datetime

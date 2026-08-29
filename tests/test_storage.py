@@ -747,23 +747,33 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
         assert first is not None and first.attempt_ordinal == 1
         run(store.mark_running(action_id=action.action_id, lease_id=first.lease_id, started_at=NOW))
         retry_at = NOW + timedelta(seconds=5)
+        first_attempt = ActionAttempt(
+            uuid4(),
+            action.action_id,
+            1,
+            NOW,
+            NOW + timedelta(seconds=1),
+            ActionOutcome.FAILED,
+            ErrorClass.CONNECTION_TIMEOUT,
+            retry_at=retry_at,
+            redacted_diagnostic="token=do-not-persist",
+        )
         run(
             store.record_attempt(
-                ActionAttempt(
-                    uuid4(),
-                    action.action_id,
-                    1,
-                    NOW,
-                    NOW + timedelta(seconds=1),
-                    ActionOutcome.FAILED,
-                    ErrorClass.CONNECTION_TIMEOUT,
-                    retry_at=retry_at,
-                    redacted_diagnostic="token=do-not-persist",
-                ),
+                first_attempt,
                 lease_id=first.lease_id,
             )
         )
         assert store.get_stored_action(action.action_id).state.value == "retry_wait"
+        attempt_events = store.list_operational_events()
+        assert len(attempt_events) == 1
+        assert attempt_events[0].event_type == "refresh.action.attempt_failed"
+        assert not attempt_events[0].alertable
+        assert attempt_events[0].action_id == action.action_id
+        assert attempt_events[0].attempt_id == first_attempt.attempt_id
+        assert attempt_events[0].error_class == ErrorClass.CONNECTION_TIMEOUT.value
+        assert "do-not-persist" not in attempt_events[0].redacted_summary
+        assert store.list_operational_events(alertable_only=True) == ()
 
     with SQLiteStore(path) as reopened:
         activity = reopened.get_action_activity(action.action_id)
@@ -774,6 +784,7 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
         assert attempts[0].error_class == "connection_timeout"
         assert attempts[0].retry_at == retry_at
         assert "do-not-persist" not in (attempts[0].redacted_diagnostic or "")
+        assert reopened.list_operational_events()[0].attempt_id == first_attempt.attempt_id
         with pytest.raises(ValueError, match="attempt limit"):
             reopened.list_action_attempts(action.action_id, limit=101)
         assert (
@@ -800,6 +811,68 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
             )
         )
         assert reopened.get_stored_action(action.action_id).retry_at is None
+
+
+def test_failed_attempt_event_is_idempotent_with_attempt_replay(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "state.sqlite3") as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+        )
+        action = AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="databricks.workspace.children.read",
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+        run(store.enqueue(action))
+        lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+        assert lease is not None
+        run(store.mark_running(action_id=action.action_id, lease_id=lease.lease_id, started_at=NOW))
+        attempt = ActionAttempt(
+            attempt_id=uuid4(),
+            action_id=action.action_id,
+            ordinal=1,
+            started_at=NOW,
+            ended_at=NOW + timedelta(seconds=1),
+            outcome=ActionOutcome.FAILED,
+            error_class=ErrorClass.CONNECTION_TIMEOUT,
+            redacted_diagnostic="token=do-not-persist",
+        )
+
+        run(store.record_attempt(attempt, lease_id=lease.lease_id))
+        run(store.record_attempt(attempt, lease_id=lease.lease_id))
+
+        assert len(store.list_action_attempts(action.action_id)) == 1
+        events = store.list_operational_events()
+        assert len(events) == 1
+        assert events[0].attempt_id == attempt.attempt_id
+        assert not events[0].alertable
+        run(
+            store.complete_action(
+                ActionCompletion(
+                    action_id=action.action_id,
+                    outcome=ActionOutcome.FAILED,
+                    completed_at=NOW + timedelta(seconds=2),
+                    error_class=ErrorClass.CONNECTION_TIMEOUT,
+                ),
+                lease_id=lease.lease_id,
+            )
+        )
+        terminal_events = store.list_operational_events(alertable_only=True)
+        assert len(terminal_events) == 1
+        assert terminal_events[0].event_type == "refresh.action.failed"
 
 
 def test_malformed_action_contract_terminalizes_once_and_queue_progresses(tmp_path) -> None:

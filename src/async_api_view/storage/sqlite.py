@@ -2662,14 +2662,14 @@ class SQLiteStore:
         lease_id = require_uuid(lease_id, "lease_id")
         attempt_at = attempt.ended_at or attempt.started_at
         with self._immediate_transaction() as connection:
-            self._require_live_action_lease(
+            action_row = self._require_live_action_lease(
                 connection,
                 action_id=attempt.action_id,
                 lease_id=lease_id,
                 allowed_states={ActionState.RUNNING},
                 at=attempt_at,
             )
-            connection.execute(
+            result = connection.execute(
                 """
                 INSERT INTO action_attempts (
                     attempt_id, action_id, ordinal, started_at, ended_at,
@@ -2693,6 +2693,22 @@ class SQLiteStore:
                     ),
                 ),
             )
+            if result.rowcount != 1:
+                return
+            if attempt.outcome is ActionOutcome.FAILED:
+                self._insert_event(
+                    connection,
+                    idempotency_key=f"attempt-{attempt.attempt_id}-failed",
+                    event_type="refresh.action.attempt_failed",
+                    severity="warning",
+                    alertable=False,
+                    system_id=action_row["system_id"],
+                    action_id=attempt.action_id,
+                    attempt_id=attempt.attempt_id,
+                    error_class=(attempt.error_class.value if attempt.error_class else None),
+                    summary=attempt.redacted_diagnostic,
+                    occurred_at=attempt_at,
+                )
             if attempt.retry_at is not None:
                 connection.execute(
                     """
@@ -2734,6 +2750,7 @@ class SQLiteStore:
         alertable: bool,
         system_id: str | None,
         action_id: str | None,
+        attempt_id: str | None = None,
         error_class: str | None,
         summary: str | None,
         occurred_at: datetime,
@@ -2742,8 +2759,8 @@ class SQLiteStore:
             """
             INSERT OR IGNORE INTO operational_events (
                 event_id, idempotency_key, event_type, severity, alertable, system_id, action_id,
-                error_class, redacted_summary, occurred_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                attempt_id, error_class, redacted_summary, occurred_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(uuid4()),
@@ -2753,6 +2770,7 @@ class SQLiteStore:
                 int(alertable),
                 system_id,
                 action_id,
+                attempt_id,
                 error_class,
                 _redact(summary),
                 _utc_text(occurred_at),
@@ -2815,6 +2833,7 @@ class SQLiteStore:
             alertable=bool(row["alertable"]),
             system_id=row["system_id"],
             action_id=row["action_id"],
+            attempt_id=row["attempt_id"],
             error_class=row["error_class"],
             redacted_summary=row["redacted_summary"],
             occurred_at=_dt(row["occurred_at"]),  # type: ignore[arg-type]

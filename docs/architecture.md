@@ -733,6 +733,7 @@ An unexpected queue-worker processing failure MUST create a redacted operational
 
 At minimum, event types include:
 
+- `refresh.action.attempt_failed` (non-alertable attempt history);
 - `refresh.action.failed`;
 - `queue.coordinator.failed`;
 - `queue.adapter_worker.failed`;
