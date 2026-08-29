@@ -490,22 +490,22 @@ class CliRunner:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        stdout_task = asyncio.create_task(_read_limited(process.stdout, self.stdout_cap))
+        stderr_task = asyncio.create_task(_read_limited(process.stderr, self.stderr_cap))
+        wait_task = asyncio.create_task(process.wait())
         try:
             stdout, stderr, exit_code = await asyncio.wait_for(
-                asyncio.gather(
-                    _read_limited(process.stdout, self.stdout_cap),
-                    _read_limited(process.stderr, self.stderr_cap),
-                    process.wait(),
-                ),
+                asyncio.gather(stdout_task, stderr_task, wait_task),
                 timeout=self.timeout_seconds,
             )
         except TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await _terminate_process(process, stdout_task, stderr_task, wait_task)
             raise CliTimeout("Databricks CLI compatibility check timed out") from exc
         except CliOutputLimit:
-            process.kill()
-            await process.wait()
+            await _terminate_process(process, stdout_task, stderr_task, wait_task)
+            raise
+        except asyncio.CancelledError:
+            await _terminate_process(process, stdout_task, stderr_task, wait_task)
             raise
         return CliExecution(
             "doctor", timedelta(seconds=time.monotonic() - started), exit_code, stdout, stderr

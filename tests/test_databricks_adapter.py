@@ -16,7 +16,9 @@ from async_api_view.adapters.databricks import (
     MAX_TABLE_COLUMNS,
     CliExecution,
     CliInvocation,
+    CliOutputLimit,
     CliRunner,
+    CliTimeout,
     CommandRejected,
     DatabricksCommandRegistry,
     DatabricksWorker,
@@ -229,6 +231,87 @@ async def test_runner_rejects_manual_invocation_before_process_creation(
 
     with pytest.raises(CommandRejected):
         await runner.run(invocation, correlation_id="test")
+
+
+@pytest.mark.parametrize("failure", ["cancel", "timeout", "output_limit"])
+def test_compatibility_check_failures_reap_process_and_readers(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    async def exercise() -> None:
+        stopped = asyncio.Event()
+        created = asyncio.Event()
+
+        class BlockingStream:
+            def __init__(self, *, overflow: bool = False) -> None:
+                self.overflow = overflow
+                self.settled = False
+
+            async def read(self, _size: int) -> bytes:
+                try:
+                    if self.overflow:
+                        self.overflow = False
+                        return b"xx"
+                    await stopped.wait()
+                    return b""
+                finally:
+                    self.settled = True
+
+        class BlockingProcess:
+            returncode: int | None = None
+            killed = False
+            wait_calls = 0
+            stdout = BlockingStream(overflow=failure == "output_limit")
+            stderr = BlockingStream()
+
+            def kill(self) -> None:
+                self.killed = True
+                self.returncode = -9
+                stopped.set()
+
+            async def wait(self) -> int:
+                self.wait_calls += 1
+                await stopped.wait()
+                return self.returncode or 0
+
+        process = BlockingProcess()
+
+        async def create_process(*_args: object, **_kwargs: object) -> BlockingProcess:
+            created.set()
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+        runner = CliRunner(
+            timeout_seconds=0.001 if failure == "timeout" else 30,
+            stdout_cap=1,
+            stderr_cap=1,
+        )
+        task = asyncio.create_task(
+            runner.run_unmapped(
+                CliInvocation("doctor", ("databricks", "--version")),
+                executable="C:\\trusted\\databricks.exe",
+            )
+        )
+        await created.wait()
+        await asyncio.sleep(0)
+
+        if failure == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        elif failure == "timeout":
+            with pytest.raises(CliTimeout):
+                await task
+        else:
+            with pytest.raises(CliOutputLimit):
+                await task
+
+        assert process.killed
+        assert process.wait_calls >= 1
+        assert process.stdout.settled
+        assert process.stderr.settled
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize(

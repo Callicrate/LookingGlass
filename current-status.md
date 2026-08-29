@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 23:26 ET
+Updated: 2026-08-28 23:33 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 205 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
+- Latest checks: 208 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build, source secret scan, and the branch-coverage gate passed.
 - Runtime surface: 4 CLI commands and 9 HTTP routes, verified from source.
-- Version control: local `main` includes the verified local-caller authorization, metadata-credit, and monotonic relationship-reconciliation fixes; completed implementation batches are committed with focused messages.
-- Active review round: make Databricks compatibility-check cancellation reap its subprocess, then repair rejected-item atomicity.
+- Version control: local `main` includes the verified local-caller authorization, metadata-credit, relationship-reconciliation, and compatibility-process cleanup fixes; completed implementation batches are committed with focused messages.
+- Active review round: repair rejected ingestion-item atomicity, then run the next residual-risk review.
 - Next progress report due: 2026-08-29 00:12 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -41,7 +41,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Require an ephemeral, process-local browser session before exposing cached data or refresh authority.
 - [x] Repair direct Workspace metadata coverage so its normalized observation is accepted and credited.
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
-- [ ] Make Databricks compatibility checks reap their subprocess on cancellation.
+- [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 
 ## Evidence and decisions
 
@@ -108,7 +108,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The same review demonstrated that delayed older complete collection evidence could mark a newer relationship absent.
 - Complete-membership omission reconciliation now applies the same observed-time guard as explicit relationship updates; delayed older evidence preserves the newer edge while genuinely newer omission still marks it absent.
 - The relationship guard adds no query and runs inside the existing immediate transaction; independent review found no blocker and confirmed equal-time last-ingested-wins behavior remains consistent with the existing merge contract.
-- A runtime review reproduced that cancelling a Databricks compatibility check can leave its CLI subprocess alive; the bounded cleanup fix remains queued.
+- A runtime review reproduced that cancelling a Databricks compatibility check could leave its CLI subprocess alive.
+- Compatibility checks now create explicit reader/wait tasks and share the normal runner's kill, exit-wait, and task-settlement path for cancellation, timeout, and output-limit failures while preserving the original exception.
+- Fake hanging-process regressions cover all three exceptional paths without launching a subprocess; independent review found no blocker and adapter branch coverage increased from 74% to 77%.
 
 ## Risks / watch list
 
