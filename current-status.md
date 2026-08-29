@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 06:08 ET
+Updated: 2026-08-29 06:09 ET
 
 ## Goal
 
@@ -221,7 +221,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - All facet observations now use transaction-local savepoints; a merge-over-limit regression proves rejected items cannot rename objects, advance presence time, journal provenance, or replace supporting evidence.
 - `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
 - Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
-- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 306 tests and 87% branch coverage, including scoped policy wakeups, drilldown validation, controlled SQLite failures, distribution verification, final-start authority revocation, typed identity, nested DTO validation, and migration `0012`; the shared Windows `.venv` was untouched.
+- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 310 tests and 87% branch coverage, including capability coverage policy, scoped wakeups, drilldown validation, controlled SQLite failures, distribution verification, final-start authority revocation, typed identity, nested DTO validation, and migration `0013`; the shared Windows `.venv` was untouched.
 - The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
 - The 04:43 Murmuration tending pass produced the same read-only result: no scoped public context and no native profile for writes, notifications, or BookStack.
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
@@ -239,7 +239,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Facet payloads and connection settings now require JSON objects rather than arbitrary JSON arrays/scalars, and authority/count/priority fields reject Python's bool-as-int coercion.
 - Final start authorization owns the `leased → running` transition; current API workers can no longer call lifecycle `mark_running` after a stale guard decision.
 - Resolver-time revocation regressions prove system, binding, capability, and newly expired deadlines all stop before process creation with no attempt record.
-- CI now verifies distribution contents on Windows and Ubuntu after every build; the source archive has 72 intended entries with workspace audit surfaces excluded, and the wheel has all 54 required runtime entries/assets.
+- CI now verifies distribution contents on Windows and Ubuntu after every build; the source archive has 73 intended entries with workspace audit surfaces excluded, and the wheel has all 55 required runtime entries/assets.
 - `init`, `run-once`, and `serve` now catch SQLite open/migration failures at the CLI boundary, emit one bounded generic error, return exit code 2, and close the database handle without exposing a traceback.
 - Action-detail links carry a percent-encoded local `/actions` return path; detail pages validate path, length, query keys, duplicates, and filter combinations before rendering the escaped back link.
 - Migration `0012` adds partial deferred-scope system/facet and target/facet indexes; object policy changes cover direct and configured-scope aliases without rewriting unrelated systems or eligibility times.
