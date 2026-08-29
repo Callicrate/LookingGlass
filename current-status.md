@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 10:03 ET
+Updated: 2026-08-29 11:28 ET
 
 ## Goal
 
@@ -12,8 +12,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 349 tests passed warning-free; Ruff format, standard/security lint, lock validation, package build/distribution verification, source secret scan, and the branch-coverage gate passed at 88% branch coverage.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: readable adapter/action fact provenance is independently clear; temporal/source-revision ordering is the remaining known medium finding.
-- Next progress report due: 2026-08-29 11:03 ET.
+- Active review round: current temporal ordering is sound, but migration `0016` has two medium legacy-reranking/unknown-receipt blockers under repair; no other known medium-or-higher finding is open.
+- Next progress report due: 2026-08-29 12:27 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 09:36 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 10:36 ET.
+- [ ] Tend Murmuration about hourly; the 11:27 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 12:27 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -98,7 +98,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close review of lease-scoped action delivery batch identity and crash recovery.
 - [x] Require every ingested fact to prove action or incidental capability/scope authority.
 - [x] Close review of exact partial/patch field-mask enforcement.
-- [ ] Define source-revision and equal-time projection ordering.
+- [ ] Close review of source-revision and durable equal-time projection ordering.
 - [x] Render refresh-worker degradation without claiming local disconnection.
 - [x] Close review of bounded adapter/action fact provenance.
 - [x] Separate standalone and source-checkout setup hierarchy.
@@ -151,6 +151,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Independent product review cleared degraded/recovered copy, escaped worker summaries, accessible disabled reasons/status semantics, responsive structure, and peer standalone/source-checkout README flow.
 - Facet reads now join their supporting observation batch in the existing query, exposing adapter/capability versions, exact observation ID, and optional producing-action link without an N+1 query.
 - Provenance action links now require matching action/system/binding/adapter context; corrupt or stale action IDs fall back to unlinked adapter provenance, and independent review found no remaining attribution or leakage issue.
+- Migration `0016` persists received-time tie-breakers across presence, facets, relationships, complete-membership watermarks, and refresh credit; comparable decimal facet revisions take precedence over timestamps.
+- The 11:27 Murmuration tend again found no scoped context and remained read-only because native identity/credentials are absent; notifications and BookStack remain gated.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
