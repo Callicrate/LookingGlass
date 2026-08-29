@@ -1008,6 +1008,8 @@ Identity, journal, and projection writes occur only after this check.
 
 Lease authority for a new action-linked batch linearizes when the ingester, inside its `BEGIN IMMEDIATE` transaction, verifies the matching unexpired `running` lease. That writer reservation prevents another worker from reclaiming or reassigning the action until the whole ingestion transaction commits or rolls back. Wall-clock expiry during the bounded transaction does not retroactively invalidate evidence admitted at that linearization point; every later attempt, completion, or new batch still performs its own current lease check. Exact replay of an already recorded batch digest remains idempotent and does not require the original lease.
 
+Every JSON-bearing shared contract defensively copies its value and rejects active-ancestor cycles, depth above 32, more than 10,000 items in one container, or more than one million traversed nodes. Canonical digest failure rejects the batch before opening its ingestion transaction, leaving no batch, journal, issue, identity, or projection residue.
+
 ### Merge rules
 
 - A patch updates only its explicit field mask.
@@ -1614,6 +1616,7 @@ Every adapter MUST pass a shared conformance suite proving:
 - The Databricks API worker is the first live adapter tested through the complete generic refresh path.
 - Every downstream invocation uses the Databricks CLI with structured arguments and no shell command string.
 - The pinned CLI's iterator renderer exhausts list pagination before emitting JSON; any continuation-token envelope is rejected as incomplete rather than credited.
+- CLI JSON is capped at 4 MiB and depth 32; registered collections are capped at 10,000 items and relation schemas at 1,000 columns per item, then normalized evidence is packed into canonical parts no larger than 1 MiB or 250 linked units.
 - The CLI runner rejects `databricks api`, unregistered command groups/subcommands, arbitrary endpoints, and free-form flags.
 - `doctor` fails clearly when the CLI version or a required `workspace`, `catalogs`, `schemas`, `tables`, or `volumes` command group is incompatible.
 - `serve` keeps cached pages available, marks refresh authority unavailable, and retries compatibility checks in its supervised background loop.

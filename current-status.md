@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 19:39 ET
+Updated: 2026-08-29 19:49 ET
 
 ## Goal
 
@@ -12,7 +12,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 446 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: the shared contract/depth/cycle boundary is independently clear after repairing one reviewer-found wide-response regression; no medium-or-higher finding is open.
+- Active review round: a holistic committed-head integration audit found no release hold or medium-or-higher defect; no finding is currently open.
 - Next progress report due: 2026-08-29 20:16 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -249,6 +249,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Post-construction malformed payloads now fail batch digesting as residue-free `REJECTED` results instead of escaping as recursion errors.
 - Independent re-review first caught a valid 896 KiB 50-table/1,000-column response exceeding the initial node budget; the corrected budget retains hard bounds and lets byte/unit chunking produce canonical <=1 MiB parts.
 - Exact 50x1,000 regression, cycle/depth/count boundaries, and cross-platform full gates are clear at 446 passed plus one complementary platform skip.
+- Architecture guidance now records the shared JSON and Databricks input/collection/column/canonical-part resource boundaries explicitly.
+- A holistic config/runtime/CLI, coordinator/worker/ingestion, web authorization/truth, package/CI, and operator-flow review found no release hold; its only wake-event candidate was withdrawn as unreproduced.
+- Repeated exact-head Windows builds are byte-identical at SHA-256 `51320A62...F5B64` for the sdist and `6CCA9F30...96100` for the wheel; installed-distribution verification remains 82/61/30.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
