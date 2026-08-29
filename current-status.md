@@ -9,7 +9,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 432 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 88%/87% respectively.
+- Latest checks: 438 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: lifespan-start cleanup and programmatic config validation are independently clear after exact cross-platform gates; the storage residual audit is medium+ clear with one lease-linearization documentation ambiguity next.
@@ -124,6 +124,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Reap runtime work and close SQLite when lifespan startup is cancelled.
 - [x] Apply the TOML safety contract to direct programmatic settings.
 - [x] Define the action-linked ingestion lease linearization point.
+- [x] Lock the Databricks doctor version and command-surface contract.
 
 ## Evidence and decisions
 
@@ -237,6 +238,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Independent focused review closed the programmatic-settings low with no medium-or-higher regression; direct invalid/normalization/duplicate tests bring exact Windows and Ubuntu/WSL parity to 432 passed plus one complementary platform skip.
 - A fresh storage/migration/scale audit found no medium-or-higher defect; its one reproduced low confirmed that a writer can cross wall-clock lease expiry during ingestion only while `BEGIN IMMEDIATE` prevents concurrent reclaim.
 - The architecture now defines new-batch lease authority at that transaction-entry check, distinguishes expiry during the bounded transaction from later lifecycle writes, and preserves lease-free exact replay idempotency.
+- A forward-compatibility review found no evidence for an invented CLI upper bound; deterministic doctor tests now lock the 0.298 floor, malformed/old rejection, newer acceptance, and all five required help surfaces.
+- Those six compatibility paths lift the exact Windows/Ubuntu gates to 438 passed plus one complementary platform skip and 89%/88% branch coverage.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.

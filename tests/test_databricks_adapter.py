@@ -19,6 +19,7 @@ from async_api_view.adapters.databricks import (
     MAX_COLLECTION_ITEMS,
     MAX_TABLE_COLUMNS,
     CliExecution,
+    CliIncompatible,
     CliInvocation,
     CliOutputLimit,
     CliRunner,
@@ -250,6 +251,70 @@ async def test_runner_rejects_manual_invocation_before_process_creation(
 
     with pytest.raises(CommandRejected):
         await runner.run(invocation, correlation_id="test")
+
+
+class ScriptedDoctorRunner(CliRunner):
+    def __init__(
+        self,
+        version: bytes,
+        *,
+        failed_args: tuple[str, ...] | None = None,
+    ) -> None:
+        super().__init__()
+        self.version = version
+        self.failed_args = failed_args
+        self.calls: list[tuple[str, ...]] = []
+        self._resolved_executable = "C:\\trusted\\databricks.exe"
+
+    async def run_unmapped(self, invocation: CliInvocation) -> CliExecution:
+        args = invocation.argv[1:]
+        self.calls.append(args)
+        return CliExecution(
+            correlation_id="doctor",
+            duration=timedelta(),
+            exit_code=int(args == self.failed_args),
+            stdout=self.version if args == ("--version",) else b"",
+            stderr=b"",
+        )
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        b"Databricks CLI v0.298.0",
+        b"Databricks CLI v0.299.1",
+        b"Databricks CLI v1.0.0",
+    ],
+)
+def test_doctor_accepts_supported_and_newer_cli_versions(version: bytes) -> None:
+    runner = ScriptedDoctorRunner(version)
+
+    asyncio.run(runner.doctor())
+
+    assert runner.calls == [
+        ("--version",),
+        ("workspace", "--help"),
+        ("catalogs", "--help"),
+        ("schemas", "--help"),
+        ("tables", "--help"),
+        ("volumes", "--help"),
+    ]
+
+
+@pytest.mark.parametrize("version", [b"Databricks CLI v0.297.9", b"unknown version"])
+def test_doctor_rejects_old_or_unparseable_cli_versions(version: bytes) -> None:
+    with pytest.raises(CliIncompatible, match=r"0\.298 or newer"):
+        asyncio.run(ScriptedDoctorRunner(version).doctor())
+
+
+def test_doctor_rejects_missing_required_help_surface() -> None:
+    runner = ScriptedDoctorRunner(
+        b"Databricks CLI v0.298.0",
+        failed_args=("tables", "--help"),
+    )
+
+    with pytest.raises(CliIncompatible, match="tables --help"):
+        asyncio.run(runner.doctor())
 
 
 def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
