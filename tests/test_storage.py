@@ -81,6 +81,99 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
         assert not any("TEMP B-TREE" in row[3] for row in child_plan)
 
 
+@pytest.mark.parametrize(
+    "index_name",
+    [
+        "ix_adapter_action_scopes_target_facet",
+        "ix_configured_scopes_object",
+    ],
+)
+def test_reopen_repairs_missing_runtime_forced_indexes(tmp_path, index_name: str) -> None:
+    path = tmp_path / "runtime-index.sqlite3"
+    with SQLiteStore(path) as store:
+        store._connection.execute(f"DROP INDEX {index_name}")
+
+    with SQLiteStore(path) as reopened:
+        indexes = {
+            row["name"]
+            for row in reopened._connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+        assert index_name in indexes
+        assert reopened.list_latest_facet_actions((str(uuid4()),)) == ()
+
+
+@pytest.mark.parametrize(
+    ("index_name", "wrong_statement", "expected_columns"),
+    [
+        (
+            "ix_adapter_action_scopes_target_facet",
+            "CREATE INDEX ix_adapter_action_scopes_target_facet "
+            "ON adapter_action_scopes (action_id)",
+            ("target_kind", "target_id", "facet", "action_id"),
+        ),
+        (
+            "ix_configured_scopes_object",
+            "CREATE INDEX ix_configured_scopes_object ON configured_scopes (scope_id)",
+            ("object_id", "scope_id"),
+        ),
+    ],
+)
+def test_reopen_replaces_mismatched_runtime_forced_indexes(
+    tmp_path,
+    index_name: str,
+    wrong_statement: str,
+    expected_columns: tuple[str, ...],
+) -> None:
+    path = tmp_path / "runtime-index.sqlite3"
+    with SQLiteStore(path) as store:
+        store._connection.execute(f"DROP INDEX {index_name}")
+        store._connection.execute(wrong_statement)
+
+    with SQLiteStore(path) as reopened:
+        columns = tuple(
+            row["name"]
+            for row in reopened._connection.execute(
+                "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
+                (index_name,),
+            ).fetchall()
+        )
+        assert columns == expected_columns
+        assert reopened.list_latest_facet_actions((str(uuid4()),)) == ()
+
+
+def test_runtime_index_repair_failure_rolls_back_drop(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "runtime-index.sqlite3"
+    index_name = "ix_adapter_action_scopes_target_facet"
+    wrong_statement = (
+        "CREATE INDEX ix_adapter_action_scopes_target_facet ON adapter_action_scopes (action_id)"
+    )
+    with SQLiteStore(path) as store:
+        store._connection.execute(f"DROP INDEX {index_name}")
+        store._connection.execute(wrong_statement)
+
+    def fail_recreation(_connection: sqlite3.Connection, _statement: str) -> None:
+        raise RuntimeError("injected runtime index repair failure")
+
+    monkeypatch.setattr(
+        SQLiteStore,
+        "_execute_required_runtime_index_statement",
+        staticmethod(fail_recreation),
+    )
+    with pytest.raises(RuntimeError, match="injected runtime index repair failure"):
+        SQLiteStore(path)
+
+    check = sqlite3.connect(path)
+    try:
+        columns = tuple(
+            row[2] for row in check.execute(f"PRAGMA index_info({index_name})").fetchall()
+        )
+    finally:
+        check.close()
+    assert columns == ("action_id",)
+
+
 def test_store_close_is_idempotent(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "state.sqlite3")
 

@@ -128,6 +128,19 @@ _CAPABILITY_KEY_ALTER_TABLES = {
     "ALTER TABLE refresh_intent_scopes ADD COLUMN capability_key TEXT;": "refresh_intent_scopes",
     "ALTER TABLE adapter_action_scopes ADD COLUMN capability_key TEXT;": "adapter_action_scopes",
 }
+_REQUIRED_RUNTIME_INDEXES = {
+    "ix_adapter_action_scopes_target_facet": (
+        "adapter_action_scopes",
+        ("target_kind", "target_id", "facet", "action_id"),
+        "CREATE INDEX ix_adapter_action_scopes_target_facet "
+        "ON adapter_action_scopes (target_kind, target_id, facet, action_id)",
+    ),
+    "ix_configured_scopes_object": (
+        "configured_scopes",
+        ("object_id", "scope_id"),
+        "CREATE INDEX ix_configured_scopes_object ON configured_scopes (object_id, scope_id)",
+    ),
+}
 
 
 def _utc_text(value: datetime) -> str:
@@ -262,6 +275,7 @@ class SQLiteStore:
                 self._enable_wal_mode()
                 self._connection.execute("PRAGMA synchronous = FULL")
             self._migrate()
+            self._repair_required_runtime_indexes()
         except BaseException:
             self._connection.close()
             raise
@@ -343,6 +357,63 @@ class SQLiteStore:
                     raise
                 else:
                     self._connection.commit()
+
+    def _repair_required_runtime_indexes(self) -> None:
+        """Reassert indexes required by forced runtime query plans after restore."""
+
+        with self._immediate_transaction() as connection:
+            for index_name, (
+                table_name,
+                expected_columns,
+                statement,
+            ) in _REQUIRED_RUNTIME_INDEXES.items():
+                schema_row = connection.execute(
+                    "SELECT tbl_name FROM sqlite_schema WHERE type = 'index' AND name = ?",
+                    (index_name,),
+                ).fetchone()
+                properties = connection.execute(
+                    """
+                    SELECT "unique", origin, partial
+                    FROM pragma_index_list(?)
+                    WHERE name = ?
+                    """,
+                    (table_name, index_name),
+                ).fetchone()
+                key_columns = tuple(
+                    (row["name"], row["desc"], row["coll"])
+                    for row in connection.execute(
+                        """
+                        SELECT name, "desc", coll
+                        FROM pragma_index_xinfo(?)
+                        WHERE key = 1
+                        ORDER BY seqno
+                        """,
+                        (index_name,),
+                    ).fetchall()
+                )
+                expected_keys = tuple((column, 0, "BINARY") for column in expected_columns)
+                valid = (
+                    schema_row is not None
+                    and schema_row["tbl_name"] == table_name
+                    and properties is not None
+                    and properties["unique"] == 0
+                    and properties["origin"] == "c"
+                    and properties["partial"] == 0
+                    and key_columns == expected_keys
+                )
+                if valid:
+                    continue
+                if schema_row is not None:
+                    connection.execute(f'DROP INDEX "{index_name}"')
+                self._execute_required_runtime_index_statement(connection, statement)
+
+    @staticmethod
+    def _execute_required_runtime_index_statement(
+        connection: sqlite3.Connection, statement: str
+    ) -> None:
+        """Execute canonical repair DDL; isolated for atomic-failure testing."""
+
+        connection.execute(statement)
 
     @staticmethod
     def _migration_statements(script: str) -> Iterator[str]:
