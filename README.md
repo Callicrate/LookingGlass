@@ -77,6 +77,7 @@ The link uses a process-unique, high-entropy `rookery-….localhost` hostname wh
 The configured bind host must be `127.0.0.1` or `localhost` so that generated `.localhost` names reach the listener consistently.
 The resulting session cookie is scoped to that unique host, process-local, `HttpOnly`, and `SameSite=Strict`, so ordinary `127.0.0.1` and `localhost` services do not receive it.
 If the link expires, was already used by another browser profile, or the browser session is lost, restart `serve` to rotate it.
+Redeemed browser access expires after two idle hours or twelve total hours, whichever comes first; restart `serve` to issue a new activation link.
 When stdout is redirected, `serve` refuses to disclose the capability unless the operator explicitly passes `--allow-redirected-activation` and protects the destination.
 
 Keep using the generated hostname after activation; direct `127.0.0.1` and `localhost` Host headers are rejected.

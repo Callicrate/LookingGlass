@@ -299,12 +299,28 @@ def create_app(
         }
         if public or bootstrap:
             return await call_next(request)
-        session = app.state.local_authorizer.authenticate(request.cookies.get(SESSION_COOKIE))
+        cookie_token = request.cookies.get(SESSION_COOKIE)
+        session = app.state.local_authorizer.authenticate(cookie_token)
         if session is None:
             if request.method in {"GET", "HEAD"}:
-                content = templates.get_template("bootstrap.html").render(error=None)
-                return HTMLResponse(content, status_code=403)
-            return JSONResponse({"detail": "Local access is required"}, status_code=403)
+                content = templates.get_template("bootstrap.html").render(
+                    error=(
+                        "Browser access is no longer valid. Restart Rookery to issue a new link."
+                        if cookie_token is not None
+                        else None
+                    )
+                )
+                response: Response = HTMLResponse(content, status_code=403)
+            else:
+                response = JSONResponse({"detail": "Local access is required"}, status_code=403)
+            if cookie_token is not None:
+                response.delete_cookie(
+                    key=SESSION_COOKIE,
+                    path="/",
+                    httponly=True,
+                    samesite="strict",
+                )
+            return response
         request.state.local_session = session
         return await call_next(request)
 

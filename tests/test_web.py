@@ -329,6 +329,69 @@ def test_bootstrap_expires_and_restart_rejects_the_prior_session() -> None:
         LocalCallerAuthorizer(browser_host="localhost")
 
 
+def test_browser_session_enforces_idle_and_absolute_lifetimes() -> None:
+    now = [0.0]
+    idle_authorizer = LocalCallerAuthorizer(
+        clock=lambda: now[0],
+        session_idle_ttl_seconds=10,
+        session_absolute_ttl_seconds=30,
+    )
+    idle_grant = idle_authorizer.redeem(idle_authorizer.take_bootstrap_token())
+    assert idle_grant is not None
+    now[0] = 10.0
+    assert idle_authorizer.authenticate(idle_grant.cookie_token) is None
+
+    now[0] = 0.0
+    absolute_authorizer = LocalCallerAuthorizer(
+        clock=lambda: now[0],
+        session_idle_ttl_seconds=10,
+        session_absolute_ttl_seconds=30,
+    )
+    absolute_grant = absolute_authorizer.redeem(absolute_authorizer.take_bootstrap_token())
+    assert absolute_grant is not None
+    for current_time in (9.0, 18.0, 27.0, 29.0):
+        now[0] = current_time
+        assert absolute_authorizer.authenticate(absolute_grant.cookie_token) is not None
+    now[0] = 30.0
+    assert absolute_authorizer.authenticate(absolute_grant.cookie_token) is None
+
+    with pytest.raises(ValueError, match="idle lifetime"):
+        LocalCallerAuthorizer(
+            session_idle_ttl_seconds=31,
+            session_absolute_ttl_seconds=30,
+        )
+    with pytest.raises(ValueError, match="absolute lifetime"):
+        LocalCallerAuthorizer(session_absolute_ttl_seconds=float("nan"))
+
+
+def test_expired_browser_session_is_denied_and_cookie_is_cleared() -> None:
+    now = [0.0]
+    authorizer = LocalCallerAuthorizer(
+        clock=lambda: now[0],
+        session_idle_ttl_seconds=1,
+        session_absolute_ttl_seconds=10,
+    )
+    backend = FakeBackend(dashboard_view=ready_dashboard())
+    app = create_app(
+        backend,
+        allowed_hosts=("testserver",),
+        authorizer=authorizer,
+    )
+    client = authenticated_client(app)
+    now[0] = 2.0
+
+    denied = client.get("/")
+    denied_mutation = client.post("/refresh")
+
+    assert denied.status_code == 403
+    assert "Unlock this browser" in denied.text
+    assert "Restart Rookery" in denied.text
+    assert "Max-Age=0" in denied.headers["set-cookie"]
+    assert denied_mutation.status_code == 403
+    assert backend.dashboard_queries == []
+    assert backend.submitted == []
+
+
 def test_bootstrap_rejects_cross_origin_and_malformed_requests() -> None:
     app = create_app(FakeBackend(), allowed_hosts=("testserver",))
     client = TestClient(app, base_url="https://testserver")

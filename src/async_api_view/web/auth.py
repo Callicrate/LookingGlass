@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import re
 import secrets
 import threading
@@ -13,6 +14,8 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 BOOTSTRAP_TTL_SECONDS = 10 * 60
+SESSION_IDLE_TTL_SECONDS = 2 * 60 * 60
+SESSION_ABSOLUTE_TTL_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "rookery_session"
 _TOKEN = re.compile(r"\A[A-Za-z0-9_-]{32,128}\Z")
 _BROWSER_HOST = re.compile(r"\Arookery-[a-f0-9]{32}\.localhost\Z")
@@ -44,9 +47,17 @@ class LocalCallerAuthorizer:
         bootstrap_token: str | None = None,
         browser_host: str | None = None,
         bootstrap_ttl_seconds: float = BOOTSTRAP_TTL_SECONDS,
+        session_idle_ttl_seconds: float = SESSION_IDLE_TTL_SECONDS,
+        session_absolute_ttl_seconds: float = SESSION_ABSOLUTE_TTL_SECONDS,
     ) -> None:
-        if bootstrap_ttl_seconds <= 0:
+        if not math.isfinite(bootstrap_ttl_seconds) or bootstrap_ttl_seconds <= 0:
             raise ValueError("bootstrap lifetime must be positive")
+        if not math.isfinite(session_idle_ttl_seconds) or session_idle_ttl_seconds <= 0:
+            raise ValueError("session idle lifetime must be positive")
+        if not math.isfinite(session_absolute_ttl_seconds) or session_absolute_ttl_seconds <= 0:
+            raise ValueError("session absolute lifetime must be positive")
+        if session_idle_ttl_seconds > session_absolute_ttl_seconds:
+            raise ValueError("session idle lifetime cannot exceed its absolute lifetime")
         token = bootstrap_token or secrets.token_urlsafe(32)
         if _TOKEN.fullmatch(token) is None:
             raise ValueError("bootstrap token is invalid")
@@ -58,8 +69,12 @@ class LocalCallerAuthorizer:
         self._bootstrap_token: str | None = token
         self._bootstrap_digest: bytes | None = _digest(token)
         self._bootstrap_expires_at = clock() + bootstrap_ttl_seconds
+        self._session_idle_ttl_seconds = session_idle_ttl_seconds
+        self._session_absolute_ttl_seconds = session_absolute_ttl_seconds
         self._session_digest: bytes | None = None
         self._session: LocalSession | None = None
+        self._session_idle_expires_at: float | None = None
+        self._session_absolute_expires_at: float | None = None
         self._lock = threading.Lock()
 
     def take_bootstrap_token(self) -> str:
@@ -80,9 +95,10 @@ class LocalCallerAuthorizer:
         candidate = _digest(token)
         with self._lock:
             expected = self._bootstrap_digest
+            now = self._clock()
             if (
                 expected is None
-                or self._clock() > self._bootstrap_expires_at
+                or now > self._bootstrap_expires_at
                 or not hmac.compare_digest(candidate, expected)
             ):
                 return None
@@ -95,6 +111,11 @@ class LocalCallerAuthorizer:
             self._bootstrap_token = None
             self._session_digest = _digest(cookie_token)
             self._session = session
+            self._session_absolute_expires_at = now + self._session_absolute_ttl_seconds
+            self._session_idle_expires_at = min(
+                now + self._session_idle_ttl_seconds,
+                self._session_absolute_expires_at,
+            )
             return LocalSessionGrant(cookie_token=cookie_token, session=session)
 
     def authenticate(self, cookie_token: str | None) -> LocalSession | None:
@@ -107,4 +128,20 @@ class LocalCallerAuthorizer:
             expected = self._session_digest
             if expected is None or not hmac.compare_digest(candidate, expected):
                 return None
-            return self._session
+            session = self._session
+            idle_expires_at = self._session_idle_expires_at
+            absolute_expires_at = self._session_absolute_expires_at
+            if session is None or idle_expires_at is None or absolute_expires_at is None:
+                return None
+            now = self._clock()
+            if now >= idle_expires_at or now >= absolute_expires_at:
+                self._session_digest = None
+                self._session = None
+                self._session_idle_expires_at = None
+                self._session_absolute_expires_at = None
+                return None
+            self._session_idle_expires_at = min(
+                now + self._session_idle_ttl_seconds,
+                absolute_expires_at,
+            )
+            return session
