@@ -106,6 +106,17 @@ class ActivityView:
 
 
 @dataclass(frozen=True, slots=True)
+class OperationalEventView:
+    event_type: str
+    severity: str
+    summary: str
+    occurred_at: datetime | str | None
+    system_name: str = "Local runtime"
+    error_class: str | None = None
+    action_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SystemView:
     system_id: str
     name: str
@@ -133,6 +144,7 @@ class DashboardView:
     object_query: str = ""
     previous_page_url: str | None = None
     next_page_url: str | None = None
+    alerts: tuple[OperationalEventView, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

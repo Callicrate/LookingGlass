@@ -43,6 +43,30 @@
     </section>
     {% endif %}
 
+    {% if view.alerts %}
+    <section aria-labelledby="alerts-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Local operations</p>
+          <h2 id="alerts-heading">Recent alerts</h2>
+        </div>
+        <span class="count">Latest {{ view.alerts|length }}</span>
+      </div>
+      <div class="alert-list">
+        {% for alert in view.alerts %}
+        <article class="alert-row">
+          <span class="badge badge--{{ alert.severity|display }}">{{ alert.severity|display }}</span>
+          <div>
+            <strong>{{ alert.event_type|display }}</strong>
+            <span class="subtle">{{ alert.system_name|display }} · <time>{{ alert.occurred_at|timestamp }}</time>{% if alert.error_class %} · {{ alert.error_class|display }}{% endif %}</span>
+            <span>{{ alert.summary|display }}</span>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
     <section aria-labelledby="systems-heading">
       <div class="section-heading">
         <div>

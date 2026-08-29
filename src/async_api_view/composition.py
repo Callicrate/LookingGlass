@@ -49,6 +49,7 @@ from async_api_view.web import (
     IntentScopeView,
     IntentView,
     ObjectView,
+    OperationalEventView,
     RefreshOption,
     RefreshRequest,
     SystemView,
@@ -396,6 +397,7 @@ class SQLiteWebBackend:
         query = query or DashboardQuery()
         worker_available, worker_error = self._worker_status()
         systems = self._store.list_systems()
+        system_names = {system.system_id: system.display_name for system in systems}
         object_total = self._store.count_objects(query=query.object_query)
         object_page_count = max(
             1, (object_total + query.object_page_size - 1) // query.object_page_size
@@ -408,6 +410,18 @@ class SQLiteWebBackend:
             query=query.object_query,
         )
         actions = self._store.list_dashboard_actions()
+        alerts = tuple(
+            OperationalEventView(
+                event_type=event.event_type,
+                severity=event.severity,
+                summary=event.redacted_summary,
+                occurred_at=event.occurred_at,
+                system_name=system_names.get(event.system_id, "Local runtime"),
+                error_class=event.error_class,
+                action_id=event.action_id,
+            )
+            for event in self._store.list_operational_events(alertable_only=True, limit=10)
+        )
         actions_by_system: dict[str, list[StoredAction]] = {
             system.system_id: [] for system in systems
         }
@@ -513,6 +527,7 @@ class SQLiteWebBackend:
             next_page_url=(
                 self._page_url(query, object_page + 1) if object_page < object_page_count else None
             ),
+            alerts=alerts,
         )
 
     async def is_refresh_registered(self, request: RefreshRequest) -> bool:

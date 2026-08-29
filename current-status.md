@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-28 21:07 ET
+Updated: 2026-08-28 21:18 ET
 
 ## Goal
 
@@ -9,9 +9,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 165 tests passed warning-free; Ruff format and lint passed; lock and package build remain green.
+- Latest checks: 166 tests passed warning-free; Ruff format, lint, lock validation, and package build passed.
 - Runtime surface: 4 CLI commands and 5 HTTP routes, verified from source.
-- Version control: local `main` history has seven coherent commits ending at `9911504`; the next reviewed dashboard commit is ready.
+- Version control: local `main` history has eight coherent commits ending at `8b779f5`; the next reviewed dashboard/alert commit is ready.
 - Active review round: configuration desired-state reconciliation, runtime supervision, bounded dashboard reads, and migration concurrency.
 - Next progress report due: 2026-08-28 22:07 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -32,8 +32,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Eliminate repeated full action/object reads from per-facet dashboard rendering.
 - [x] Bound dashboard reads for large object and action histories.
 - [x] Serialize concurrent migration decisions safely.
-- [ ] Reconcile documentation claims with the current implemented surface.
-- [ ] Independently review and verify the next change set before committing.
+- [x] Reconcile documentation claims with the current implemented surface.
+- [x] Independently review and verify each consequential change set before committing.
+- [x] Surface a bounded recent projection of durable alertable failures.
+- [ ] Add full alert history filtering only if it remains higher value than deeper object navigation.
 
 ## Evidence and decisions
 
@@ -54,6 +56,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Dashboard inventory now uses 50-object pages, 128-character literal filters, a one-million-page input ceiling, and active-plus-latest action summaries.
 - A 502-object regression case keeps the first-page SELECT budget at 70 or fewer while later pages and filtered objects remain refreshable.
 - Desktop and 390px mobile QA passed with no console errors; Lighthouse accessibility, best practices, and agentic browsing scored 100 on both device profiles.
+- The dashboard now renders the latest ten durable alertable failures with system, time, canonical class, and escaped redacted summary.
+- Alert recency uses a dedicated SQLite index verified by `EXPLAIN QUERY PLAN`; the exact full-history count was removed to preserve bounded dashboard work.
 
 ## Risks / watch list
 

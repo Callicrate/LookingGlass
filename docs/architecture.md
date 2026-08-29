@@ -69,7 +69,7 @@ Implemented and covered by automated tests:
 - durable SQLite intents, actions, leases, observations, projections, and alertable failures;
 - generic local-only coordination and idempotent observation ingestion;
 - closed Databricks CLI command mapping, bounded execution, error redaction, and Workspace/Unity Catalog metadata normalizers;
-- loopback operational UI with registered refresh controls, intent polling, stale/error states, CSRF, Origin/Host checks, and output escaping;
+- loopback operational UI with bounded inventory pages, recent alertable failures, registered refresh controls, intent polling, stale/error states, CSRF, Origin/Host checks, and output escaping;
 - local configuration, initialization, doctor, one-shot worker, and serve commands;
 - an end-to-end fake-CLI test covering request, admission, execution, ingestion, display, and duplicate suppression.
 
@@ -79,7 +79,7 @@ Not yet verified or intentionally deferred:
 - automatic refresh subscriptions and UI-session heartbeat scheduling;
 - persistent Workspace content artifacts and retention deletion;
 - the Linux-over-SSH adapter;
-- evidence compaction, richer alert presentation, and multi-process deployment.
+- evidence compaction, full alert history/filtering, and multi-process deployment.
 
 ## First usable workflow
 

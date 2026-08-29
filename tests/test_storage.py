@@ -54,6 +54,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0002_refresh_scope_capability_key",
             "0003_observation_batch_digest",
             "0004_configured_system_identities",
+            "0005_operational_event_recency",
         ]
 
 
@@ -105,6 +106,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0002_refresh_scope_capability_key",
         "0003_observation_batch_digest",
         "0004_configured_system_identities",
+        "0005_operational_event_recency",
     )
     assert versions == (expected,) * workers
 
@@ -198,6 +200,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0002_refresh_scope_capability_key",
             "0003_observation_batch_digest",
             "0004_configured_system_identities",
+            "0005_operational_event_recency",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -451,6 +454,23 @@ def test_runtime_failure_is_bounded_and_diagnostics_redact_json_and_home_paths(t
         summary="Coordinator stopped unexpectedly",
         occurred_at=NOW,
     )
+    later = store.record_runtime_failure(
+        event_type="queue.adapter_worker.failed",
+        summary="Worker stopped unexpectedly",
+        occurred_at=NOW + timedelta(seconds=1),
+    )
+    assert len(store.list_operational_events(alertable_only=True)) == 2
+    assert store.list_operational_events(alertable_only=True, limit=1) == (later,)
+    query_plan = store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT * FROM operational_events
+        WHERE alertable = 1
+        ORDER BY occurred_at DESC, event_id
+        LIMIT 10
+        """
+    ).fetchall()
+    assert any("ix_operational_events_alertable_recency" in row[3] for row in query_plan)
     with pytest.raises(ValueError, match="registered"):
         store.record_runtime_failure(
             event_type="refresh.action.failed",

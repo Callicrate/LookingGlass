@@ -80,6 +80,9 @@ td { max-width: 300px; padding: 10px 11px; border-top: 1px solid var(--line); ve
 .notice a { margin-left: auto; }
 .empty-state p { margin: 4px 0 0; color: var(--muted); }
 .is-hidden { display: none; }
+.alert-list { display: grid; gap: 8px; }
+.alert-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; padding: 12px 14px; border: 1px solid #e7b9b5; border-radius: 7px; background: #fffafa; }
+.alert-row > div { display: grid; gap: 3px; min-width: 0; }
 
 .refresh-list, .scope-list { display: grid; gap: 8px; }
 .refresh-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
@@ -107,6 +110,7 @@ footer { padding: 16px 24px 28px; color: var(--muted); text-align: center; font-
   .snapshot-banner { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
   .snapshot-stats { grid-column: 2; width: 100%; justify-content: space-between; gap: 10px; }
   .notice a { margin-left: 0; }
+  .alert-row { grid-template-columns: 1fr; }
   .refresh-row { grid-template-columns: 1fr; }
   .refresh-row button { width: 100%; }
   .facts div, .facts--wide div { grid-template-columns: 1fr; gap: 1px; }

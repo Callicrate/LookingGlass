@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pytest
@@ -15,6 +15,7 @@ from async_api_view.web import (
     IntentScopeView,
     IntentView,
     ObjectView,
+    OperationalEventView,
     RefreshOption,
     RefreshRequest,
     SystemView,
@@ -223,6 +224,32 @@ def test_dashboard_recovers_to_disconnected_error_without_leaking_exception() ->
     assert "Disconnected" in response.text
     assert "Try again" in response.text
     assert "secret profile token" not in response.text
+
+
+def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
+    view = replace(
+        ready_dashboard(),
+        alerts=(
+            OperationalEventView(
+                event_type="refresh.action.failed",
+                severity="error",
+                summary='<script>alert("x")</script>',
+                occurred_at=NOW,
+                system_name="Data workspace",
+                error_class="connection_timeout",
+            ),
+        ),
+    )
+
+    response = client_for(FakeBackend(dashboard_view=view)).get("/")
+
+    assert response.status_code == 200
+    assert "Recent alerts" in response.text
+    assert "Latest 1" in response.text
+    assert "refresh.action.failed" in response.text
+    assert "connection_timeout" in response.text
+    assert '<script>alert("x")</script>' not in response.text
+    assert "&lt;script&gt;alert" in response.text
 
 
 def test_remote_markup_is_escaped() -> None:

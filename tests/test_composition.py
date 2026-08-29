@@ -508,6 +508,10 @@ async def test_coordinator_failure_is_durable_and_recovers_automatically(tmp_pat
         "coordinator stopped unexpectedly (RuntimeError)"
     )
     assert "untrusted detail" not in coordinator_events[0].redacted_summary
+    dashboard = await runtime.backend.dashboard()
+    assert len(dashboard.alerts) == 1
+    assert dashboard.alerts[0].event_type == "queue.coordinator.failed"
+    assert dashboard.alerts[0].summary == coordinator_events[0].redacted_summary
 
     await runtime.stop()
 

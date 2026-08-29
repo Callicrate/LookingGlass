@@ -2113,8 +2113,16 @@ class SQLiteStore:
             self._refresh_action_parent_aggregates(connection, action_id=completion.action_id)
 
     def list_operational_events(
-        self, *, system_id: str | None = None, alertable_only: bool = False
+        self,
+        *,
+        system_id: str | None = None,
+        alertable_only: bool = False,
+        limit: int | None = None,
     ) -> tuple[OperationalEventRecord, ...]:
+        if limit is not None and (
+            isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100
+        ):
+            raise ValueError("operational event limit must be between 1 and 100")
         if system_id is None and not alertable_only:
             statement = "SELECT * FROM operational_events ORDER BY occurred_at DESC, event_id"
             parameters: tuple[object, ...] = ()
@@ -2136,6 +2144,9 @@ class SQLiteStore:
                 "ORDER BY occurred_at DESC, event_id"
             )
             parameters = (require_uuid(system_id, "system_id"),)
+        if limit is not None:
+            statement += " LIMIT ?"
+            parameters = (*parameters, limit)
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(
