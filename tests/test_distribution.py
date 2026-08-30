@@ -1,5 +1,8 @@
 from importlib.util import module_from_spec, spec_from_file_location
+from io import BytesIO
 from pathlib import Path
+from tarfile import TarInfo
+from tarfile import open as open_tar
 from zipfile import ZipFile
 
 import pytest
@@ -13,6 +16,10 @@ _SPEC.loader.exec_module(_VERIFIER)
 expected_runtime_assets = _VERIFIER.expected_runtime_assets
 forbidden_source_entries = _VERIFIER.forbidden_source_entries
 verify_wheel_runtime_assets = _VERIFIER.verify_wheel_runtime_assets
+verify_wheel_package_files = _VERIFIER.verify_wheel_package_files
+verify_wheel_metadata = _VERIFIER.verify_wheel_metadata
+verify_wheel_record = _VERIFIER.verify_wheel_record
+verify_sdist_source_files = _VERIFIER.verify_sdist_source_files
 
 
 def test_wheel_asset_verification_rejects_missing_and_unexpected_files(tmp_path) -> None:
@@ -77,3 +84,109 @@ def test_source_distribution_rejects_workspace_review_surfaces() -> None:
             "async_api_view-0.1.0/critical-reviews/20260830-010345.md",
         ]
     ) == ("async_api_view-0.1.0/critical-reviews/20260830-010345.md",)
+
+
+def test_wheel_package_verification_rejects_stale_or_unexpected_python(tmp_path) -> None:
+    current = tmp_path / "current.py"
+    current.write_text("CURRENT = True\n", encoding="utf-8")
+    wheel = tmp_path / "stale.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("async_api_view/module.py", b"CURRENT = False\n")
+    with pytest.raises(RuntimeError, match="content mismatch"):
+        verify_wheel_package_files(wheel, {"async_api_view/module.py": current})
+
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("async_api_view/module.py", current.read_bytes())
+        archive.writestr("async_api_view/stale.py", b"")
+    with pytest.raises(RuntimeError, match=r"stale\.py"):
+        verify_wheel_package_files(wheel, {"async_api_view/module.py": current})
+
+
+def test_wheel_metadata_rejects_missing_runtime_dependencies(tmp_path) -> None:
+    wheel = tmp_path / "metadata.whl"
+    metadata = """Metadata-Version: 2.5
+Name: async-api-view
+Version: 0.1.0
+Summary: Rookery local canonical state and refresh service for remote systems
+Requires-Python: <3.13,>=3.12
+
+"""
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "async_api_view-0.1.0.dist-info/METADATA",
+            metadata.encode() + Path("README.md").read_bytes(),
+        )
+
+    with pytest.raises(RuntimeError, match="METADATA"):
+        verify_wheel_metadata(wheel)
+
+
+def test_wheel_record_rejects_a_stale_digest(tmp_path) -> None:
+    wheel = tmp_path / "record.whl"
+    record_name = "async_api_view-0.1.0.dist-info/RECORD"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("async_api_view/module.py", b"current")
+        archive.writestr(
+            record_name,
+            f"async_api_view/module.py,sha256=stale,7\n{record_name},,\n",
+        )
+
+    with pytest.raises(RuntimeError, match="digest mismatch"):
+        verify_wheel_record(wheel)
+
+
+def test_sdist_verification_rejects_stale_included_source(tmp_path) -> None:
+    source_archive = tmp_path / "async_api_view-0.1.0.tar.gz"
+    wheel = tmp_path / "async_api_view-0.1.0-py3-none-any.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("async_api_view-0.1.0.dist-info/METADATA", b"metadata")
+    with open_tar(source_archive, "w:gz") as archive:
+        stale = b"stale"
+        source = TarInfo("async_api_view-0.1.0/README.md")
+        source.size = len(stale)
+        archive.addfile(source, BytesIO(stale))
+        metadata = TarInfo("async_api_view-0.1.0/PKG-INFO")
+        metadata.size = len(b"metadata")
+        archive.addfile(metadata, BytesIO(b"metadata"))
+
+    with pytest.raises(RuntimeError, match=r"README\.md"):
+        verify_sdist_source_files(
+            source_archive,
+            wheel,
+            frozenset({"README.md", "PKG-INFO"}),
+        )
+
+
+def test_sdist_verification_rejects_missing_and_unsafe_members(tmp_path) -> None:
+    source_archive = tmp_path / "async_api_view-0.1.0.tar.gz"
+    wheel = tmp_path / "async_api_view-0.1.0-py3-none-any.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("async_api_view-0.1.0.dist-info/METADATA", b"metadata")
+    with open_tar(source_archive, "w:gz") as archive:
+        metadata = TarInfo("async_api_view-0.1.0/PKG-INFO")
+        metadata.size = len(b"metadata")
+        archive.addfile(metadata, BytesIO(b"metadata"))
+
+    with pytest.raises(RuntimeError, match="manifest mismatch"):
+        verify_sdist_source_files(
+            source_archive,
+            wheel,
+            frozenset({"README.md", "PKG-INFO"}),
+        )
+
+    with open_tar(source_archive, "w:gz") as archive:
+        unsafe = TarInfo("async_api_view-0.1.0/link")
+        unsafe.type = b"2"
+        unsafe.linkname = "../../outside"
+        archive.addfile(unsafe)
+
+    with pytest.raises(RuntimeError, match="unsafe member type"):
+        verify_sdist_source_files(source_archive, wheel, frozenset())
+
+    with open_tar(source_archive, "w:gz") as archive:
+        unsafe_directory = TarInfo("async_api_view-0.1.0/../../outside")
+        unsafe_directory.type = b"5"
+        archive.addfile(unsafe_directory)
+
+    with pytest.raises(RuntimeError, match="unsafe path"):
+        verify_sdist_source_files(source_archive, wheel, frozenset())

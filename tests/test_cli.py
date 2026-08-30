@@ -80,6 +80,27 @@ def test_racing_init_config_writers_publish_one_complete_template(tmp_path: Path
     )
 
 
+def test_export_docs_is_checkout_current_and_never_overwrites(tmp_path: Path) -> None:
+    output = tmp_path / "standalone" / "architecture.md"
+
+    created = cli.main(
+        [
+            "--config",
+            str(tmp_path / "missing-is-ignored.toml"),
+            "export-docs",
+            "--output",
+            str(output),
+        ]
+    )
+    original = output.read_bytes()
+    refused = cli.main(["export-docs", "--output", str(output)])
+
+    assert created == 0
+    assert refused == 2
+    assert original == Path("docs/architecture.md").read_bytes()
+    assert output.read_bytes() == original
+
+
 def test_init_rejects_missing_config(tmp_path: Path) -> None:
     result = cli.main(["--config", str(tmp_path / "missing.toml"), "init"])
 

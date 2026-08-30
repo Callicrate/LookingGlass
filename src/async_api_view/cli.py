@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import sys
 from collections.abc import Sequence
+from importlib.resources import files
 from pathlib import Path
 
 import uvicorn
@@ -64,6 +65,19 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("config.local.toml"),
         help="New TOML path (default: config.local.toml); never overwrites an existing path.",
+    )
+    export_docs = subparsers.add_parser(
+        "export-docs",
+        help="Write the packaged architecture contract without opening the database.",
+    )
+    export_docs.add_argument(
+        "--output",
+        type=Path,
+        default=Path("rookery-architecture.md"),
+        help=(
+            "New Markdown path (default: rookery-architecture.md); never overwrites an "
+            "existing path."
+        ),
     )
     subparsers.add_parser("init", help="Initialize the database and configured systems.")
     subparsers.add_parser(
@@ -128,6 +142,21 @@ def _initialize_config(output: Path) -> None:
     with output.open("x", encoding="utf-8", newline="\n") as stream:
         stream.write(_EXAMPLE_CONFIG)
     logger.info("Created starter configuration at %s", output.resolve())
+
+
+def _architecture_text() -> str:
+    packaged = files("async_api_view").joinpath("docs", "architecture.md")
+    if packaged.is_file():
+        return packaged.read_text(encoding="utf-8")
+    checkout_copy = Path(__file__).parents[2] / "docs" / "architecture.md"
+    return checkout_copy.read_text(encoding="utf-8")
+
+
+def _export_docs(output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(_architecture_text())
+    logger.info("Exported the Rookery architecture contract to %s", output.resolve())
 
 
 async def _doctor(settings: ProjectSettings) -> None:
@@ -283,6 +312,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "init-config":
             _initialize_config(args.output)
+            return 0
+        if args.command == "export-docs":
+            _export_docs(args.output)
             return 0
         if args.command == "serve":
             _require_browser_activation_output(allow_redirected=args.allow_redirected_activation)

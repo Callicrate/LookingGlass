@@ -28,6 +28,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/async_api_view"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"docs/architecture.md" = "async_api_view/docs/architecture.md"
+
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/.github",
