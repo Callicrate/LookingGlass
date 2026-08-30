@@ -12,6 +12,8 @@ from typing import Literal, Protocol
 from unicodedata import category
 from uuid import UUID
 
+from async_api_view.contracts._validation import require_contract_key
+
 MAX_DISPLAY_LENGTH = 512
 DEFAULT_OBJECT_PAGE_SIZE = 50
 MAX_OBJECT_QUERY_LENGTH = 128
@@ -32,7 +34,6 @@ _BIDI_CONTROLS = frozenset(
         "\u2069",
     }
 )
-_CONTRACT_KEY = re.compile(r"[a-z][a-z0-9_.-]{0,127}")
 _CURSOR = re.compile(r"[A-Za-z0-9_-]+")
 _ALERT_SEVERITIES = frozenset({"", "info", "warning", "error", "critical"})
 _ACTION_STATES = frozenset(
@@ -98,8 +99,10 @@ class DashboardQuery:
     object_page_size: int = DEFAULT_OBJECT_PAGE_SIZE
 
     def __post_init__(self) -> None:
-        if len(self.object_query) > MAX_OBJECT_QUERY_LENGTH or any(
-            ord(char) < 32 for char in self.object_query
+        if (
+            len(self.object_query) > MAX_OBJECT_QUERY_LENGTH
+            or any(ord(char) < 32 for char in self.object_query)
+            or (self.object_query and not self.object_query.strip())
         ):
             raise ValueError("object query is invalid")
         _validate_cursor(self.cursor, fields=2 if self.object_query else 1)
@@ -117,8 +120,8 @@ class ObjectDetailQuery:
         _validate_cursor(self.cursor, fields=1)
         if not 1 <= self.relationship_page_size <= 100:
             raise ValueError("relationship page size must be between 1 and 100")
-        if self.object_type and _CONTRACT_KEY.fullmatch(self.object_type) is None:
-            raise ValueError("object type filter is invalid")
+        if self.object_type:
+            require_contract_key(self.object_type, "object type filter")
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,8 +135,8 @@ class AlertHistoryQuery:
         _validate_cursor(self.cursor, fields=2, timestamp_first=True)
         if not 1 <= self.page_size <= 100:
             raise ValueError("alert page size must be between 1 and 100")
-        if self.event_type and _CONTRACT_KEY.fullmatch(self.event_type) is None:
-            raise ValueError("alert event type is invalid")
+        if self.event_type:
+            require_contract_key(self.event_type, "alert event type")
         if self.severity not in _ALERT_SEVERITIES:
             raise ValueError("alert severity is invalid")
 

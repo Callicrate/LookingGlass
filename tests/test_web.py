@@ -759,6 +759,25 @@ def test_dashboard_passes_bounded_filter_and_cursor_to_backend() -> None:
     assert backend.dashboard_queries[-1] == DashboardQuery(object_query="folder", cursor=cursor)
 
 
+def test_dashboard_preserves_boundary_spaces_in_name_prefix() -> None:
+    backend = FakeBackend(dashboard_view=ready_dashboard())
+
+    response = client_for(backend).get("/?q=%20folder%20")
+
+    assert response.status_code == 200
+    assert backend.dashboard_queries[-1] == DashboardQuery(object_query=" folder ")
+
+
+def test_filtered_empty_state_describes_name_prefix_search() -> None:
+    dashboard = replace(ready_dashboard(), objects=(), object_query="missing")
+
+    response = client_for(FakeBackend(dashboard_view=dashboard)).get("/?q=missing")
+
+    assert response.status_code == 200
+    assert "Try a different name prefix, or clear the filter." in response.text
+    assert "Try a different name or type" not in response.text
+
+
 def test_page_cursors_require_one_canonical_encoding() -> None:
     uppercase_uuid = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
     with pytest.raises(ValueError, match="cursor"):
@@ -783,6 +802,7 @@ def test_page_cursors_require_one_canonical_encoding() -> None:
         "?after=not-base64",
         "?unknown=value",
         f"?q={'x' * 129}",
+        "?q=%20%20%20",
     ],
 )
 def test_dashboard_rejects_invalid_query_contract(query: str) -> None:
@@ -846,6 +866,7 @@ def test_disabled_refresh_controls_render_matching_accessible_reasons() -> None:
         (f"/objects/{DETAIL_ID}?page=1&page=2", 400),
         (f"/objects/{DETAIL_ID}?after=not-base64", 400),
         (f"/objects/{DETAIL_ID}?type=FILE", 400),
+        (f"/objects/{DETAIL_ID}?type=a..b", 400),
         (f"/objects/{DETAIL_ID}?type=file&type=folder", 400),
         (f"/objects/{DETAIL_ID}?unknown=x", 400),
     ],
@@ -986,6 +1007,7 @@ def test_operational_badges_preserve_semantic_scan_priority() -> None:
         "?after=not-base64",
         "?severity=debug",
         "?type=QUEUE.BAD",
+        "?type=a..b",
         "?type=a&type=b",
         "?unknown=value",
     ],

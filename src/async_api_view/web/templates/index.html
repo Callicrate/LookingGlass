@@ -177,7 +177,7 @@
       {% else %}
       <div class="empty-state">
         <strong>{% if view.object_query %}No matching cached objects{% else %}No cached objects{% endif %}</strong>
-        <p>{% if view.object_query %}Try a different name or type, or clear the filter.{% else %}Registered refreshes remain available below. Empty cache does not imply an empty remote system.{% endif %}</p>
+        <p>{% if view.object_query %}Try a different name prefix, or clear the filter.{% else %}Registered refreshes remain available below. Empty cache does not imply an empty remote system.{% endif %}</p>
       </div>
       {% endif %}
     </section>
