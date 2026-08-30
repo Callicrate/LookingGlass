@@ -150,6 +150,24 @@ class BlockingStartupCliRunner(FakeCliRunner):
         raise AssertionError("blocking compatibility check unexpectedly resumed")
 
 
+@pytest.mark.anyio
+async def test_runtime_rejects_double_start_without_orphaning_supervisor(tmp_path: Path) -> None:
+    runner = BlockingStartupCliRunner()
+    runtime = build_runtime(settings(tmp_path), runner=runner)
+
+    await runtime.start()
+    first_task = runtime._background_task
+    await asyncio.wait_for(runner.started.wait(), timeout=1)
+
+    with pytest.raises(RuntimeError, match="lifecycle has already started"):
+        await runtime.start()
+
+    assert runtime._background_task is first_task
+    await asyncio.wait_for(runtime.stop(), timeout=1)
+    assert first_task is not None and first_task.done()
+    assert runner.cancelled
+
+
 class RuntimeIncompatibleCliRunner(FakeCliRunner):
     def __init__(self) -> None:
         super().__init__(b"[]")
@@ -1985,7 +2003,7 @@ async def test_recovered_worker_uses_a_new_delivery_batch(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("lifecycle_method", ["record_attempt", "complete_action"])
+@pytest.mark.parametrize("lifecycle_method", ["ingest", "record_attempt", "complete_action"])
 async def test_lifecycle_persistence_failure_degrades_worker_health(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2039,6 +2057,80 @@ async def test_lifecycle_persistence_failure_degrades_worker_health(
         ]
         assert len(worker_events) == 1
         assert "injected lifecycle persistence failure" not in worker_events[0].redacted_summary
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.anyio
+async def test_ingestion_outage_recovers_only_after_canonical_write_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_time = [datetime.now(UTC)]
+    runtime = build_runtime(
+        settings(tmp_path, worker_poll_seconds=0.05),
+        runner=FakeCliRunner(b"[]"),
+        clock=lambda: current_time[0],
+    )
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=refresh.system_id,
+            target_kind=refresh.target_kind,
+            target_id=refresh.target_id,
+            capability_key=refresh.capability_key,
+            facet=refresh.facet,
+        )
+    )
+    original_ingest = runtime.store.ingest
+    failure_reached = asyncio.Event()
+
+    async def fail_ingestion(*_args: object, **_kwargs: object) -> None:
+        failure_reached.set()
+        raise sqlite3.OperationalError("injected persistent ingestion outage")
+
+    monkeypatch.setattr(runtime.store, "ingest", fail_ingestion)
+    await runtime.start()
+    try:
+        await asyncio.wait_for(failure_reached.wait(), timeout=1)
+        await asyncio.sleep(0.1)
+
+        assert runtime.status() == (
+            False,
+            "worker stopped unexpectedly (LifecyclePersistenceFailure)",
+        )
+        assert (await runtime.backend.dashboard()).refresh_unavailable
+        worker_events = [
+            event
+            for event in runtime.store.list_operational_events(alertable_only=True)
+            if event.event_type == "queue.adapter_worker.failed"
+        ]
+        assert len(worker_events) == 1
+
+        monkeypatch.setattr(runtime.store, "ingest", original_ingest)
+        current_time[0] += timedelta(seconds=61)
+        runtime.wake()
+        for _ in range(100):
+            if runtime.worker_available:
+                break
+            await asyncio.sleep(0.01)
+
+        assert runtime.worker_available
+        assert not (await runtime.backend.dashboard()).refresh_unavailable
+        worker_events = [
+            event
+            for event in runtime.store.list_operational_events(alertable_only=True)
+            if event.event_type == "queue.adapter_worker.failed"
+        ]
+        assert len(worker_events) == 1
+        assert runtime.worker.ingestion_generation >= 1
     finally:
         await runtime.stop()
 

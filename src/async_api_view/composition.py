@@ -23,6 +23,7 @@ from async_api_view.adapters.databricks import (
     CliRunner,
     CommandRejected,
     DatabricksWorker,
+    LifecyclePersistenceFailure,
     ResolvedTarget,
 )
 from async_api_view.application import DurableCoordinator, SystemBootstrapService
@@ -1159,6 +1160,8 @@ class ApplicationRuntime:
     _wake_event: asyncio.Event | None = field(default=None, init=False)
     _background_task: asyncio.Task[None] | None = field(default=None, init=False)
     _worker_started: bool = field(default=False, init=False)
+    _lifecycle_closed: bool = field(default=False, init=False)
+    _worker_recovery_generation: int | None = field(default=None, init=False)
     _component_errors: dict[str, str] = field(default_factory=dict, init=False)
     _failure_counts: dict[str, int] = field(default_factory=dict, init=False)
 
@@ -1170,6 +1173,8 @@ class ApplicationRuntime:
             self._wake_event.set()
 
     async def start(self) -> None:
+        if self._background_task is not None or self._lifecycle_closed:
+            raise RuntimeError("runtime lifecycle has already started")
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
         self._component_errors.clear()
@@ -1186,6 +1191,8 @@ class ApplicationRuntime:
         await asyncio.sleep(0)
 
     async def stop(self) -> None:
+        if self._lifecycle_closed:
+            return
         if self._stop_event is not None:
             self._stop_event.set()
         if self._wake_event is not None:
@@ -1200,6 +1207,7 @@ class ApplicationRuntime:
             pass
         finally:
             self.store.close()
+            self._lifecycle_closed = True
 
     def _record_background_failure(self, component: str, error: BaseException) -> None:
         summary = f"{component} stopped unexpectedly ({type(error).__name__})"
@@ -1258,6 +1266,8 @@ class ApplicationRuntime:
                 try:
                     await self.worker.startup()
                 except Exception as exc:
+                    if isinstance(exc, LifecyclePersistenceFailure):
+                        self._worker_recovery_generation = self.worker.ingestion_generation + 1
                     self._record_background_failure("worker", exc)
                     await self._wait_for_activity(self._retry_delay("worker"))
                     continue
@@ -1282,10 +1292,17 @@ class ApplicationRuntime:
                     worked = True
             except Exception as exc:
                 self._worker_started = False
+                if isinstance(exc, LifecyclePersistenceFailure):
+                    self._worker_recovery_generation = self.worker.ingestion_generation + 1
                 self._record_background_failure("worker", exc)
                 await self._wait_for_activity(self._retry_delay("worker"))
                 continue
-            self._record_component_recovery("worker")
+            if (
+                self._worker_recovery_generation is None
+                or self.worker.ingestion_generation >= self._worker_recovery_generation
+            ):
+                self._worker_recovery_generation = None
+                self._record_component_recovery("worker")
             await asyncio.sleep(0)
             if worked:
                 continue

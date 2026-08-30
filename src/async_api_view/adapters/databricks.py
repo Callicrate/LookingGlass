@@ -2494,6 +2494,7 @@ class DatabricksWorker:
         self.runner = runner
         self.max_attempts = max_attempts
         self.heartbeat_seconds = heartbeat_seconds
+        self.ingestion_generation = 0
 
     async def startup(self) -> None:
         await self.runner.doctor()
@@ -2611,10 +2612,18 @@ class DatabricksWorker:
                             "action lifecycle heartbeat could not be persisted"
                         ) from exc
                     await asyncio.sleep(0)
-                result = await self.ingestion.ingest(
-                    batch,
-                    lease_id=lease.lease_id,
-                )
+                try:
+                    result = await self.ingestion.ingest(
+                        batch,
+                        lease_id=lease.lease_id,
+                    )
+                    self.ingestion_generation += 1
+                except ActionLeaseLost:
+                    return
+                except Exception as exc:
+                    raise LifecyclePersistenceFailure(
+                        "canonical observation ingestion could not be persisted"
+                    ) from exc
                 if result.status.value == "rejected":
                     error = ErrorClass.ADAPTER_CONTRACT_MISMATCH
                     if not await self._record_attempt(

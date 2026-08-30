@@ -45,13 +45,17 @@ class DurableCoordinator:
         self.lease_duration = lease_duration
 
     def _reject(self, work: IntentScopeWork, reason: str) -> CoordinatorResult:
-        self.store.set_intent_scope_disposition(
+        state = self.store.set_intent_scope_disposition(
             intent_scope_id=work.intent_scope_id,
             lease_id=work.lease_id,
             state=IntentScopeState.REJECTED,
             reason=reason,
         )
-        return CoordinatorResult(work.intent_scope_id, IntentScopeState.REJECTED, reason)
+        return CoordinatorResult(
+            work.intent_scope_id,
+            state,
+            "request_expired" if state is IntentScopeState.EXPIRED else reason,
+        )
 
     def _validate_target(self, work: IntentScopeWork) -> str | None:
         scope = work.scope
@@ -99,15 +103,13 @@ class DurableCoordinator:
         if work is None:
             return None
         if work.intent.expires_at is not None and work.intent.expires_at <= authority_time:
-            self.store.set_intent_scope_disposition(
+            state = self.store.set_intent_scope_disposition(
                 intent_scope_id=work.intent_scope_id,
                 lease_id=work.lease_id,
                 state=IntentScopeState.EXPIRED,
                 reason="request_expired",
             )
-            return CoordinatorResult(
-                work.intent_scope_id, IntentScopeState.EXPIRED, "request_expired"
-            )
+            return CoordinatorResult(work.intent_scope_id, state, "request_expired")
         invalid_reason = self._validate_target(work)
         if invalid_reason is not None:
             return self._reject(work, invalid_reason)
@@ -141,6 +143,10 @@ class DurableCoordinator:
                 capability=capability,
                 now=record_time,
             )
+            if action is None:
+                return CoordinatorResult(
+                    work.intent_scope_id, IntentScopeState.EXPIRED, "request_expired"
+                )
             return CoordinatorResult(
                 work.intent_scope_id,
                 IntentScopeState.COALESCED,
@@ -210,13 +216,17 @@ class DurableCoordinator:
             evidence=evidence,
         )
         if decision.kind.value == "satisfied":
-            self.store.set_intent_scope_disposition(
+            state = self.store.set_intent_scope_disposition(
                 intent_scope_id=work.intent_scope_id,
                 lease_id=work.lease_id,
                 state=IntentScopeState.SATISFIED,
                 reason="evidence_satisfied",
                 observation_id=decision.satisfying_observation_id,
             )
+            if state is IntentScopeState.EXPIRED:
+                return CoordinatorResult(
+                    work.intent_scope_id, IntentScopeState.EXPIRED, "request_expired"
+                )
             return CoordinatorResult(
                 work.intent_scope_id,
                 IntentScopeState.SATISFIED,
@@ -224,13 +234,17 @@ class DurableCoordinator:
                 satisfying_observation_id=decision.satisfying_observation_id,
             )
         if decision.kind.value == "defer":
-            self.store.set_intent_scope_disposition(
+            state = self.store.set_intent_scope_disposition(
                 intent_scope_id=work.intent_scope_id,
                 lease_id=work.lease_id,
                 state=IntentScopeState.DEFERRED,
                 reason="minimum_interval_not_elapsed",
                 eligible_at=decision.eligibility.eligible_at,
             )
+            if state is IntentScopeState.EXPIRED:
+                return CoordinatorResult(
+                    work.intent_scope_id, IntentScopeState.EXPIRED, "request_expired"
+                )
             return CoordinatorResult(
                 work.intent_scope_id,
                 IntentScopeState.DEFERRED,
@@ -243,6 +257,10 @@ class DurableCoordinator:
             capability=capability,
             now=record_time,
         )
+        if action is None:
+            return CoordinatorResult(
+                work.intent_scope_id, IntentScopeState.EXPIRED, "request_expired"
+            )
         state = IntentScopeState.ADMITTED if created else IntentScopeState.COALESCED
         return CoordinatorResult(
             work.intent_scope_id,

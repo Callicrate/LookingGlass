@@ -83,7 +83,10 @@ def _url_matches_request_origin(
     host = request.headers.get("host")
     if not host:
         return False
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
     if parsed.username is not None or parsed.password is not None:
         return False
     if parsed.scheme != request.url.scheme or parsed.netloc.lower() != host.lower():

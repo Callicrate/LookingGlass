@@ -351,7 +351,7 @@ def test_bootstrap_expires_and_restart_rejects_the_prior_session() -> None:
     now = [0.0]
     authorizer = LocalCallerAuthorizer(clock=lambda: now[0])
     token = authorizer.take_bootstrap_token()
-    now[0] = 601.0
+    now[0] = 600.0
 
     assert authorizer.redeem(token) is None
 
@@ -1289,6 +1289,24 @@ def test_refresh_requires_same_origin() -> None:
     )
 
     assert response.status_code == 403
+    assert backend.submitted == []
+
+
+@pytest.mark.parametrize("header", ["Origin", "Referer"])
+def test_refresh_rejects_malformed_origin_evidence(header: str) -> None:
+    backend = FakeBackend(dashboard_view=ready_dashboard())
+    client = client_for(backend)
+    token = csrf_from(client.get("/").text)
+
+    response = client.post(
+        "/refresh",
+        data=valid_form(token),
+        headers={header: "http://[::1"},
+    )
+
+    assert response.status_code == 403
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-security-policy"].startswith("default-src 'self'")
     assert backend.submitted == []
 
 

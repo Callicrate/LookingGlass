@@ -111,6 +111,8 @@ _SQLITE_BUSY_TIMEOUT_MS = 250
 _MAX_JSON_BYTES = 1_048_576
 _MAX_DIAGNOSTIC_LENGTH = 1_024
 _MAX_DUE_PROMOTIONS_PER_CLAIM = 1_000
+_MAX_ACTION_CONTRACT_QUARANTINES_PER_CLAIM = 100
+_SQLITE_MAX_INTEGER = (1 << 63) - 1
 _TERMINAL_ACTION_STATES = {
     ActionState.SATISFIED,
     ActionState.SUCCEEDED,
@@ -3079,6 +3081,39 @@ class SQLiteStore:
             is not None
         )
 
+    def _expire_intent_scope_if_due(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        intent_scope_id: str,
+        authority_now: datetime,
+    ) -> bool:
+        row = connection.execute(
+            """
+            SELECT intent.expires_at
+            FROM refresh_intent_scopes AS scope
+            JOIN refresh_intents AS intent ON intent.intent_id = scope.intent_id
+            WHERE scope.intent_scope_id = ?
+            """,
+            (intent_scope_id,),
+        ).fetchone()
+        expires_at = _dt(row["expires_at"]) if row is not None else None
+        if expires_at is None or expires_at > authority_now:
+            return False
+        connection.execute(
+            """
+            UPDATE refresh_intent_scopes
+            SET state = 'expired', disposition_reason = 'request_expired',
+                eligible_at = NULL, linked_action_id = NULL,
+                satisfying_observation_id = NULL, lease_id = NULL,
+                lease_worker_id = NULL, leased_until = NULL
+            WHERE intent_scope_id = ?
+            """,
+            (intent_scope_id,),
+        )
+        self._refresh_intent_aggregate(connection, intent_scope_id=intent_scope_id)
+        return True
+
     def set_intent_scope_disposition(
         self,
         *,
@@ -3089,7 +3124,7 @@ class SQLiteStore:
         eligible_at: datetime | None = None,
         action_id: str | None = None,
         observation_id: str | None = None,
-    ) -> None:
+    ) -> IntentScopeState:
         if state is IntentScopeState.LEASED:
             raise ValueError("leased is not a final coordinator disposition")
         require_contract_key(reason, "reason")
@@ -3106,6 +3141,12 @@ class SQLiteStore:
                 authority_now=authority_now,
             ):
                 raise ValueError("intent scope lease is no longer current")
+            if state is not IntentScopeState.EXPIRED and self._expire_intent_scope_if_due(
+                connection,
+                intent_scope_id=intent_scope_id,
+                authority_now=authority_now,
+            ):
+                return IntentScopeState.EXPIRED
             connection.execute(
                 """
                 UPDATE refresh_intent_scopes
@@ -3124,6 +3165,7 @@ class SQLiteStore:
                 ),
             )
             self._refresh_intent_aggregate(connection, intent_scope_id=intent_scope_id)
+        return state
 
     @staticmethod
     def _refresh_intent_aggregate(connection: sqlite3.Connection, *, intent_scope_id: str) -> None:
@@ -3855,7 +3897,7 @@ class SQLiteStore:
         binding: ConnectionBinding,
         capability: CapabilityBinding,
         now: datetime,
-    ) -> tuple[AdapterAction, bool]:
+    ) -> tuple[AdapterAction | None, bool]:
         """Atomically elect one active dedupe winner and attach this intent scope."""
         effective_scope = replace(work.scope, capability_key=capability.capability_key)
         legacy_scope = replace(effective_scope, capability_key=None)
@@ -3892,6 +3934,19 @@ class SQLiteStore:
         )
         with self._immediate_transaction() as connection:
             authority_now = self._current_time()
+            if not self._claim_is_current(
+                connection,
+                intent_scope_id=work.intent_scope_id,
+                lease_id=work.lease_id,
+                authority_now=authority_now,
+            ):
+                raise ValueError("intent scope lease is no longer current")
+            if self._expire_intent_scope_if_due(
+                connection,
+                intent_scope_id=work.intent_scope_id,
+                authority_now=authority_now,
+            ):
+                return None, False
             existing = self._active_action_by_dedupe(connection, dedupe_key)
             if existing is None and legacy_dedupe_key is not None:
                 existing = self._active_action_by_dedupe(connection, legacy_dedupe_key)
@@ -4005,6 +4060,7 @@ class SQLiteStore:
         with self._immediate_transaction() as connection:
             lease_now = self._current_time()
             leased_until = lease_now + _DEFAULT_LEASE
+            quarantined = 0
             while True:
                 row = connection.execute(
                     """
@@ -4025,7 +4081,40 @@ class SQLiteStore:
                         action_id=row["action_id"],
                         authority_now=lease_now,
                     )
+                    quarantined += 1
+                    if quarantined >= _MAX_ACTION_CONTRACT_QUARANTINES_PER_CLAIM:
+                        return None
                     continue
+                attempt_summary = connection.execute(
+                    """
+                    SELECT
+                        COALESCE(MAX(CASE WHEN typeof(ordinal) != 'integer' OR ordinal < 1
+                                          THEN 1 ELSE 0 END), 0),
+                        COALESCE(MAX(CASE WHEN typeof(ordinal) = 'integer' AND ordinal >= 1
+                                          THEN ordinal ELSE 0 END), 0)
+                    FROM action_attempts
+                    WHERE action_id = ?
+                    """,
+                    (row["action_id"],),
+                ).fetchone()
+                invalid_attempt = bool(attempt_summary[0])
+                max_ordinal = attempt_summary[1]
+                if (
+                    invalid_attempt
+                    or not isinstance(max_ordinal, int)
+                    or max_ordinal >= _SQLITE_MAX_INTEGER
+                ):
+                    self._terminalize_action_contract_failure(
+                        connection,
+                        action_id=row["action_id"],
+                        authority_now=lease_now,
+                        reason="malformed_attempt_contract",
+                    )
+                    quarantined += 1
+                    if quarantined >= _MAX_ACTION_CONTRACT_QUARANTINES_PER_CLAIM:
+                        return None
+                    continue
+                attempt_ordinal = max_ordinal + 1
                 break
             result = connection.execute(
                 """
@@ -4042,12 +4131,6 @@ class SQLiteStore:
             )
             if result.rowcount != 1:  # pragma: no cover - transaction invariant
                 return None
-            attempt_ordinal = int(
-                connection.execute(
-                    "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM action_attempts WHERE action_id = ?",
-                    (row["action_id"],),
-                ).fetchone()[0]
-            )
         return ActionLease(
             action=action,
             lease_id=lease_id,
@@ -4081,7 +4164,7 @@ class SQLiteStore:
                     redacted_diagnostic = NULL, retry_at = NULL
                 WHERE action_id = ?
                 """,
-                (_utc_text(started_at), action_id),
+                (_utc_text(lease_now), action_id),
             )
 
     def _require_live_action_lease(
@@ -4935,7 +5018,7 @@ class SQLiteStore:
                               AND leased_until > ?
                             """,
                             (
-                                _utc_text(now),
+                                _utc_text(authority_now),
                                 _utc_text(authority_now + _DEFAULT_LEASE),
                                 action_id,
                                 lease_id,
@@ -5593,11 +5676,17 @@ class SQLiteStore:
             ):
                 connection.execute(
                     """
-                    UPDATE remote_objects SET presence = 'present', last_seen_at = ?,
-                        last_seen_received_at = ?
+                    UPDATE remote_objects
+                    SET first_seen_at = MIN(first_seen_at, ?), presence = 'present',
+                        last_seen_at = ?, last_seen_received_at = ?
                     WHERE object_id = ?
                     """,
-                    (_utc_text(observed_at), _utc_text(received_at), row["object_id"]),
+                    (
+                        _utc_text(observed_at),
+                        _utc_text(observed_at),
+                        _utc_text(received_at),
+                        row["object_id"],
+                    ),
                 )
                 row = connection.execute(
                     "SELECT * FROM remote_objects WHERE object_id = ?", (row["object_id"],)
@@ -5657,12 +5746,14 @@ class SQLiteStore:
             ):
                 connection.execute(
                     """
-                    UPDATE remote_objects SET display_name = ?, presence = 'present',
-                        last_seen_at = ?, last_seen_received_at = ?
+                    UPDATE remote_objects
+                    SET display_name = ?, first_seen_at = MIN(first_seen_at, ?),
+                        presence = 'present', last_seen_at = ?, last_seen_received_at = ?
                     WHERE object_id = ?
                     """,
                     (
                         locator.display_name,
+                        _utc_text(observed_at),
                         _utc_text(observed_at),
                         _utc_text(received_at),
                         row["object_id"],

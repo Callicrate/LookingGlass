@@ -98,7 +98,7 @@ class LocalCallerAuthorizer:
             now = self._clock()
             if (
                 expected is None
-                or now > self._bootstrap_expires_at
+                or now >= self._bootstrap_expires_at
                 or not hmac.compare_digest(candidate, expected)
             ):
                 return None

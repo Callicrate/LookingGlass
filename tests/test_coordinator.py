@@ -944,6 +944,62 @@ def test_coordinator_expires_request_before_local_admission(tmp_path) -> None:
     assert store.list_actions() == ()
 
 
+def test_intent_expiry_during_coordinator_claim_fences_final_admission(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / "expiry-race.sqlite3", clock=lambda: current_time[0])
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    receipt = run(store.submit_refresh(_intent(scope, NOW, expires_at=NOW + timedelta(seconds=1))))
+    original_lease = store.lease_next_intent_scope
+
+    async def lease_then_expire(**kwargs):
+        work = await original_lease(**kwargs)
+        current_time[0] = NOW + timedelta(seconds=1)
+        return work
+
+    monkeypatch.setattr(store, "lease_next_intent_scope", lease_then_expire)
+
+    result = run(DurableCoordinator(store, worker_id="expiry-race").run_once(now=NOW))
+
+    assert result is not None and result.state is IntentScopeState.EXPIRED
+    assert result.reason == "request_expired"
+    assert store.list_intent_scopes(receipt.intent_id)[0].state is IntentScopeState.EXPIRED
+    assert store.list_actions() == ()
+
+
+@pytest.mark.parametrize(
+    "state",
+    [IntentScopeState.SATISFIED, IntentScopeState.DEFERRED, IntentScopeState.REJECTED],
+)
+def test_intent_expiry_fences_every_final_coordinator_disposition(tmp_path, state) -> None:
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / f"expired-{state.value}.sqlite3", clock=lambda: current_time[0])
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    receipt = run(store.submit_refresh(_intent(scope, NOW, expires_at=NOW + timedelta(seconds=1))))
+    work = run(store.lease_next_intent_scope(worker_id="coordinator", now=NOW))
+    assert work is not None
+    current_time[0] = NOW + timedelta(seconds=1)
+
+    effective = store.set_intent_scope_disposition(
+        intent_scope_id=work.intent_scope_id,
+        lease_id=work.lease_id,
+        state=state,
+        reason="candidate_disposition",
+    )
+
+    assert effective is IntentScopeState.EXPIRED
+    persisted = store.list_intent_scopes(receipt.intent_id)[0]
+    assert persisted.state is IntentScopeState.EXPIRED
+    assert persisted.disposition_reason == "request_expired"
+
+
 def test_future_caller_time_cannot_expire_request_before_store_time(tmp_path) -> None:
     current_time = [NOW]
     store = SQLiteStore(tmp_path / "caller-expired-intent.sqlite3", clock=lambda: current_time[0])

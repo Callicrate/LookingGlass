@@ -1973,7 +1973,7 @@ def test_capability_version_contract_and_coverage_policy_are_immutable(tmp_path)
 
 
 def test_failed_logical_action_anchors_cooldown_and_creates_one_event(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "state.sqlite3")
+    store = SQLiteStore(tmp_path / "state.sqlite3", clock=lambda: NOW)
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
     )
@@ -2113,6 +2113,25 @@ def test_action_leases_reject_stale_lifecycle_times_and_reclaim_with_store_clock
         lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
         assert lease is not None
         return store, action, lease, current_time
+
+    authority_store, authority_action, authority_lease, _authority_time = leased_action(
+        "caller-start-authority"
+    )
+    run(
+        authority_store.mark_running(
+            action_id=authority_action.action_id,
+            lease_id=authority_lease.lease_id,
+            started_at=NOW + timedelta(days=30),
+        )
+    )
+    assert authority_store.get_stored_action(authority_action.action_id).started_at == NOW
+    assert (
+        authority_store.scope_policy_state(
+            authority_action.requested_scopes[0]
+        ).latest_targeted_action_started_at
+        == NOW
+    )
+    authority_store.close()
 
     marked_store, marked_action, marked_lease, marked_time = leased_action("stale-mark")
     marked_time[0] = marked_lease.leased_until
@@ -2582,17 +2601,19 @@ def test_final_start_strictly_fences_expiry_and_renews_running_lease(tmp_path) -
     )
     just_before_expiry = renewed_lease.leased_until - timedelta(microseconds=1)
     renewed_time[0] = just_before_expiry
+    future_caller_time = just_before_expiry + timedelta(days=30)
     dispatch = run(
         renewed_store.authorize_start(
             action_id=renewed_action.action_id,
             lease_id=renewed_lease.lease_id,
             binding_revision=renewed_revision,
-            now=just_before_expiry,
+            now=future_caller_time,
         )
     )
     assert dispatch.disposition.value == "dispatch", dispatch
     running = renewed_store.get_stored_action(renewed_action.action_id)
     assert running is not None and running.state.value == "running"
+    assert running.started_at == just_before_expiry
     assert running.leased_until == just_before_expiry + timedelta(seconds=60)
     assert (
         run(
@@ -3382,6 +3403,125 @@ def test_malformed_action_contract_terminalizes_once_and_queue_progresses(tmp_pa
     assert all("TEMP B-TREE" not in row[3] for row in plan)
 
 
+@pytest.mark.parametrize("ordinal", [float("inf"), "1e309", 0, -1])
+def test_malformed_attempt_ordinal_terminalizes_once_and_queue_progresses(
+    tmp_path, ordinal: object
+) -> None:
+    store = SQLiteStore(tmp_path / "malformed-attempt.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+
+    def action_for(target_id: str) -> AdapterAction:
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, target_id),
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+        )
+        return AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="databricks.workspace.children.read",
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+
+    poisoned = action_for(str(uuid4()))
+    healthy = action_for(str(uuid4()))
+    run(store.enqueue(poisoned))
+    run(store.enqueue(healthy))
+    store._connection.execute(
+        "UPDATE adapter_actions SET record_created_at = ? WHERE action_id = ?",
+        ("2026-08-24T12:00:00.000000Z", poisoned.action_id),
+    )
+    store._connection.execute(
+        "UPDATE adapter_actions SET record_created_at = ? WHERE action_id = ?",
+        ("2026-08-24T12:00:01.000000Z", healthy.action_id),
+    )
+    store._connection.execute(
+        """
+        INSERT INTO action_attempts (attempt_id, action_id, ordinal, started_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (str(uuid4()), poisoned.action_id, ordinal, "2026-08-24T12:00:00.000000Z"),
+    )
+
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+
+    assert lease is not None and lease.action.action_id == healthy.action_id
+    poisoned_row = store._connection.execute(
+        "SELECT state, error_class FROM adapter_actions WHERE action_id = ?",
+        (poisoned.action_id,),
+    ).fetchone()
+    assert tuple(poisoned_row) == ("failed", "adapter_contract_mismatch")
+    events = store.list_operational_events(alertable_only=True)
+    assert len(events) == 1
+    assert events[0].action_id == poisoned.action_id
+    assert events[0].redacted_summary == "malformed_attempt_contract"
+
+
+def test_malformed_action_quarantine_is_bounded_per_queue_claim(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "bounded-action-quarantine.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    total = sqlite_storage._MAX_ACTION_CONTRACT_QUARANTINES_PER_CLAIM + 5
+    for _index in range(total):
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, uuid4()),
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+        )
+        run(
+            store.enqueue(
+                AdapterAction(
+                    action_id=uuid4(),
+                    correlation_id=uuid4(),
+                    system_id=seeded.system.system_id,
+                    connection_binding_id=seeded.connection_binding_id,
+                    adapter_key="databricks",
+                    adapter_version="1",
+                    capability_key="databricks.workspace.children.read",
+                    capability_version="1",
+                    target=scope.target,
+                    requested_scopes=(scope,),
+                )
+            )
+        )
+    store._connection.execute("UPDATE adapter_actions SET contract_version = 'unsupported'")
+
+    assert run(store.lease_next(adapter_key="databricks", worker_id="bounded", now=NOW)) is None
+    first_counts = dict(
+        store._connection.execute(
+            "SELECT state, COUNT(*) FROM adapter_actions GROUP BY state"
+        ).fetchall()
+    )
+    assert first_counts == {
+        "failed": sqlite_storage._MAX_ACTION_CONTRACT_QUARANTINES_PER_CLAIM,
+        "ready": 5,
+    }
+
+    assert run(store.lease_next(adapter_key="databricks", worker_id="bounded", now=NOW)) is None
+    assert (
+        store._connection.execute(
+            "SELECT COUNT(*) FROM adapter_actions WHERE state = 'ready'"
+        ).fetchone()[0]
+        == 0
+    )
+    events = store.list_operational_events(alertable_only=True)
+    assert len(events) == total
+    assert len({event.event_id for event in events}) == total
+
+
 def test_overlong_corrupt_action_id_quarantines_without_blocking_queue(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "overlong-action-poison.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
@@ -3805,6 +3945,64 @@ def test_workspace_root_uses_normalized_external_identity(tmp_path) -> None:
     assert run(store.ingest(batch)).status.value == "accepted"
     assert len(store.list_objects(system_id=seeded.system.system_id)) == 1
     assert store.get_facet_sync(seeded.workspace_root_object_id, "metadata") is not None
+
+
+@pytest.mark.parametrize("locator_kind", ["canonical", "external"])
+def test_first_accepted_observation_can_predate_local_object_creation(
+    tmp_path, locator_kind: str
+) -> None:
+    store = SQLiteStore(tmp_path / f"first-seen-{locator_kind}.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local",
+        profile="DEFAULT",
+        workspace_root="/Shared",
+        now=NOW + timedelta(seconds=1),
+    )
+    authority = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+        coverage=RefreshCoverage.COLLECTION_MEMBERS,
+    )
+    locator = (
+        ObjectLocator(object_type="folder", object_id=seeded.workspace_root_object_id)
+        if locator_kind == "canonical"
+        else ObjectLocator(
+            object_type="folder",
+            source_kind="databricks.workspace.folder",
+            external_key="workspace:/Shared",
+            display_name="Shared",
+        )
+    )
+    batch = ObservationBatch(
+        batch_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        observed_at=NOW,
+        received_at=NOW + timedelta(seconds=2),
+        facet_observations=(
+            FacetObservation(
+                observation_id=uuid4(),
+                target=locator,
+                facet="metadata",
+                facet_version="1",
+                update_mode=UpdateMode.SNAPSHOT,
+                field_coverage=FieldCoverage.COMPLETE,
+                payload={"path": "/Shared"},
+                authorized_by=(authority,),
+            ),
+        ),
+    )
+
+    assert run(store.ingest(batch)).status.value == "accepted"
+    root = store.get_object_sync(seeded.workspace_root_object_id)
+    assert root is not None
+    assert root.first_seen_at == NOW
+    assert root.last_seen_at == NOW
 
 
 def test_legacy_pre_digest_batch_redelivery_backfills_only_exact_match(tmp_path) -> None:
