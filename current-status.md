@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 16:55 ET
+Updated: 2026-08-30 17:00 ET
 
 ## Contents
 
@@ -22,7 +22,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` includes `56d3a41`, the independently cleared configuration-repair/generation-fencing implementation.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-162400.md` is closed after one high authority-generation bridge and one medium presentation/dispatch timestamp split passed exact behavior, dispatch, rollback, real migration, independent-review, and package gates.
+- Active review round: `critical-reviews/20260830-170000.md` is testing whether applied migration versions bind to exact bytes across source, installed wheels, legacy adoption, rollback, backup, and reopen.
 - Latest checkpoint: `progress/20260830-162005.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 16:16 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and forum readiness. Topic 40 remains at post 13 pending clean closure evidence.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -67,6 +67,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close stored-state corruption-containment and read-availability review.
 - [x] Close authority-read containment and readable-view query-plan review.
 - [x] Close desired-configuration repair and restart-atomicity review.
+- [ ] Close migration byte-provenance and ledger-immutability review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
