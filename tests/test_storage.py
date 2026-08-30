@@ -5,6 +5,7 @@ import stat
 import subprocess
 import threading
 import time
+import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -83,6 +84,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0018_action_state_projections",
             "0019_web_cursor_indexes",
             "0020_retired_authorities",
+            "0021_intent_aggregate_indexes",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -148,7 +150,7 @@ def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_
     with SQLiteStore(path) as store:
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
         )
 
 
@@ -163,7 +165,7 @@ def test_new_database_is_migrated_and_marked_before_wal_activation(
         assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
         )
         original(store)
 
@@ -458,7 +460,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -496,7 +498,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -531,7 +533,7 @@ def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_pa
 
     check = sqlite3.connect(path)
     try:
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -720,7 +722,7 @@ def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path)
     check = sqlite3.connect(destination)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
     finally:
         check.close()
 
@@ -1578,6 +1580,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0018_action_state_projections",
         "0019_web_cursor_indexes",
         "0020_retired_authorities",
+        "0021_intent_aggregate_indexes",
     )
     assert versions == (expected,) * workers
 
@@ -1721,6 +1724,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0018_action_state_projections",
             "0019_web_cursor_indexes",
             "0020_retired_authorities",
+            "0021_intent_aggregate_indexes",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -2704,6 +2708,157 @@ def test_sqlite_write_contention_is_bounded_for_event_loop_callers(tmp_path: Pat
         store.close()
     elapsed = time.monotonic() - started
     assert elapsed < 0.75
+
+
+def test_startup_does_not_materialize_large_canonical_deferred_backlog(tmp_path: Path) -> None:
+    path = tmp_path / "startup-backlog.sqlite3"
+    store = SQLiteStore(path)
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+    )
+    receipt = run(
+        store.submit_refresh(
+            RefreshIntent(
+                intent_id=uuid4(),
+                idempotency_key="startup-backlog",
+                origin=RefreshOrigin.MANUAL,
+                actor_id="local-user",
+                requested_at=NOW,
+                scopes=(scope,),
+            )
+        )
+    )
+    store._connection.execute(
+        """
+        WITH RECURSIVE item(number) AS (
+            VALUES(1)
+            UNION ALL
+            SELECT number + 1 FROM item WHERE number < 50000
+        )
+        INSERT INTO refresh_intent_scopes (
+            intent_scope_id, intent_id, system_id, target_kind, target_id,
+            object_type, facet, capability_key, coverage, field_mask_json,
+            state, eligible_at, queue_priority, queue_requested_at
+        )
+        SELECT printf('future-%06d', item.number), scope.intent_id, scope.system_id,
+               scope.target_kind, scope.target_id, scope.object_type, scope.facet,
+               scope.capability_key, scope.coverage, scope.field_mask_json,
+               'deferred', '2099-01-01T00:00:00.000000Z', 100,
+               '2000-01-01T00:00:00.000000Z'
+        FROM item
+        CROSS JOIN refresh_intent_scopes AS scope
+        WHERE scope.intent_scope_id = ?
+        """,
+        (receipt.scope_ids[0],),
+    )
+    store.close()
+
+    tracemalloc.start()
+    started = time.perf_counter()
+    with SQLiteStore(path):
+        pass
+    elapsed = time.perf_counter() - started
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert elapsed < 3.0
+    assert peak < 16 * 1024 * 1024
+
+
+def test_authority_cancellation_scales_linearly_across_many_intents(tmp_path: Path) -> None:
+    with SQLiteStore(tmp_path / "authority-cancellation.sqlite3") as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+        )
+        now_text = NOW.isoformat(timespec="microseconds").replace("+00:00", "Z")
+        store._connection.execute(
+            """
+            WITH RECURSIVE item(number) AS (
+                VALUES(1)
+                UNION ALL
+                SELECT number + 1 FROM item WHERE number < 10000
+            )
+            INSERT INTO refresh_intents (
+                intent_id, idempotency_key, origin, actor_id, requested_at,
+                priority, aggregate_state, contract_version, accepted_at
+            )
+            SELECT printf('bulk-intent-%06d', number),
+                   printf('bulk-idempotency-%06d', number),
+                   'manual', 'local-user', ?, 100, 'open', '1', ?
+            FROM item
+            """,
+            (now_text, now_text),
+        )
+        store._connection.execute(
+            """
+            WITH RECURSIVE item(number) AS (
+                VALUES(1)
+                UNION ALL
+                SELECT number + 1 FROM item WHERE number < 10000
+            )
+            INSERT INTO refresh_intent_scopes (
+                intent_scope_id, intent_id, system_id, target_kind, target_id,
+                object_type, facet, capability_key, coverage, field_mask_json,
+                state, queue_priority, queue_requested_at
+            )
+            SELECT printf('bulk-scope-%06d', number),
+                   printf('bulk-intent-%06d', number), ?, ?, ?, ?, ?, ?, ?, ?,
+                   'queued', 100, ?
+            FROM item
+            """,
+            (
+                scope.system_id,
+                scope.target.kind.value,
+                scope.target.target_id,
+                scope.object_type,
+                scope.facet,
+                scope.capability_key,
+                scope.coverage.value,
+                "[]",
+                now_text,
+            ),
+        )
+        progress_callbacks = 0
+
+        def count_vm_steps() -> int:
+            nonlocal progress_callbacks
+            progress_callbacks += 1
+            return 0
+
+        store._connection.set_progress_handler(count_vm_steps, 100)
+        started = time.perf_counter()
+        try:
+            store.set_authority_retired(scope.system_id, retired=True, now=NOW)
+        finally:
+            store._connection.set_progress_handler(None, 0)
+        elapsed = time.perf_counter() - started
+
+        assert elapsed < 3.0
+        assert progress_callbacks < 200_000
+        assert (
+            store._connection.execute(
+                "SELECT COUNT(*) FROM refresh_intent_scopes WHERE state = 'cancelled'"
+            ).fetchone()[0]
+            == 10_000
+        )
+        assert (
+            store._connection.execute(
+                "SELECT COUNT(*) FROM refresh_intents WHERE aggregate_state = 'complete'"
+            ).fetchone()[0]
+            == 10_000
+        )
 
 
 def test_failed_attempt_event_is_idempotent_with_attempt_replay(tmp_path) -> None:

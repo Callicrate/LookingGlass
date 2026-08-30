@@ -850,6 +850,12 @@ class SQLiteStore:
             raise
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
+        self._connection.create_function(
+            "rookery_is_canonical_timestamp",
+            1,
+            _stored_timestamp_is_canonical,
+            deterministic=True,
+        )
         self._lock = threading.RLock()
         try:
             with self._lock:
@@ -982,7 +988,15 @@ class SQLiteStore:
         scope_rows = connection.execute(
             """
             SELECT * FROM refresh_intent_scopes
-            WHERE state IN ('leased', 'deferred')
+            WHERE (
+                state = 'leased' AND (
+                    lease_id IS NULL OR lease_worker_id IS NULL
+                    OR rookery_is_canonical_timestamp(leased_until) = 0
+                )
+            ) OR (
+                state = 'deferred' AND eligible_at IS NOT NULL
+                AND rookery_is_canonical_timestamp(eligible_at) = 0
+            )
             ORDER BY queue_requested_at, intent_scope_id
             """
         ).fetchall()
@@ -1007,7 +1021,14 @@ class SQLiteStore:
         action_rows = connection.execute(
             """
             SELECT * FROM adapter_actions
-            WHERE state IN ('leased', 'running', 'retry_wait')
+            WHERE (
+                state IN ('leased', 'running') AND (
+                    lease_id IS NULL OR lease_worker_id IS NULL
+                    OR rookery_is_canonical_timestamp(leased_until) = 0
+                )
+            ) OR (
+                state = 'retry_wait' AND rookery_is_canonical_timestamp(retry_at) = 0
+            )
             ORDER BY record_created_at, action_id
             """
         ).fetchall()
@@ -1416,60 +1437,72 @@ class SQLiteStore:
         if not system_ids:
             return
         encoded_system_ids = _json_text(list(system_ids), field_name="authority system IDs")
-        action_rows = connection.execute(
+        connection.execute(
             """
-            SELECT action_id FROM adapter_actions
+            UPDATE refresh_intent_scopes
+            SET state = 'cancelled', disposition_reason = ?, eligible_at = NULL,
+                lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
+            WHERE intent_scope_id IN (
+                SELECT link.intent_scope_id
+                FROM action_intent_scopes AS link
+                JOIN adapter_actions AS action ON action.action_id = link.action_id
+                WHERE action.system_id IN (SELECT value FROM json_each(?))
+                  AND action.state IN ('ready', 'leased', 'running', 'retry_wait')
+            ) AND state IN ('admitted', 'coalesced')
+            """,
+            (reason, encoded_system_ids),
+        )
+        connection.execute(
+            """
+            UPDATE adapter_actions
+            SET state = 'cancelled', completed_at = ?, lease_id = NULL,
+                lease_worker_id = NULL, leased_until = NULL, retry_at = NULL,
+                error_class = ?, redacted_diagnostic = ?
             WHERE system_id IN (SELECT value FROM json_each(?))
               AND state IN ('ready', 'leased', 'running', 'retry_wait')
             """,
-            (encoded_system_ids,),
-        ).fetchall()
-        action_ids = tuple(row["action_id"] for row in action_rows)
-        for action_id in action_ids:
-            connection.execute(
-                """
-                UPDATE refresh_intent_scopes
-                SET state = 'cancelled', disposition_reason = ?, eligible_at = NULL,
-                    lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
-                WHERE intent_scope_id IN (
-                    SELECT intent_scope_id FROM action_intent_scopes WHERE action_id = ?
-                ) AND state IN ('admitted', 'coalesced')
-                """,
-                (reason, action_id),
-            )
-            connection.execute(
-                """
-                UPDATE adapter_actions
-                SET state = 'cancelled', completed_at = ?, lease_id = NULL,
-                    lease_worker_id = NULL, leased_until = NULL, retry_at = NULL,
-                    error_class = ?, redacted_diagnostic = ?
-                WHERE action_id = ?
-                """,
-                (now_text, ErrorClass.LOCAL_CANCELLATION.value, reason, action_id),
-            )
-            self._refresh_action_parent_aggregates(connection, action_id=action_id)
-        scope_rows = connection.execute(
+            (
+                now_text,
+                ErrorClass.LOCAL_CANCELLATION.value,
+                reason,
+                encoded_system_ids,
+            ),
+        )
+        connection.execute(
             """
-            SELECT intent_scope_id FROM refresh_intent_scopes
+            UPDATE refresh_intent_scopes
+            SET state = 'cancelled', disposition_reason = ?, eligible_at = NULL,
+                lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
             WHERE system_id IN (SELECT value FROM json_each(?))
               AND state IN ('queued', 'leased', 'deferred')
             """,
+            (reason, encoded_system_ids),
+        )
+        connection.execute(
+            """
+            UPDATE refresh_intents AS intent
+            SET aggregate_state = CASE WHEN EXISTS (
+                SELECT 1
+                FROM refresh_intent_scopes AS scope
+                    INDEXED BY ix_refresh_intent_scopes_intent_system
+                LEFT JOIN adapter_actions AS action
+                    ON action.action_id = scope.linked_action_id
+                WHERE scope.intent_id = intent.intent_id
+                  AND scope.state NOT IN ('satisfied', 'rejected', 'expired', 'cancelled')
+                  AND COALESCE(action.state, '') NOT IN (
+                      'satisfied', 'succeeded', 'partial', 'failed', 'cancelled'
+                  )
+            ) THEN 'open' ELSE 'complete' END
+            WHERE EXISTS (
+                SELECT 1
+                FROM refresh_intent_scopes AS affected
+                    INDEXED BY ix_refresh_intent_scopes_intent_system
+                WHERE affected.intent_id = intent.intent_id
+                  AND affected.system_id IN (SELECT value FROM json_each(?))
+            )
+            """,
             (encoded_system_ids,),
-        ).fetchall()
-        for row in scope_rows:
-            connection.execute(
-                """
-                UPDATE refresh_intent_scopes
-                SET state = 'cancelled', disposition_reason = ?, eligible_at = NULL,
-                    lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
-                WHERE intent_scope_id = ?
-                """,
-                (reason, row["intent_scope_id"]),
-            )
-            self._refresh_intent_aggregate(
-                connection,
-                intent_scope_id=row["intent_scope_id"],
-            )
+        )
 
     def set_authority_retired(
         self,
