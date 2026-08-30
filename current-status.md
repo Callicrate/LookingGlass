@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 23:43 ET
+Updated: 2026-08-30 00:00 ET
 
 ## Contents
 
@@ -22,7 +22,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Active review round: the high finding from `critical-reviews/20260829-221329.md` is repaired and independently cleared; two medium storage findings and one low release-engineering finding remain.
-- Latest checkpoint: `progress/20260829-231525.md`.
+- Latest checkpoint: `progress/20260830-000018.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum, notifications, and all six BookStack books are available.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -290,6 +290,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - CR-01 is closed locally: `serve` exclusively owns exact IPv4 and IPv6 loopback listeners before activation disclosure, fails closed on partial reservation, uses Windows-exclusive and POSIX restart-safe socket options, and passes process-level bind/interception regressions.
 - Real Windows Chrome and Ubuntu/WSL Chromium smokes each reached the random Rookery origin through both families, denied competing exact binds, and verified native bootstrap 303 plus authenticated dashboard 200.
 - The final CR-01 Windows gate passes 456 tests with two intentional platform skips at 89% branch coverage; independent security re-review found no medium-or-higher residual defect.
+- The 00:00 storage checkpoint has CR-02/CR-03 implemented but not yet committed: existing database identity is preflighted read-only before WAL/write access, state and backup files are current-user restricted, redirects/hardlinks fail closed, and Git worktree roots cannot become state directories.
+- Current focused storage evidence is green at 91 Windows tests with three platform skips, 92 Ubuntu/WSL tests with two platform skips, and 174 config/Databricks/composition tests with one Windows privilege skip; independent review and the full gates remain before commit.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
