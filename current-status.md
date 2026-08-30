@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 02:45 ET
+Updated: 2026-08-30 02:49 ET
 
 ## Contents
 
@@ -22,7 +22,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 7 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: all eight findings in `critical-reviews/20260830-020602.md` are implemented and cross-platform green; the exact-sdist follow-up is the only remaining independent closure check.
+- Active review round: all eight findings in `critical-reviews/20260830-020602.md` are implemented, cross-platform green, independently re-reviewed, and committed.
 - Latest checkpoint: `progress/20260830-024554.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the recovery remediation follow-up is verified at topic 40, post 2 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -504,12 +504,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Recovery now quarantines malformed state-dependent timing at store reopen, runtime SQLite contention is bounded after startup, background batches yield, and pre-set wake events cannot be lost; focused independent review found no blocking defect.
 - Release verification now checks an exact Git-aware sdist manifest, every included source byte, unsafe archive members, the exact wheel package tree, metadata/dependencies/README, RECORD digests, installed assets, and byte-identical constrained sdist reconstruction.
 - Exact-current Windows and Ubuntu/WSL gates pass at 509/8 and 511/6; the honest branch-only percentages are 77.57% and 76.99%, not the prior combined percentages mislabeled as branch coverage.
+- Final exact-sdist follow-up cleared missing/unexpected files, included-source byte parity, root/path validation before directory skipping, duplicate files, symlinks/hardlinks/special members, and the fixed Git subprocess. Repeated post-commit Windows archives are byte-identical at sdist `5C4334876A03332D72495E5993665222B56544B1E2C9DF429ECE341F76BC58DD` and wheel `C4EA4FDE7CC8147DE19D982E2E611031EF88F133D51E3AD300E3310D34A4A3F3`.
 
 ## Risks / watch list
 
 - The architecture document describes deferred capabilities beyond the implemented slice; documentation must keep current behavior distinct from roadmap behavior.
 - Local browser/debug data is present under `.local/` and must remain untracked.
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
-- The first two critical-review ledgers have no remaining open finding; all eight findings in the fresh 02:06 ledger are implemented and green, with final exact-sdist reviewer closure pending. Live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
+- All three critical-review ledgers have no remaining open finding. Live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
