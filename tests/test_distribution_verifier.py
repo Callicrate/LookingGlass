@@ -1,10 +1,24 @@
 import json
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 import pytest
-from scripts.verify_distribution import (
-    locked_installed_requirements,
-    validate_installed_audit,
-)
+
+
+def _load_script(name: str, filename: str):
+    spec = spec_from_file_location(name, Path(__file__).parents[1] / "scripts" / filename)
+    if spec is None or spec.loader is None:  # pragma: no cover - test environment invariant
+        raise RuntimeError(f"could not load {filename}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_COVERAGE = _load_script("rookery_check_coverage", "check_coverage.py")
+_DISTRIBUTION = _load_script("rookery_verify_distribution_unit", "verify_distribution.py")
+validate_coverage_totals = _COVERAGE.validate_coverage_totals
+locked_installed_requirements = _DISTRIBUTION.locked_installed_requirements
+validate_installed_audit = _DISTRIBUTION.validate_installed_audit
 
 
 def test_locked_installed_requirements_excludes_local_wheel_and_requires_exact_versions() -> None:
@@ -61,3 +75,24 @@ def test_installed_audit_rejects_count_vulnerability_and_status_mismatches(
         ),
         expected_packages=2,
     )
+
+
+def test_coverage_floors_distinguish_statement_branch_and_combined_results() -> None:
+    assert validate_coverage_totals(
+        {
+            "covered_lines": 900,
+            "num_statements": 1000,
+            "covered_branches": 750,
+            "num_branches": 1000,
+        }
+    ) == (90.0, 75.0, 82.5)
+
+    with pytest.raises(RuntimeError, match="branch coverage"):
+        validate_coverage_totals(
+            {
+                "covered_lines": 950,
+                "num_statements": 1000,
+                "covered_branches": 749,
+                "num_branches": 1000,
+            }
+        )
