@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 20:41 ET
+Updated: 2026-08-29 20:44 ET
 
 ## Goal
 
@@ -255,7 +255,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Exact 50x1,000 regression, cycle/depth/count boundaries, and cross-platform full gates are clear at 446 passed plus one complementary platform skip.
 - Architecture guidance now records the shared JSON and Databricks input/collection/column/canonical-part resource boundaries explicitly.
 - A holistic config/runtime/CLI, coordinator/worker/ingestion, web authorization/truth, package/CI, and operator-flow review found no release hold; its only wake-event candidate was withdrawn as unreproduced.
-- Repeated exact-head Windows builds are byte-identical at SHA-256 `CA19680F...56305` for the sdist and `45C7D6A6...E664D` for the wheel; installed-distribution verification remains 82/61/30.
+- Repeated exact-head Windows builds are byte-identical at SHA-256 `DFDF85F5...2E4CF` for the sdist and `45C7D6A6...E664D` for the wheel; installed-distribution verification remains 82/61/30.
 - A failure-path audit reproduced attempt/completion persistence exceptions being swallowed while the dashboard claimed a healthy worker and left the action running until lease recovery.
 - The lifecycle port now distinguishes expected `ActionLeaseLost` fencing from `LifecyclePersistenceFailure`; attempt, completion, timed heartbeat, and multipart heartbeat storage faults reach runtime supervision, degrade refresh health, and emit one redacted idempotent outage event.
 - Real SQLite heartbeat fencing now rejects exact expiry and raises the domain fence rather than creating a false outage; record/complete and heartbeat persistence regressions are independently clear.
