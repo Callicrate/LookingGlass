@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 04:31 ET
+Updated: 2026-08-30 04:34 ET
 
 ## Contents
 
@@ -523,6 +523,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Exact post-fix distributions contain 87 sdist entries, 64 wheel entries, and 32 installed runtime assets on both platforms.
 - Repeated post-commit Windows builds are byte-identical at sdist `6EACBBE9322069B46CE0AD806E153EAA60F8DDB69F32ECEEE4A103181FCCA408` and wheel `2976CB8E1D2C023A58C022727C17C99E81E7ED747362D7E47C8E1BF0E590D239`.
 - The 04:31 Murmuration Tend pass published the committed closure idempotently as topic 40, post 4 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
+- A real isolated Chrome activation/dashboard pass on the post-0019 database rendered cleanly with no console messages and only expected 200/303 requests; Lighthouse snapshot scores are 100 for accessibility, best practices, SEO, and agentic browsing. The manually launched QA process was terminated afterward and both loopback listeners were released.
 
 ## Risks / watch list
 
