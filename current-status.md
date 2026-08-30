@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 19:18 ET
+Updated: 2026-08-30 19:56 ET
 
 ## Contents
 
@@ -17,13 +17,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 689 passed / 8 platform skips; Ubuntu/WSL 691 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained builds, exact distribution verification, and installed-wheel smoke pass on both.
+- Latest checks: Windows 694 passed / 8 platform skips; Ubuntu/WSL 695 passed / 7 platform skips. Format, standard/security/performance lint, lock/audit, constrained builds, exact distribution verification, and installed-wheel smoke pass on both.
 - Coverage: Windows 89.99% statements / 76.43% branch-only / 86.71% combined; Ubuntu/WSL 87.52% / 75.24% / 84.55%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` includes `5be5f90`, the independently cleared visual state-semantics implementation.
+- Version control: local `main` includes `5f3e963`, the independently cleared hermetic verification implementation.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-191800.md` is testing fixed-port, ambient-state, Windows/WSL, interruption, subprocess, and release-verifier hermeticity.
-- Latest checkpoint: `progress/20260830-182251.md`.
+- Latest review round: `critical-reviews/20260830-191800.md` is closed with no remaining finding after fixed-port, ambient-state, Windows/WSL, interruption, subprocess, and release-evidence hermeticity review.
+- Latest checkpoint: `progress/20260830-192214.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 18:43 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and published the clean operator closure as topic 40 post 15.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -70,7 +70,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close migration byte-provenance and ledger-immutability review.
 - [x] Close operator failure-recovery and error-surface review.
 - [x] Close visual state-semantics and accessible-scanability review.
-- [ ] Close hermetic test and verification-cleanup review.
+- [x] Close hermetic test and verification-cleanup review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
