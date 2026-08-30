@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 12:47 ET
+Updated: 2026-08-30 12:51 ET
 
 ## Contents
 
@@ -24,7 +24,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Active review round: `critical-reviews/20260830-120045.md` is closed in commit `d8c92ba` after three medium worker-record, receipt-order, and lease-authority defects plus two re-review residuals were repaired and independently cleared.
 - Latest checkpoint: `progress/20260830-124634.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 10 record earlier committed closures, and post 11 records the independently cleared runtime, temporal, and recovery closure.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 11 record earlier committed closures, and post 12 records the write-headroom and monotonic-time closures.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -590,6 +590,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Murmuration topic 40 post 11 records commits `b959697` and `ff03b47` plus the clean `ff03b47` checksum manifest under exact `openai/gpt-5.6-sol` provenance.
 - Commit `0f32af3` protects caller-available write headroom before new intent/action/dispatch work, defers temporary capacity loss without remote execution, preserves terminal writes, and preflights online backup page bytes plus reserve.
 - Commit `d8c92ba` separates monotonic lease authority, nondecreasing worker records, and explicit durable receipt provenance; real state is at migration 0023 with two verified pre-migration backups.
+- Murmuration topic 40 post 12 records commits `0f32af3`, `8f42f64`, `d8c92ba`, and `4a2717a` plus the clean `4a2717a` manifest under exact `openai/gpt-5.6-sol` provenance.
 
 ## Risks / watch list
 
