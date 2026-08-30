@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 07:28 ET
+Updated: 2026-08-30 08:09 ET
 
 ## Contents
 
@@ -22,8 +22,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: fresh `critical-reviews/20260830-063705.md` is closed after one high profile-parser authority defect and three medium TLS/continuation/local-recovery defects were repaired and independently cleared through repeated real-CLI exploit probes.
-- Latest checkpoint: `progress/20260830-070836.md`.
+- Active review round: `critical-reviews/20260830-072928.md` reproduces four medium Python-tool, CLI-certification, process-tree, and lease-clock defects. Python and version certification are clear; process-tree and lease-clock final re-reviews are running.
+- Latest checkpoint: `progress/20260830-080953.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, post 7 records profile/startup closure, and post 8 records strict parser/local-recovery closure under that exact identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -64,6 +64,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Benchmark/document migration-0018 offline upgrade resource envelopes.
 - [x] Decouple local backup and authority lifecycle from unrelated remote semantic validation.
 - [x] Close selected-profile parser equivalence, quoted-key authority, TLS, and continuation review.
+- [x] Pin documented tool install and force-upgrade to Python 3.12 with disposable verification.
+- [x] Certify exact Databricks CLI versions and revalidate changed executable bytes before dispatch.
+- [ ] Close complete CLI process-tree ownership and cleanup review.
+- [ ] Close store-owned action lease clock review.
 - [x] Attribute every visible fact/action/alert/refresh to one unique authority.
 - [x] Distinguish historical/paused cache from unsupported capability.
 - [x] Reject placeholder authority before durable state creation.
@@ -555,6 +559,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Strict selected-section preflight now excludes DEFAULT credentials, rejects quoted/noncanonical route and TLS keys, rejects continuation/multiline ambiguity, and applies pinned CLI comment precedence. Independent exploit re-review is clear.
 - Global physical-line preflight now rejects section-consuming syntax in selected and unselected profiles before authority interpretation; representable retained comment fragments use pinned CLI backtick semantics and otherwise fail closed. Repeated real CLI source/snapshot probes are clear.
 - Exact post-fix verification passes at 582/8 on Windows and 584/6 on Ubuntu/WSL. Repeated packages contain 89 sdist entries, 66 wheel entries, and 34 installed runtime assets; Windows hashes are sdist `1F70F5509C6A1E94F1E6446F3D91A9924C2C1A4FF92B5A618F6F9D15FE674655` and wheel `8FFCE045F45161A8C14B2516592F4819B992528ABE3DAF63CE96D514E69223AF`.
+- Fresh compatibility review `critical-reviews/20260830-072928.md` reproduces four medium defects across tool Python selection, CLI certification, descendant lifetime, and stale caller-time lease authority.
+- Python-pinned disposable tool install/upgrade and exact CLI 0.298.0 certification plus per-dispatch executable witnessing are independently clear.
+- POSIX process-group and Windows suspended Job ownership now cover timeout and normal descendant cleanup; the prior Windows cleanup race is under final re-review.
+- Action lifecycle authority now derives current lease validity and extension from an injectable store clock; focused storage/runtime-stop/action-ingestion regressions are green and final lease-path review is running.
 
 ## Risks / watch list
 
@@ -566,5 +574,6 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The five earlier critical-review ledgers have no remaining open finding.
 - The 05:28 profile/startup ledger and all five earlier ledgers have no remaining open finding.
 - The 06:37 recovery/parser ledger and all earlier ledgers have no remaining open finding.
+- The 07:29 compatibility/upgrade ledger remains open until process-tree and lease-clock re-review plus exact full gates close.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
