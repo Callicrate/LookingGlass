@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -4289,6 +4289,107 @@ def test_regressed_databricks_local_time_uses_strict_store_receipt_order(tmp_pat
     projected = reopened.get_facet_sync(seeded.workspace_root_object_id, "metadata")
     assert projected is not None and projected.payload == {"value": "third"}
     assert run(reopened.ingest(third)).status is IngestionStatus.DUPLICATE
+
+
+def test_concurrent_stores_serialize_receipt_replay_and_provenance(tmp_path) -> None:
+    path = tmp_path / "concurrent-receipts.sqlite3"
+    current_time = [NOW]
+    first_store = SQLiteStore(path, clock=lambda: current_time[0])
+    seeded = SystemBootstrapService(first_store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    second_store = SQLiteStore(path, clock=lambda: current_time[0])
+    authority = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+        coverage=RefreshCoverage.COLLECTION_MEMBERS,
+    )
+
+    def batch(
+        value: str,
+        *,
+        batch_id: str | UUID | None = None,
+        local_time: bool = True,
+    ) -> ObservationBatch:
+        return ObservationBatch(
+            batch_id=batch_id or uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=NOW,
+            received_at=NOW,
+            observed_at_is_local=local_time,
+            facet_observations=(
+                FacetObservation(
+                    observation_id=uuid4(),
+                    target=ObjectLocator(
+                        object_type="folder",
+                        source_kind="databricks.workspace.folder",
+                        external_key="workspace:/Shared",
+                        display_name="Shared",
+                    ),
+                    facet="metadata",
+                    facet_version="1",
+                    update_mode=UpdateMode.SNAPSHOT,
+                    field_coverage=FieldCoverage.COMPLETE,
+                    payload={"value": value},
+                    authorized_by=(authority,),
+                ),
+            ),
+        )
+
+    def race(left: ObservationBatch, right: ObservationBatch) -> tuple[IngestionStatus, ...]:
+        barrier = threading.Barrier(2)
+
+        def ingest(store: SQLiteStore, candidate: ObservationBatch) -> IngestionStatus:
+            barrier.wait(timeout=5)
+            return run(store.ingest(candidate)).status
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = (
+                executor.submit(ingest, first_store, left),
+                executor.submit(ingest, second_store, right),
+            )
+            return tuple(future.result(timeout=5) for future in futures)
+
+    left = batch("left")
+    right = batch("right")
+    assert race(left, right) == (IngestionStatus.ACCEPTED, IngestionStatus.ACCEPTED)
+    receipt_rows = first_store._connection.execute(
+        """
+        SELECT batch_id, received_at FROM observation_batches
+        WHERE batch_id IN (?, ?) ORDER BY received_at, batch_id
+        """,
+        (left.batch_id, right.batch_id),
+    ).fetchall()
+    assert len(receipt_rows) == 2
+    assert receipt_rows[0]["received_at"] < receipt_rows[1]["received_at"]
+    expected = "left" if receipt_rows[1]["batch_id"] == left.batch_id else "right"
+    projected = first_store.get_facet_sync(seeded.workspace_root_object_id, "metadata")
+    assert projected is not None and projected.payload == {"value": expected}
+
+    replay = batch("replay")
+    assert set(race(replay, replay)) == {IngestionStatus.ACCEPTED, IngestionStatus.DUPLICATE}
+    shared_id = uuid4()
+    local = batch("local", batch_id=shared_id, local_time=True)
+    source = replace(local, observed_at_is_local=False)
+    assert set(race(local, source)) == {IngestionStatus.ACCEPTED, IngestionStatus.REJECTED}
+
+    plan = first_store._connection.execute(
+        """
+        EXPLAIN QUERY PLAN
+        SELECT received_at FROM observation_batches
+            INDEXED BY ix_observation_batches_received_at
+        ORDER BY received_at DESC, batch_id DESC
+        LIMIT 1
+        """
+    ).fetchall()
+    assert any("ix_observation_batches_received_at" in row[3] for row in plan)
+    assert all("TEMP B-TREE" not in row[3] for row in plan)
 
 
 @pytest.mark.parametrize("locator_kind", ["canonical", "external"])
