@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 02:51 ET
+Updated: 2026-08-30 02:55 ET
 
 ## Contents
 
@@ -46,7 +46,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Reconcile documentation claims with the current implemented surface.
 - [x] Independently review and verify each consequential change set before committing.
 - [x] Surface a bounded recent projection of durable alertable failures.
-- [x] Enforce an aggregate branch-coverage floor in CI.
+- [x] Enforce aggregate coverage plus explicit branch-only measurement in CI.
 - [x] Choose bounded object/containment navigation over lower-value full alert history filtering.
 - [x] Add bounded, filterable full alert history without expanding dashboard query cost.
 - [x] Require an ephemeral, process-local browser session before exposing cached data or refresh authority.
@@ -216,7 +216,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Schema startup now uses one outer immediate transaction for every migration, ledger write, required-index repair, final validation, and application-ID change; any failure restores the pre-startup logical state.
 - The v10 drift regression proves failed startup preserves both duplicate overrides, all ten original ledger entries, absent later schema/indexes, the original drifted DDL, and markerless application ID; partial `0002` recovery and concurrent initialization remain green.
 - Independent review reproduced the rollback and cleared 39 storage tests plus 80 threaded and 48 process-level concurrent opens with no medium-or-higher finding.
-- The exact committed-head Ubuntu/WSL gate matches Windows at 364 tests and 88% branch coverage with clean locked audit, format, security/performance lint, constrained build, and 80/59/28 distribution verification.
+- The exact committed-head Ubuntu/WSL gate matches Windows at 364 tests and 88% combined coverage with clean locked audit, format, security/performance lint, constrained build, and 80/59/28 distribution verification.
 - The 12:25 Murmuration tend found no scoped Rookery context and remained read-only: the native identity profile is absent, notifications return 403, and BookStack remains 401-gated.
 - A fresh adversarial audit proved a relationship/facet cross-kind observation-ID collision could authorize and persist the facet before the relationship was rejected.
 - The local repair preflights canonical `(item kind, item digest)` identities across the whole batch and rejects every participant in cross-kind or differing-payload collisions before identity, journal, or projection writes; 31 focused ingestion tests pass.
@@ -255,13 +255,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Conditional correction triggers recompute only affected groups when established timestamps move backward or NULL, while normal forward lifecycle writes stay on bounded incremental paths.
 - Independent million-history review measured projection reads below 1,000 VM instructions (~0.06–0.09 ms) versus 25–27 million (~0.8–0.9 s) for legacy reads; normal updates remained sub-millisecond and bounded.
 - The real ignored database was backed up to `.local/backups/rookery-20260829-1647-pre-0018.sqlite3`, migrated through `0018`, and reports `ROOK`, integrity `ok`, zero foreign-key violations, three projection triggers, and empty projections matching its empty action history.
-- The exact committed-head Ubuntu/WSL gate now matches Windows at 399 tests, 88% branch coverage, clean locked audit/lint, and 82/61/30 package verification.
+- The exact committed-head Ubuntu/WSL gate now matches Windows at 399 tests, 88% combined coverage, clean locked audit/lint, and 82/61/30 package verification.
 - A post-migration audit reproduced generic/explicit duplicate actions and cooldown bypass; the local repair uses one effective selected scope while retaining the original nullable intent receipt and capability-filtering legacy evidence/cooldown provenance.
 - Independent rollout review cleared same-capability reuse, cross-capability and cross-binding exclusion, explicit action identity, atomic coalescing, and pre-fix active action ingestion with 407 tests green.
 - Databricks mapped and doctor subprocesses now share one bounded runner that strips inherited Databricks/bundle overrides, sanitizes implicit/relative PATH lookup, and executes only an absolute CLI from an empty private per-user work directory.
 - The work-root ancestor audit covers all four bundle filenames recognized by the supported CLI contract; filesystem redirects fail closed, POSIX roots are mode `0700`, and Windows replaces both owners and DACLs with the verified current-user SID plus one protected inheritable grant on every use.
 - An independent security review reproduced permissive pre-created Windows ACLs and standalone-only documentation ambiguity; both are repaired, the `Everyone:F` regression is green, and the shared prerequisites now state standard-profile and `doctor` authentication limits.
-- The exact Windows and Ubuntu/WSL gates match at 417 passed and one platform-specific skip, with 88%/87% branch coverage respectively; the real local hardened runner passed version/help doctor with empty cleanup, and package verification remains 82/61/30.
+- The exact Windows and Ubuntu/WSL gates match at 417 passed and one platform-specific skip, with 88%/87% combined coverage respectively; the real local hardened runner passed version/help doctor with empty cleanup, and package verification remains 82/61/30.
 - Final focused security re-review cleared current-user ownership establishment/verification, protected DACL replacement, shared setup guidance, mapped/doctor process parity, redirects, cleanup, and realistic ambient precedence with no medium-or-higher finding.
 - The independently cleared subprocess-authority repair is committed as `ad968ec`.
 - A fresh independent browser/security/product review found no medium-or-higher defect across session/origin/host controls, escaping, bounded reads, mobile CSS, or packaged assets; its strongest low polish is a possible dangling disabled-control description when no reason is supplied.
@@ -274,7 +274,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - A fresh storage/migration/scale audit found no medium-or-higher defect; its one reproduced low confirmed that a writer can cross wall-clock lease expiry during ingestion only while `BEGIN IMMEDIATE` prevents concurrent reclaim.
 - The architecture now defines new-batch lease authority at that transaction-entry check, distinguishes expiry during the bounded transaction from later lifecycle writes, and preserves lease-free exact replay idempotency.
 - A forward-compatibility review found no evidence for an invented CLI upper bound; deterministic doctor tests now lock the 0.298 floor, malformed/old rejection, newer acceptance, and all five required help surfaces.
-- Those six compatibility paths lift the exact Windows/Ubuntu gates to 438 passed plus one complementary platform skip and 89%/88% branch coverage.
+- Those six compatibility paths lift the exact Windows/Ubuntu gates to 438 passed plus one complementary platform skip and 89%/88% combined coverage.
 - The end-to-end lifecycle review found no medium-or-higher defect and reproduced only an unused legacy `mark_running()` equality gap at exact lease expiry.
 - Legacy start now rejects `leased_until == started_at`, matching the production final guard; independent re-review closed the low and exact cross-platform parity is 439 passed plus one complementary platform skip.
 - The 19:16 Murmuration tend again found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
@@ -304,11 +304,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The native Rookery account posted the verified activation report to Murmuration topic 36 as post 2 with deterministic idempotency metadata, then reread the topic to verify exact authorship and content.
 - CR-01 is closed locally: `serve` exclusively owns exact IPv4 and IPv6 loopback listeners before activation disclosure, fails closed on partial reservation, uses Windows-exclusive and POSIX restart-safe socket options, and passes process-level bind/interception regressions.
 - Real Windows Chrome and Ubuntu/WSL Chromium smokes each reached the random Rookery origin through both families, denied competing exact binds, and verified native bootstrap 303 plus authenticated dashboard 200.
-- The final CR-01 Windows gate passes 456 tests with two intentional platform skips at 89% branch coverage; independent security re-review found no medium-or-higher residual defect.
+- The final CR-01 Windows gate passes 456 tests with two intentional platform skips at 89% combined coverage; independent security re-review found no medium-or-higher residual defect.
 - The 00:00 storage checkpoint has CR-02/CR-03 implemented but not yet committed: existing database identity is preflighted read-only before WAL/write access, state and backup files are current-user restricted, redirects/hardlinks fail closed, and Git worktree roots cannot become state directories.
 - Current focused storage evidence is green at 91 Windows tests with three platform skips, 92 Ubuntu/WSL tests with two platform skips, and 174 config/Databricks/composition tests with one Windows privilege skip; independent review and the full gates remain before commit.
 - CR-02/CR-03 are now independently clear: existing state receives immutable preflight before WAL-aware use, new/markerless state persists `ROOK` before WAL, and held file/directory guards plus identity-conditional publication fence replacement races.
-- The exact final storage gates pass 476 Windows tests with ten platform/privilege skips at 88% branch coverage and 480 Ubuntu/WSL tests with six platform skips at 87% branch coverage; format, standard/security lint, lock audit, and installed compatibility are clean.
+- The exact final storage gates pass 476 Windows tests with ten platform/privilege skips at 88% combined coverage and 480 Ubuntu/WSL tests with six platform skips at 87% combined coverage; format, standard/security lint, lock audit, and installed compatibility are clean.
 - The real ignored database and `.local` directory now have protected single-user Windows ACLs; the no-overwrite checkpoint `.local/backups/rookery-20260830-0024-pre-storage.sqlite3` is `ROOK`, migration `0018`, integrity `ok`, and owner-only.
 - The storage-slice VCS-aware package checkpoint passed at 84 sdist entries, 62 wheel entries, and 30 non-code runtime assets; checkout-free initialization verifies the private `.local/rookery.sqlite3` starter path.
 - CR-04 is closed locally: wheel smoke exports the hash-pinned runtime graph from `uv.lock`, installs it before the wheel, installs the wheel without dependency resolution, checks compatibility, and audits the exact installed versions through a marker-aware audit lock.
@@ -339,19 +339,19 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Desktop and 390px mobile QA passed with no console errors; Lighthouse accessibility, best practices, and agentic browsing scored 100 on both device profiles.
 - The dashboard now renders the latest ten durable alertable failures with system, time, canonical class, and escaped redacted summary.
 - Alert recency uses a dedicated SQLite index verified by `EXPLAIN QUERY PLAN`; the exact full-history count was removed to preserve bounded dashboard work.
-- Aggregate branch coverage is 83% with an enforced 80% CI floor; statement coverage remains about 91%.
+- Aggregate combined coverage is 83% with an enforced 80% CI floor; statement coverage remains about 91%.
 - Composition failures now close their opened SQLite store before propagating the original startup error.
 - `serve` now closes its runtime store even when Uvicorn fails before lifespan startup; the independent review found no blocker.
 - The latest locked runtime dependency audit reports no known vulnerabilities; the unpublished local package is the only expected skip.
 - A fresh isolated Python 3.12 environment installs the built wheel, runs the CLI entry point, and loads the packaged FastAPI routes successfully.
 - The fresh current-HEAD review found no remaining medium-or-higher local defect; demonstrated residual work is low severity or intentionally deferred.
-- CLI doctor, bounded run-once draining, and store cleanup now have direct command-level tests; CLI branch coverage increased from 72% to 93%.
+- CLI doctor, bounded run-once draining, and store cleanup now have direct command-level tests; CLI combined coverage increased from 72% to 93%.
 - Remote display text now neutralizes ANSI/control and bidi-override characters while preserving ordinary Unicode and ZWJ emoji.
 - The ignored local database upgraded through migration `0005`; `PRAGMA integrity_check` is `ok` with zero foreign-key violations.
 - The installed Databricks CLI compatibility doctor still passes without authentication or inventory probing.
 - CI now runs Ruff's source security rules in addition to the normal lint suite; all SQL construction is static and all values remain bound parameters.
 - The second structured critical-review report is schema-valid in `.local/review-round2/` and records four resolved findings plus the live-validation gate.
-- Direct runner tests prove manually assembled wrong subcommands, extra flags, unsafe profiles, missing fixed flags, and traversal paths are rejected before subprocess creation; adapter branch coverage rose from 69% to 74%.
+- Direct runner tests prove manually assembled wrong subcommands, extra flags, unsafe profiles, missing fixed flags, and traversal paths are rejected before subprocess creation; adapter combined coverage rose from 69% to 74%.
 - The tracked-file secret scan is clean; its sole redaction-fixture false positive is explicitly allowlisted and asserted not to persist.
 - Storage tests now document idempotent close behavior and literal backslash search, covering two operational assumptions used by CLI cleanup and filtering.
 - The paused example-config QA system was removed from local state after proving it contained no actions, observations, facets, relationships, or alerts; a recoverable pre-cleanup backup remains under `.local/`.
@@ -365,7 +365,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The history route reports invalid or duplicate query input as 400 and backend failure as a generic 503; the backend-less fallback was corrected so missing state cannot be misrepresented as an empty history.
 - The alert-history page passed desktop/mobile browser checks without console or network errors; Lighthouse scored 100 in every audited category on both profiles.
 - Independent review found no release blocker in the alert-history diff; its sole low-severity fallback concern was fixed and covered directly.
-- Aggregate branch coverage is now 84% with 203 passing tests.
+- Aggregate combined coverage is now 84% with 203 passing tests.
 - The real ignored local database is migrated through `0007_operational_event_filters`; `PRAGMA integrity_check` is `ok` with zero foreign-key violations.
 - An unauthenticated local HTTP client previously could fetch the process CSRF token and enqueue a registered read under the service owner's CLI profile; an independent reproduction rated this medium severity.
 - `serve` now issues one 256-bit, ten-minute, single-use activation capability in a URL fragment and exchanges it through a bounded same-origin POST body for one memory-only browser session.
@@ -374,7 +374,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Refresh CSRF nonces are per-session, and manual intents now durably record the non-secret UI session UUID without persisting authentication material.
 - Redirected activation output fails closed unless `serve --allow-redirected-activation` explicitly opts in; the denial path closes the runtime store and exposes no capability.
 - Actual Chrome QA over plain `http://127.0.0.1` proved fragment scrubbing, one-time exchange, subsequent authorization, an `HttpOnly` cookie hidden from JavaScript, no console errors, and token-free access-log targets.
-- The bootstrap page scored 100 for Lighthouse accessibility, best practices, SEO, and agentic browsing; the full suite now passes 204 tests at 84% branch coverage.
+- The bootstrap page scored 100 for Lighthouse accessibility, best practices, SEO, and agentic browsing; the full suite now passes 204 tests at 84% combined coverage.
 - Independent security follow-up found no release blocker after tracing bootstrap expiry/replay, cookie/session fixation, middleware order, route coverage, CSRF, attribution, and logging.
 - A separate storage review demonstrated that direct Workspace metadata normalization emits no coverage declaration, so ingestion rejects its only observation after spending the remote call.
 - Direct Workspace metadata reads now declare complete exact-scope coverage with no absence authority while retaining partial field coverage; the path updates SQLite, records refresh credit, succeeds its action, and completes its intent in the vertical regression.
@@ -385,26 +385,26 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The relationship guard adds no query and runs inside the existing immediate transaction; independent review found no blocker and confirmed equal-time last-ingested-wins behavior remains consistent with the existing merge contract.
 - A runtime review reproduced that cancelling a Databricks compatibility check could leave its CLI subprocess alive.
 - Compatibility checks now create explicit reader/wait tasks and share the normal runner's kill, exit-wait, and task-settlement path for cancellation, timeout, and output-limit failures while preserving the original exception.
-- Fake hanging-process regressions cover all three exceptional paths without launching a subprocess; independent review found no blocker and adapter branch coverage increased from 74% to 77%.
+- Fake hanging-process regressions cover all three exceptional paths without launching a subprocess; independent review found no blocker and adapter combined coverage increased from 74% to 77%.
 - Late-rejected facet absence and relationship items now use transaction-local savepoints; rollback removes locator, journal, facet, and relationship residue before the durable ingestion issue is written.
 - The atomicity regression combines a valid facet sibling, an unauthorized external absence, a relationship whose second locator is invalid, and complete relationship-absence coverage; only the valid sibling persists, both issues remain durable, and no freshness credit is granted.
-- Savepoint use is limited to late-rejection paths so the 502-object regression remains fast; the full 209-test suite completes in about nine seconds and storage branch coverage is 84%.
+- Savepoint use is limited to late-rejection paths so the 502-object regression remains fast; the full 209-test suite completes in about nine seconds and storage combined coverage is 84%.
 - Independent storage review found no blocker, confirmed nested savepoints remain atomic under `BEGIN IMMEDIATE`, and verified coverage/reconciliation stay suppressed when any item is rejected.
 - Murmuration project identity is now intentionally tracked in `.murmuration/project.toml`; the 23:46 tending pass found no project-specific forum context and could not write because the native identity profile is not provisioned. BookStack remained credential-gated.
 - Bounded action activity now uses 50-row pages, a 10,000-page ceiling, exact action lookup, state/system filters, static SQL, four dedicated recency indexes, and no per-action scope reads.
 - Alerts with an action ID now link into exact local action discovery; diagnostics stay redacted and escaped, while connection bindings, profiles, payloads, and raw commands remain absent.
 - The dashboard's former `Actions` tile counted current refresh controls; it is now truthfully labeled `Refresh options`.
-- The action slice passes 221 tests at 86% branch coverage; migration `0008` is applied locally with SQLite integrity `ok` and zero foreign-key violations, and both migration and template are packaged.
+- The action slice passes 221 tests at 86% combined coverage; migration `0008` is applied locally with SQLite integrity `ok` and zero foreign-key violations, and both migration and template are packaged.
 - Desktop and 390px mobile action-page QA passed with real failed/retry rows, functional state filtering, no console or network errors, and Lighthouse 100 in every audited category.
 - A fresh review demonstrated that the host-only `rookery_session` cookie is shared across ports for `127.0.0.1`; a local service receiving it can replay the bearer to Rookery. A process-unique `*.localhost` browser host is the selected repair.
 - Every runtime now generates a 128-bit `rookery-….localhost` browser host, places it in the activation URL, and accepts only that production Host while Uvicorn remains bound to `127.0.0.1` or `localhost`.
 - Cookie-jar regressions prove the session is absent from ordinary `127.0.0.1`, `localhost`, and unrelated `*.localhost` requests; actual Chrome resolved the generated host, activated successfully, and sent no Cookie header on the rejected direct-IP request.
-- Configuration now rejects alternate `127.x` bind addresses that cannot reliably match `.localhost` resolution; the full suite passes 223 tests at 86% branch coverage.
+- Configuration now rejects alternate `127.x` bind addresses that cannot reliably match `.localhost` resolution; the full suite passes 223 tests at 86% combined coverage.
 - A fresh residual review also reproduced immediate retry of transient CLI failures with no `retry_at`, and dispatch after an action deadline has expired; both medium defects are next in the queue.
 - Retryable failures now write one durable attempt with a future `retry_at` and return; the worker performs at most one CLI call per lease instead of looping immediately.
 - Local retry delays use bounded exponential policy: one second for timeout/transient failures, five seconds for rate limits, and a 30-second local ceiling; valid downstream Retry-After guidance can extend rate-limit delay to 24 hours, while larger guidance disables automatic retry.
 - `ActionLease` now carries the transactionally elected next durable ordinal; reopen tests prove early leasing fails and ordinal two becomes eligible exactly at `retry_at`.
-- Independent review found no blocker; strict positive-integer ordinal validation was added, the suite passes 228 tests, and adapter/storage branch coverage increased to 78%/85%.
+- Independent review found no blocker; strict positive-integer ordinal validation was added, the suite passes 228 tests, and adapter/storage combined coverage increased to 78%/85%.
 - The pre-dispatch guard now cancels `deadline <= now` actions before binding resolution or command construction; a vertical regression proves zero CLI calls.
 - Truly expired attached scopes become `expired`; still-live coalesced scopes detach, return to `queued`, and immediately admit a replacement action after the stale action releases dedupe authority.
 - Deadline splitting/cancellation is atomic under `BEGIN IMMEDIATE`, expected expiry remains non-alertable, and independent review found no blocker at 230 tests.
@@ -412,7 +412,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Protected `/actions/{uuid}` detail now shows the durable action plus the latest 100 attempts in chronological order, including outcomes, retry times, canonical errors, and escaped redacted diagnostics.
 - Activity rows, dashboard/full alerts, initial intent receipts, and polling updates now link to action detail without exposing bindings, command text, profiles, or payloads.
 - Attempt overflow reports `Showing latest 100 of N`; successful lifecycle writes persist `NULL` rather than a false `no diagnostic supplied` failure message.
-- Isolated desktop browser QA rendered a failed-retry-then-success sequence with no console/network errors and Lighthouse 100 in every audited category; the packaged template and full 233-test gate pass at 86% branch coverage.
+- Isolated desktop browser QA rendered a failed-retry-then-success sequence with no console/network errors and Lighthouse 100 in every audited category; the packaged template and full 233-test gate pass at 86% combined coverage.
 - Malformed queued action contracts now terminalize once as `adapter_contract_mismatch`, reject active attached scopes, emit one redacted idempotent failure event, and release dedupe authority before lease mutation.
 - `lease_next` continues selecting inside the same immediate transaction after poison terminalization, so the first call returns the next healthy lease instead of making `run-once` falsely report a drained queue.
 - Storage and composition regressions prove queue progress and that only the healthy capability reaches the runner; independent follow-up cleared the blocker at 235 tests.
@@ -429,7 +429,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Absence resolution no longer creates or transiently revives unknown objects, and the existing guarded absence update remains timestamp-monotonic.
 - Regression coverage proves older canonical evidence cannot resurrect a newer absence while later canonical evidence restores operational presence; independent review found no blocker at 241 tests.
 - Dashboard system activity now reads one raw latest action summary per system through indexed correlated lookups, avoiding full contract reconstruction, malformed deadline/scope failures, and per-action scope reads.
-- The exact current Windows and Ubuntu/WSL CI sequences both pass 241 tests at 86% branch coverage; the ignored Windows environment was restored from the lockfile after WSL validation.
+- The exact current Windows and Ubuntu/WSL CI sequences both pass 241 tests at 86% combined coverage; the ignored Windows environment was restored from the lockfile after WSL validation.
 - CI now validates `uv.lock` and builds the wheel/source distribution on both Windows and Ubuntu, extending the matrix to cover packaged migrations and templates rather than stopping after tests.
 - A lifecycle review reproduced that an expired request coalesced behind a non-expiring action could remain active and later inherit the shared action's successful display state.
 - The current green repair prunes each attached request's expiry before dispatch, keeps valid live authority intact, preserves the action audit link, and gives terminal scope dispositions precedence in intent views; two regressions pass within the 243-test, 86%-branch full gate.
@@ -454,8 +454,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Protected dashboard, object, alert, action, and intent routes independently cleared authorization ordering, input validation, 404/503 distinctions, safe backend-failure responses, escaping, and security-header coverage.
 - All facet observations now use transaction-local savepoints; a merge-over-limit regression proves rejected items cannot rename objects, advance presence time, journal provenance, or replace supporting evidence.
 - `ActionAttempt` now rejects primitive enum bypasses, non-integer ordinals, incomplete terminal outcomes, non-failure error metadata, and retries that do not follow an ended failed attempt.
-- Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% branch coverage.
-- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 355 tests and 88% branch coverage, including a clean locked audit, migration `0016`, temporal projection ordering, full installed-wheel smoke, and all prior runtime/security contracts; the shared Windows `.venv` was untouched.
+- Terminal `ActionCompletion` records validate real enums, allow failure metadata only on failure, and cannot carry a meaningless retry schedule; the full gate now reports 87% combined coverage.
+- The exact current Ubuntu/WSL CI sequence passes in an isolated `/tmp` environment at 355 tests and 88% combined coverage, including a clean locked audit, migration `0016`, temporal projection ordering, full installed-wheel smoke, and all prior runtime/security contracts; the shared Windows `.venv` was untouched.
 - The 03:43 Murmuration tending pass again found no Rookery-specific public context; native writes, notifications, and BookStack remain unavailable without the project profile.
 - The 04:43 Murmuration tending pass produced the same read-only result: no scoped public context and no native profile for writes, notifications, or BookStack.
 - Unity Catalog schema/table/view/volume normalization now rejects catalog, schema, name, and full-name contradictions before ingestion; valid qualified names derive only their canonical leaf.
@@ -467,7 +467,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Intent polling now reloads on authorization denial instead of retrying forever as a false disconnection, and the unlock page tells expired sessions to restart Rookery for a new link.
 - New Workspace identities retain typed `object_id`/`resource_id` namespaces; metadata responses must match the exact typed witness, while legitimate dual IDs remain independent.
 - Historical untyped Workspace identities are never auto-merged because their witness type cannot be proven; symmetric collision regressions preserve legacy UUID/cache and fail closed as separate typed objects.
-- The completed coordinator authority/expiry matrix raised coordinator branch coverage from 73% to 94% while proving invalid local authority never admits an action.
+- The completed coordinator authority/expiry matrix raised coordinator combined coverage from 73% to 94% while proving invalid local authority never admits an action.
 - Official Databricks CLI v0.298 source confirms list commands use `RenderIterator` to exhaust pages into one JSON array; Rookery now rejects any non-empty continuation-token envelope instead of silently ingesting page one.
 - Nested contract validators now cover scopes, targets, observations, coverage declarations, actions, leases, type facets, and policy evidence; malformed JSON dictionaries can no longer crash ingestion after construction.
 - Facet payloads and connection settings now require JSON objects rather than arbitrary JSON arrays/scalars, and authority/count/priority fields reject Python's bool-as-int coercion.
@@ -494,7 +494,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Backup now flushes the validated file plus final directory publication metadata on Windows and POSIX, fails closed on synchronization errors, and rechecks destination identity after every blocking durability operation.
 - Upgrade guidance now requires a stopped pre-migration checkpoint, states that in-place downgrade is unsupported, and warns that durable history plus backups are not automatically pruned.
 - The real post-durability checkpoint `.local/backups/rookery-20260830-0118-post-durability.sqlite3` is owner-only, `ROOK`, migration `0018`, integrity `ok`, and foreign-key clean.
-- Final recovery verification passes at 488/11 on Windows and 493/6 on Ubuntu/WSL with 88%/87% branch coverage; the VCS-aware distribution passes at 86 sdist entries, 62 wheel entries, and 30 non-code runtime assets. Current Windows archive SHA-256 values are `370E2B27976D44F5CB58C302254CFBCF0F7A3E1AEF5FCA4C0A5CFE8A3CB577E0` and `C8FD9EE8B1C1D9B395C0CC15726FD16912A44682B4C728E547665A12FBBFDD44`.
+- Final recovery verification passes at 488/11 on Windows and 493/6 on Ubuntu/WSL with 88%/87% combined coverage; the VCS-aware distribution passes at 86 sdist entries, 62 wheel entries, and 30 non-code runtime assets. Current Windows archive SHA-256 values are `370E2B27976D44F5CB58C302254CFBCF0F7A3E1AEF5FCA4C0A5CFE8A3CB577E0` and `C8FD9EE8B1C1D9B395C0CC15726FD16912A44682B4C728E547665A12FBBFDD44`.
 - NTFS junctions now exercise all three Windows directory-reparse rejection paths without symlink privilege; the full Windows suite rises to 491 passes while skips fall from 11 to 8.
 - A fresh browser-product review found no medium-or-higher issue; disconnected/final intent indicators are now truthful and non-animated, unchanged `aria-live` text is not rewritten, and rendered Chrome QA confirms the disconnected state without layout shift.
 - The distribution verifier now rejects stale migration/template/static bytes even when filenames match, and `critical-reviews/` is excluded from source archives alongside other workspace-only audit surfaces.
@@ -506,6 +506,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Exact-current Windows and Ubuntu/WSL gates pass at 509/8 and 511/6; the honest branch-only percentages are 77.57% and 76.99%, not the prior combined percentages mislabeled as branch coverage.
 - Final exact-sdist follow-up cleared missing/unexpected files, included-source byte parity, root/path validation before directory skipping, duplicate files, symlinks/hardlinks/special members, and the fixed Git subprocess. Repeated post-commit Windows archives are byte-identical at sdist `5C4334876A03332D72495E5993665222B56544B1E2C9DF429ECE341F76BC58DD` and wheel `C4EA4FDE7CC8147DE19D982E2E611031EF88F133D51E3AD300E3310D34A4A3F3`.
 - The 02:51 Murmuration Tend pass reconfirmed native identity/forum readiness and published the closed recovery/release evidence idempotently as topic 40, post 3 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
+- Historical status metrics now call coverage.py's aggregate percentage “combined coverage”; only separately computed branch-only percentages are labeled branch coverage.
 
 ## Risks / watch list
 
