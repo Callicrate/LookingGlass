@@ -19,7 +19,7 @@
     {% if view.integrity_warning %}<section class="notice notice--warning" role="status"><strong>Some cached records were isolated</strong><span>{{ view.integrity_warning|display }}</span></section>{% endif %}
     <section aria-labelledby="alerts-heading">
       <div class="section-heading">
-        <div><p class="eyebrow">Durable and redacted</p><h2 id="alerts-heading">Alertable failures</h2></div>
+        <div><p class="eyebrow">Durable and redacted</p><h2 id="alerts-heading">Operational alerts</h2></div>
         <span class="count">Showing {{ view.alerts|length }} alerts{% if view.next_page_url %} · more available{% endif %}</span>
       </div>
       <form class="alert-toolbar" method="get" action="/alerts" aria-label="Filter alert history">
@@ -31,7 +31,7 @@
       {% if view.alerts %}
       <div class="alert-list">
         {% for alert in view.alerts %}
-        <article class="alert-row">
+        <article class="alert-row alert-row--{{ alert.severity|display }}">
           <span class="badge badge--{{ alert.severity|display }}">{{ alert.severity|display }}</span>
           <div>
             <strong>{{ alert.event_type|display }}</strong>
@@ -50,7 +50,7 @@
       </nav>
       {% endif %}
       {% else %}
-      <div class="empty-state"><strong>{% if view.event_type_filter or view.severity_filter %}No matching alertable failures{% else %}No alertable failures stored{% endif %}</strong><p>{% if view.event_type_filter or view.severity_filter %}No durable alert matches the selected event type and severity.{% else %}No durable local failure has reached alertable state.{% endif %}</p></div>
+      <div class="empty-state"><strong>{% if view.event_type_filter or view.severity_filter %}No matching operational alerts{% else %}No operational alerts stored{% endif %}</strong><p>{% if view.event_type_filter or view.severity_filter %}No durable alert matches the selected event type and severity.{% else %}No durable local event has reached alertable state.{% endif %}</p></div>
       {% endif %}
     </section>
   </main>

@@ -1375,6 +1375,37 @@ async def test_terminal_intent_tolerates_malformed_eligible_time(tmp_path: Path)
 
 
 @pytest.mark.anyio
+async def test_expired_intent_exposes_its_durable_disposition_reason(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    runtime.worker_available = True
+    option = (await runtime.backend.dashboard()).refresh_options[0]
+    intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=option.system_id,
+            target_kind=option.target_kind,
+            target_id=option.target_id,
+            capability_key=option.capability_key,
+            facet=option.facet,
+        )
+    )
+    runtime.store._connection.execute(
+        """
+        UPDATE refresh_intent_scopes
+        SET state = 'expired', disposition_reason = 'request_expired', eligible_at = NULL
+        WHERE intent_id = ?
+        """,
+        (intent_id,),
+    )
+
+    view = await runtime.backend.intent(intent_id)
+
+    assert view is not None and view.terminal
+    assert view.scopes[0].state == "expired"
+    assert view.scopes[0].failure == "request_expired"
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "corruption",
     [

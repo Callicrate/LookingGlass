@@ -124,7 +124,7 @@
           <input type="hidden" name="facet" value="{{ option.facet|display }}">
           <div><strong>{{ option.label|display }}</strong><span class="subtle"><code>{{ option.capability_key|display }}</code> · facet {{ option.facet|display }}</span><code class="subtle">System {{ option.system_id|display }}</code><span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span></div>
           <button type="submit" {% if not option.enabled %}disabled aria-describedby="object-reason-{{ loop.index }}"{% endif %}>Request refresh</button>
-          {% if option.disabled_reason %}<span id="object-reason-{{ loop.index }}" class="failure">{{ option.disabled_reason|display }}</span>{% endif %}
+          {% if option.disabled_reason %}<span id="object-reason-{{ loop.index }}" class="warning">{{ option.disabled_reason|display }}</span>{% endif %}
         </form>
         {% endfor %}
       </div>

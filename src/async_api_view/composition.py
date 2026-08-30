@@ -1181,7 +1181,7 @@ class SQLiteWebBackend:
                     action_id=action_id,
                     eligible_at=record.eligible_at,
                     failure=failure or record.disposition_reason
-                    if state in {"failed", "rejected"}
+                    if state in {"failed", "rejected", "expired", "cancelled"}
                     else failure,
                     cached_context=target_label,
                 )

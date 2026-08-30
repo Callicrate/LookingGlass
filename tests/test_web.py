@@ -53,6 +53,19 @@ def page_cursor(*values: str) -> str:
     return base64.urlsafe_b64encode(encoded).rstrip(b"=").decode()
 
 
+def contrast_ratio(foreground: str, background: str) -> float:
+    def luminance(value: str) -> float:
+        channels = [int(value[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [
+            channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+            for channel in channels
+        ]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    first, second = sorted((luminance(foreground), luminance(background)), reverse=True)
+    return (first + 0.05) / (second + 0.05)
+
+
 OPTION = RefreshOption(
     system_id="system-1",
     target_kind="configured_scope",
@@ -677,6 +690,7 @@ def test_empty_dashboard_explains_unknown_state() -> None:
     assert response.status_code == 200
     assert "No systems configured" in response.text
     assert "No cached objects" in response.text
+    assert "No operational alerts recorded" in response.text
     assert "Refresh unavailable" in response.text
     assert "View history" in response.text
     assert "View activity" in response.text
@@ -898,9 +912,9 @@ def test_disabled_refresh_controls_render_matching_accessible_reasons() -> None:
     )
 
     assert 'disabled aria-describedby="reason-1"' in dashboard_response.text
-    assert 'id="reason-1"' in dashboard_response.text
+    assert 'id="reason-1" class="warning"' in dashboard_response.text
     assert 'disabled aria-describedby="object-reason-1"' in object_response.text
-    assert 'id="object-reason-1"' in object_response.text
+    assert 'id="object-reason-1" class="warning"' in object_response.text
     assert reason in dashboard_response.text
     assert reason in object_response.text
 
@@ -946,6 +960,7 @@ def test_dashboard_recovers_to_disconnected_error_without_leaking_exception() ->
     assert "Disconnected" in response.text
     assert "Try again" in response.text
     assert "Cached snapshot unavailable" in response.text
+    assert 'class="snapshot-banner snapshot-banner--disconnected"' in response.text
     assert "No alertable failures recorded" not in response.text
     assert "No systems configured" not in response.text
     assert "No cached objects" not in response.text
@@ -979,6 +994,7 @@ def test_dashboard_distinguishes_worker_degradation_from_local_disconnection() -
     assert "Cached snapshot loaded" in response.text
     assert "Worker compatibility check is in progress." in response.text
     assert "Disconnected" not in response.text
+    assert "snapshot-banner--disconnected" not in response.text
 
 
 def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
@@ -1018,6 +1034,7 @@ def test_alert_history_shows_filters_paging_and_escaped_summaries() -> None:
 
     assert response.status_code == 200
     assert "Alert history" in response.text
+    assert "Operational alerts" in response.text
     assert "queue.coordinator.failed" in response.text
     assert "unknown_adapter_failure" in response.text
     assert "/alerts?after=cursor" in response.text
@@ -1050,6 +1067,7 @@ def test_operational_badges_preserve_semantic_scan_priority() -> None:
     styles = client.get("/static/style.css")
 
     assert 'class="badge badge--critical"' in alerts.text
+    assert 'class="alert-row alert-row--critical"' in alerts.text
     assert 'class="badge badge--retry_wait"' in actions.text
     assert 'class="badge badge--partial"' in actions.text
     for selector in (
@@ -1058,8 +1076,33 @@ def test_operational_badges_preserve_semantic_scan_priority() -> None:
         ".badge--critical",
         ".badge--retry_wait",
         ".badge--partial",
+        ".alert-row--info",
+        ".alert-row--warning",
+        ".alert-row--error",
+        ".alert-row--critical",
     ):
         assert selector in styles.text
+    assert "outline: 3px solid var(--focus)" in styles.text
+    assert "color-mix(in srgb, var(--focus)" not in styles.text
+
+
+def test_semantic_text_and_focus_colors_meet_contrast_boundaries() -> None:
+    text_pairs = (
+        ("#0e584a", "#dceee9"),
+        ("#265f96", "#dfeafa"),
+        ("#855b09", "#fff0c9"),
+        ("#9b3838", "#f9e1df"),
+        ("#ffffff", "#7c2424"),
+        ("#59635f", "#e8ecea"),
+    )
+    assert all(contrast_ratio(text, background) >= 4.5 for text, background in text_pairs)
+    assert contrast_ratio("#126fa3", "#ffffff") >= 3
+    assert contrast_ratio("#126fa3", "#f5f7f5") >= 3
+    assert contrast_ratio("#7f8d88", "#ffffff") >= 3
+    assert contrast_ratio("#7f8d88", "#f5f7f5") >= 3
+    styles = client_for(FakeBackend()).get("/static/style.css").text
+    assert "--control-line: #7f8d88" in styles
+    assert "snapshot-banner--disconnected" in styles
 
 
 @pytest.mark.parametrize(
@@ -1611,6 +1654,15 @@ def test_intent_page_and_json_show_each_scope_disposition() -> None:
                 failure="connection_timeout",
                 cached_context="Last known owner: ops",
             ),
+            IntentScopeView(
+                label="Expired request",
+                state="expired",
+                failure="request_expired",
+            ),
+            IntentScopeView(
+                label="Retrying request",
+                state="retry_wait",
+            ),
         ),
     )
     client = client_for(FakeBackend(intent_view=intent))
@@ -1625,8 +1677,17 @@ def test_intent_page_and_json_show_each_scope_disposition() -> None:
     assert "configured_scope" in page.text
     assert "scope-1" in page.text
     assert "3 cached children, stale" in page.text
+    assert 'class="subtle" data-field="failure">No failure recorded</dd>' in page.text
+    assert 'class="failure" data-field="failure">connection_timeout</dd>' in page.text
+    assert 'class="warning" data-field="failure">request_expired</dd>' in page.text
+    assert ">retry wait</span>" in page.text
     assert poll.status_code == 200
-    assert [scope["state"] for scope in poll.json()["scopes"]] == ["deferred", "failed"]
+    assert [scope["state"] for scope in poll.json()["scopes"]] == [
+        "deferred",
+        "failed",
+        "expired",
+        "retry_wait",
+    ]
     assert poll.json()["scopes"][1]["target_kind"] == "object"
     assert poll.json()["scopes"][1]["target_id"] == "object-1"
     assert poll.json()["scopes"][0]["eligible_at"] == "2026-08-25T14:35:09+00:00"
@@ -1756,6 +1817,8 @@ def test_first_party_script_avoids_dangerous_dom_sinks() -> None:
     assert '"disconnected",' in script
     assert '"unavailable",' in script
     assert "Status unavailable · retrying" in script
+    assert 'replaceAll("_", " ")' in script
+    assert 'failure.classList.remove("failure", "warning", "subtle")' in script
     style = script_path.with_name("style.css").read_text(encoding="utf-8")
     assert ".pulse--unavailable" in style
     assert ".pulse:not(.pulse--disconnected):not(.pulse--unavailable):not(.pulse--final)" in style

@@ -53,11 +53,19 @@
         link.textContent = scope[field];
         element.replaceChildren(link);
       } else {
-        setText(element, scope[field], field === "failure" ? "None" : "Unknown");
+        const value = field === "state" ? String(scope[field] ?? "").replaceAll("_", " ") : scope[field];
+        setText(element, value, field === "failure" ? "No failure recorded" : "Unknown");
       }
     }
     const badge = row.querySelector('[data-field="state"]');
     if (badge) badge.className = `badge badge--${String(scope.state).replace(/[^a-z_-]/g, "")}`;
+    const failure = row.querySelector('[data-field="failure"]');
+    if (failure) {
+      failure.classList.remove("failure", "warning", "subtle");
+      failure.classList.add(
+        scope.failure ? (["failed", "rejected"].includes(scope.state) ? "failure" : "warning") : "subtle",
+      );
+    }
   };
 
   const poll = async () => {

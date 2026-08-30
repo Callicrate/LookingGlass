@@ -23,7 +23,7 @@
   </header>
 
   <main id="main">
-    <section class="snapshot-banner" aria-label="Snapshot trust boundary">
+    <section class="snapshot-banner{% if view.disconnected %} snapshot-banner--disconnected{% endif %}" aria-label="Snapshot trust boundary">
       <div class="snapshot-mark" aria-hidden="true">●</div>
       <div>
         {% if view.disconnected %}
@@ -72,7 +72,7 @@
       </div>
       {% if view.alerts %}<div class="alert-list">
         {% for alert in view.alerts %}
-        <article class="alert-row">
+        <article class="alert-row alert-row--{{ alert.severity|display }}">
           <span class="badge badge--{{ alert.severity|display }}">{{ alert.severity|display }}</span>
           <div>
             <strong>{{ alert.event_type|display }}</strong>
@@ -82,7 +82,7 @@
           </div>
         </article>
         {% endfor %}
-      </div>{% else %}<div class="empty-state"><strong>No alertable failures recorded</strong><p>The durable operational event stream is currently clear.</p></div>{% endif %}
+      </div>{% else %}<div class="empty-state"><strong>No operational alerts recorded</strong><p>The durable operational event stream has no alertable entries.</p></div>{% endif %}
     </section>
 
     <section aria-labelledby="systems-heading">
@@ -221,7 +221,7 @@
             <span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span>
           </div>
           <button type="submit" {% if not option.enabled %}disabled aria-describedby="reason-{{ loop.index }}"{% endif %}>Request refresh</button>
-          {% if option.disabled_reason %}<span id="reason-{{ loop.index }}" class="failure">{{ option.disabled_reason|display }}</span>{% endif %}
+          {% if option.disabled_reason %}<span id="reason-{{ loop.index }}" class="warning">{{ option.disabled_reason|display }}</span>{% endif %}
         </form>
         {% endfor %}
       </div>
