@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 05:16 ET
+Updated: 2026-08-30 05:18 ET
 
 ## Contents
 
@@ -24,7 +24,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Active review round: all findings in `critical-reviews/20260830-044240.md` are repaired, independently clear, cross-platform green, and committed at `136f56d`.
 - Latest checkpoint: `progress/20260830-051546.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the latest verified-authority/boundedness evidence is verified at topic 40, post 4 under that identity.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the latest operator-authority/retirement evidence is verified at topic 40, post 5 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -534,6 +534,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Commit `136f56d` closes visible authority attribution, historical-cache diagnosis, placeholder rejection, all stateful lock ownership, stale-work cancellation, and durable authority retirement; both original reviewers cleared their findings.
 - The real store is now migration `0020_retired_authorities`; pre-0020 backup and live database are `ROOK`, integrity `ok`, and foreign-key clean. Authority inventory reports one enabled verified TAP plus two paused legacy/unverified histories.
 - Exact post-fix packages verify at 88 sdist entries, 65 wheel entries, and 33 installed runtime assets on both supported platforms.
+- The 05:18 Murmuration Tend pass published the committed operator-authority closure idempotently as topic 40, post 5 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
 
 ## Risks / watch list
 
