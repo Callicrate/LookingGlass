@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 05:37 ET
+Updated: 2026-08-30 06:11 ET
 
 ## Contents
 
@@ -17,13 +17,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 536 passed / 8 platform skips; Ubuntu/WSL 538 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
-- Coverage: Windows 90.77% statements / 76.84% branch-only / 87.41% combined; Ubuntu/WSL 89.23% / 76.31% / 86.12%.
+- Latest checks: Windows 546 passed / 8 platform skips; Ubuntu/WSL 548 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
+- Coverage: Windows 90.77% statements / 76.77% branch-only / 87.40% combined; Ubuntu/WSL 89.25% / 76.25% / 86.12%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: the operator-authority report is closed; fresh profile/startup report `critical-reviews/20260830-052817.md` records one high, two medium, and one low finding now queued for remediation.
-- Latest checkpoint: `progress/20260830-051546.md`.
+- Active review round: all original findings in `critical-reviews/20260830-052817.md` are repaired; startup and web re-reviews are clear, and final re-review of the repaired profile-recovery retry race is running.
+- Latest checkpoint: `progress/20260830-061146.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects the underspecified `openai/gpt-5` provenance on posts 1 through 5 to the exact resolved `openai/gpt-5.6-sol` model. All future writes use that exact model ID.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -58,10 +58,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Correct Murmuration model provenance without changing the canonical project principal.
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
 - [ ] Pin each Databricks child to the exact verified profile snapshot.
-- [ ] Stop materializing full canonical recovery queues at startup.
-- [ ] Align web query validation with canonical storage grammar.
-- [ ] Correct name-prefix empty-state guidance.
-- [ ] Benchmark/document migration-0018 offline upgrade resource envelopes.
+- [x] Stop materializing full canonical recovery queues at startup.
+- [x] Align web query validation with canonical storage grammar.
+- [x] Correct name-prefix empty-state guidance.
+- [x] Benchmark/document migration-0018 offline upgrade resource envelopes.
 - [x] Attribute every visible fact/action/alert/refresh to one unique authority.
 - [x] Distinguish historical/paused cache from unsupported capability.
 - [x] Reject placeholder authority before durable state creation.
@@ -542,6 +542,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Exact post-fix packages verify at 88 sdist entries, 65 wheel entries, and 33 installed runtime assets on both supported platforms.
 - The 05:18 Murmuration Tend pass published the committed operator-authority closure idempotently as topic 40, post 5 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
 - Fresh review `critical-reviews/20260830-052817.md` retains one high profile-provenance race, two current medium startup/validation defects, one low copy defect, and a non-blocking migration-0018 scale watch item.
+- Murmuration topic 40 post 6 corrects posts 1 through 5 to exact `openai/gpt-5.6-sol` model provenance while preserving the canonical principal and project UUID.
+- Selector-aware route authority now distinguishes shared-host workspace/account targets, minimizes child snapshots to defaults plus the selected profile, and recovers crash-retained snapshots through per-command locks without touching active work.
+- Migration `0021_intent_aggregate_indexes` removes the quadratic disabled-authority aggregate path; reviewer probes measured 10,000, 25,000, and 50,000 affected intents at 0.148 s, 0.423 s, and 0.812 s with linear VM steps.
+- Exact offline migration-0018 benchmarks through 250,000 action scopes are documented; the largest distinct-target fixture completed in 6.77 s with integrity intact.
+- The real store is backed up at `.local/backups/rookery-20260830-055944-pre-0021.sqlite3` and migrated through `0021`; backup and live state are `ROOK`, integrity `ok`, and foreign-key clean.
+- Exact-current verification passes at 546/8 on Windows and 548/6 on Ubuntu/WSL. The clean distribution contains 89 sdist entries, 66 wheel entries, and 34 installed runtime assets.
 
 ## Risks / watch list
 
@@ -551,6 +557,6 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The three earlier critical-review ledgers have no remaining open finding. Live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
 - The four earlier critical-review ledgers have no remaining open finding.
 - The five earlier critical-review ledgers have no remaining open finding.
-- The new 05:28 profile/startup ledger is open; all five earlier ledgers remain closed.
+- The new 05:28 profile/startup ledger has one final profile-recovery re-review in flight; all five earlier ledgers remain closed.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
