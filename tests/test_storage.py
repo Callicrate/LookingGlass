@@ -4,6 +4,7 @@ import sqlite3
 import stat
 import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -2332,6 +2333,179 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
             )
         )
         assert reopened.get_stored_action(action.action_id).retry_at is None
+
+
+@pytest.mark.parametrize(
+    ("state", "field", "value"),
+    [
+        ("leased", "leased_until", None),
+        ("running", "leased_until", "not-a-timestamp"),
+        ("retry_wait", "retry_at", "not-a-timestamp"),
+    ],
+)
+def test_malformed_action_timing_terminalizes_once_and_releases_dedupe(
+    tmp_path: Path,
+    state: str,
+    field: str,
+    value: str | None,
+) -> None:
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+    )
+    action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.children.read",
+        capability_version="1",
+        target=scope.target,
+        requested_scopes=(scope,),
+    )
+    run(store.enqueue(action))
+    store._connection.execute(
+        f"UPDATE adapter_actions SET state = ?, {field} = ? WHERE action_id = ?",
+        (state, value, action.action_id),
+    )
+
+    store.close()
+
+    with SQLiteStore(tmp_path / "state.sqlite3") as reopened:
+        poisoned = reopened._connection.execute(
+            "SELECT state, error_class FROM adapter_actions WHERE action_id = ?",
+            (action.action_id,),
+        ).fetchone()
+        assert tuple(poisoned) == ("failed", "adapter_contract_mismatch")
+        assert len(reopened.list_operational_events(alertable_only=True)) == 1
+    with SQLiteStore(tmp_path / "state.sqlite3") as reopened:
+        assert len(reopened.list_operational_events(alertable_only=True)) == 1
+        replacement = replace(action, action_id=uuid4(), correlation_id=uuid4())
+        run(reopened.enqueue(replacement))
+        lease = run(reopened.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+        assert lease is not None and lease.action.action_id == replacement.action_id
+
+
+@pytest.mark.parametrize(
+    ("state", "field", "value"),
+    [
+        ("leased", "leased_until", None),
+        ("leased", "leased_until", "not-a-timestamp"),
+        ("deferred", "eligible_at", "not-a-timestamp"),
+    ],
+)
+def test_malformed_intent_timing_rejects_once_without_blocking_valid_work(
+    tmp_path: Path,
+    state: str,
+    field: str,
+    value: str | None,
+) -> None:
+    store = SQLiteStore(tmp_path / "intent-timing.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+    )
+    poisoned = run(
+        store.submit_refresh(
+            RefreshIntent(
+                intent_id=uuid4(),
+                idempotency_key=f"poison-{state}-{field}",
+                origin=RefreshOrigin.MANUAL,
+                actor_id="local-user",
+                ui_session_id=uuid4(),
+                requested_at=NOW,
+                scopes=(scope,),
+            )
+        )
+    )
+    valid = run(
+        store.submit_refresh(
+            RefreshIntent(
+                intent_id=uuid4(),
+                idempotency_key=f"valid-{state}-{field}",
+                origin=RefreshOrigin.MANUAL,
+                actor_id="local-user",
+                ui_session_id=uuid4(),
+                requested_at=NOW + timedelta(seconds=1),
+                scopes=(scope,),
+            )
+        )
+    )
+    store._connection.execute(
+        f"""
+        UPDATE refresh_intent_scopes
+        SET state = ?, {field} = ?
+        WHERE intent_scope_id = ?
+        """,
+        (state, value, poisoned.scope_ids[0]),
+    )
+    store.close()
+
+    with SQLiteStore(tmp_path / "intent-timing.sqlite3") as reopened:
+        leased = run(
+            reopened.lease_next_intent_scope(
+                worker_id="coordinator", now=NOW + timedelta(seconds=1)
+            )
+        )
+        assert leased is not None and leased.intent.intent_id == valid.intent_id
+        poison_scope = reopened.list_intent_scopes(poisoned.intent_id)[0]
+        assert poison_scope.state.value == "rejected"
+        assert poison_scope.disposition_reason == "persisted_intent_contract_mismatch"
+        assert len(reopened.list_operational_events(alertable_only=True)) == 1
+
+
+def test_sqlite_write_contention_is_bounded_for_event_loop_callers(tmp_path: Path) -> None:
+    path = tmp_path / "contention.sqlite3"
+    store = SQLiteStore(path)
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+    )
+    action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.children.read",
+        capability_version="1",
+        target=scope.target,
+        requested_scopes=(scope,),
+    )
+    blocker = sqlite3.connect(path, isolation_level=None)
+    blocker.execute("PRAGMA busy_timeout = 1000")
+    blocker.execute("BEGIN IMMEDIATE")
+    assert store._connection.execute("PRAGMA busy_timeout").fetchone()[0] == 250
+    started = time.monotonic()
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            run(store.enqueue(action))
+    finally:
+        blocker.rollback()
+        blocker.close()
+        store.close()
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.75
 
 
 def test_failed_attempt_event_is_idempotent_with_attempt_replay(tmp_path) -> None:

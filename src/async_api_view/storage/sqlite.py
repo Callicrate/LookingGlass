@@ -106,6 +106,7 @@ from .models import (
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 _APPLICATION_ID = 0x524F4F4B  # ASCII "ROOK"
 _DEFAULT_LEASE = timedelta(seconds=60)
+_SQLITE_BUSY_TIMEOUT_MS = 250
 _MAX_JSON_BYTES = 1_048_576
 _MAX_DIAGNOSTIC_LENGTH = 1_024
 _MAX_DUE_PROMOTIONS_PER_CLAIM = 1_000
@@ -602,6 +603,18 @@ def _dt(value: str | None) -> datetime | None:
     return require_utc(parsed, "stored timestamp")
 
 
+def _stored_timestamp_is_canonical(value: object) -> int:
+    """Return one only for the exact UTC format used by durable queue comparisons."""
+
+    if not isinstance(value, str):
+        return 0
+    try:
+        parsed = _dt(value)
+    except (TypeError, ValueError):
+        return 0
+    return int(parsed is not None and _utc_text(parsed) == value)
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -790,7 +803,7 @@ class SQLiteStore:
         self._lock = threading.RLock()
         try:
             with self._lock:
-                self._connection.execute("PRAGMA busy_timeout = 5000")
+                self._connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
                 live_kind = _validate_database_identity(self._connection)
                 if live_kind is not preflight_kind and live_kind is not _DatabaseKind.MARKED:
                     raise OSError("Rookery database identity changed after immutable preflight")
@@ -812,6 +825,7 @@ class SQLiteStore:
                 self._migrate()
                 self._repair_required_runtime_indexes()
                 self._validate_current_schema()
+                self._quarantine_invalid_queue_timing(connection, now=_now())
                 connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
                 self._harden_storage_files()
             self._enable_wal_mode()
@@ -891,6 +905,63 @@ class SQLiteStore:
 
         with self._immediate_transaction():
             yield
+
+    def _quarantine_invalid_queue_timing(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        now: datetime,
+    ) -> None:
+        """Terminalize malformed state-dependent timing once during store recovery."""
+
+        scope_rows = connection.execute(
+            """
+            SELECT * FROM refresh_intent_scopes
+            WHERE state IN ('leased', 'deferred')
+            ORDER BY queue_requested_at, intent_scope_id
+            """
+        ).fetchall()
+        for row in scope_rows:
+            malformed_lease = row["state"] == "leased" and (
+                row["lease_id"] is None
+                or row["lease_worker_id"] is None
+                or not _stored_timestamp_is_canonical(row["leased_until"])
+            )
+            malformed_deferral = (
+                row["state"] == "deferred"
+                and row["eligible_at"] is not None
+                and not _stored_timestamp_is_canonical(row["eligible_at"])
+            )
+            if malformed_lease or malformed_deferral:
+                self._terminalize_intent_scope_contract_failure(
+                    connection,
+                    row=row,
+                    now=now,
+                )
+
+        action_rows = connection.execute(
+            """
+            SELECT * FROM adapter_actions
+            WHERE state IN ('leased', 'running', 'retry_wait')
+            ORDER BY record_created_at, action_id
+            """
+        ).fetchall()
+        for row in action_rows:
+            malformed_lease = row["state"] in {"leased", "running"} and (
+                row["lease_id"] is None
+                or row["lease_worker_id"] is None
+                or not _stored_timestamp_is_canonical(row["leased_until"])
+            )
+            malformed_retry = row["state"] == "retry_wait" and not (
+                _stored_timestamp_is_canonical(row["retry_at"])
+            )
+            if malformed_lease or malformed_retry:
+                self._terminalize_action_contract_failure(
+                    connection,
+                    action_id=row["action_id"],
+                    now=now,
+                    reason="persisted_action_timing_mismatch",
+                )
 
     @staticmethod
     @contextmanager
@@ -2410,7 +2481,8 @@ class SQLiteStore:
             intent_scope_id=row["intent_scope_id"],
         )
 
-    def _promote_due_intent_scopes(self, now_text: str) -> bool:
+    def _promote_due_intent_scopes(self, now: datetime) -> bool:
+        now_text = _utc_text(now)
         with self._immediate_transaction() as connection:
             promoted = 0
             result = connection.execute(
@@ -2471,9 +2543,8 @@ class SQLiteStore:
         now = require_utc(now, "now")
         if lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
-        now_text = _utc_text(now)
         leased_until = now + lease_duration
-        while self._promote_due_intent_scopes(now_text):
+        while self._promote_due_intent_scopes(now):
             await asyncio.sleep(0)
         with self._immediate_transaction() as connection:
             while True:
@@ -3376,7 +3447,8 @@ class SQLiteStore:
                     connection, action=action, dedupe_key=dedupe_key, created_at=_now()
                 )
 
-    def _promote_due_actions(self, *, adapter_key: str, now_text: str) -> bool:
+    def _promote_due_actions(self, *, adapter_key: str, now: datetime) -> bool:
+        now_text = _utc_text(now)
         with self._immediate_transaction() as connection:
             promoted = 0
             result = connection.execute(
@@ -3421,8 +3493,7 @@ class SQLiteStore:
         now = require_utc(now, "now")
         lease_id = str(uuid4())
         leased_until = now + _DEFAULT_LEASE
-        now_text = _utc_text(now)
-        while self._promote_due_actions(adapter_key=adapter_key, now_text=now_text):
+        while self._promote_due_actions(adapter_key=adapter_key, now=now):
             await asyncio.sleep(0)
         with self._immediate_transaction() as connection:
             while True:
