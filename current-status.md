@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 13:13 ET
+Updated: 2026-08-30 13:33 ET
 
 ## Contents
 
@@ -17,12 +17,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 628 passed / 8 platform skips; Ubuntu/WSL 630 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
+- Latest checks: Windows 630 passed / 8 platform skips; Ubuntu/WSL 632 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
 - Coverage: Windows 90.32% statements / 76.70% branch-only / 87.02% combined; Ubuntu/WSL 87.72% / 75.48% / 84.74%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-125904.md` is closed in commit `ff99dc3` after one medium v1 compatibility defect, one medium release-evidence defect, and one low installed identity omission were repaired and independently cleared.
+- Active review round: `critical-reviews/20260830-131411.md` is closed in commit `c332742` after one low expired-form recovery defect and two medium polling/terminal-state defects were repaired, rendered, and independently cleared.
 - Latest checkpoint: `progress/20260830-124634.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 11 record earlier committed closures, and post 12 records the write-headroom and monotonic-time closures.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -62,6 +62,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close wall-clock regression and durable event-time ordering review.
 - [x] Close concurrent receipt, replay, lease, migration, and backup delta review.
 - [x] Close exported v1 and installed extension-surface review.
+- [x] Close browser recovery, no-JavaScript, polling, and responsive-state review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
@@ -594,6 +595,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Commit `d8c92ba` separates monotonic lease authority, nondecreasing worker records, and explicit durable receipt provenance; real state is at migration 0023 with two verified pre-migration backups.
 - Murmuration topic 40 post 12 records commits `0f32af3`, `8f42f64`, `d8c92ba`, and `4a2717a` plus the clean `4a2717a` manifest under exact `openai/gpt-5.6-sol` provenance.
 - Commit `ff99dc3` preserves old positional/default JSON v1 consumers, prevents dirty verification from deleting clean evidence, and maps Rookery to the installed `async-api-view` command in help and wheel smoke.
+- Commit `c332742` keeps expired form submissions in the recovery shell, separates server-unavailable from transport-disconnected polling, reloads missing intents into HTML errors, and prevents terminal receipts from polling again.
 
 ## Risks / watch list
 
