@@ -975,7 +975,7 @@ They MUST NOT be interpreted by the generic coordinator.
 ### Retry and rate behavior
 
 Adapter workers own retry count, retryable error classification, backoff, concurrency, and downstream rate groups.
-They MUST respect any downstream retry-after signal.
+They MUST respect any syntactically valid downstream retry-after signal within the adapter's bounded scheduling contract. The Databricks worker accepts delta-seconds or HTTP-date guidance up to 24 hours and performs no automatic retry when a larger delay is requested.
 They MAY delay an admitted action beyond canonical `eligible_at`.
 
 Adapter retries remain part of one logical action.

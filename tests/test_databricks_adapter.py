@@ -32,6 +32,8 @@ from async_api_view.adapters.databricks import (
     InvalidDownstreamResponse,
     LifecyclePersistenceFailure,
     ResolvedTarget,
+    _downstream_retry_after,
+    classify_failure,
     redact_diagnostic,
 )
 from async_api_view.contracts import (
@@ -1573,6 +1575,37 @@ def test_redaction_and_import_boundary() -> None:
     assert "databricks api" not in source
 
 
+def test_retry_after_parser_accepts_seconds_and_http_date_with_bound() -> None:
+    now = datetime(2026, 8, 29, 20, tzinfo=UTC)
+
+    assert _downstream_retry_after(b"HTTP 429\nRetry-After: 120", now=now) == (
+        timedelta(seconds=120),
+        False,
+    )
+    assert _downstream_retry_after(
+        b"Retry-After: Sat, 29 Aug 2026 20:02:00 GMT",
+        now=now,
+    ) == (timedelta(seconds=120), False)
+    assert _downstream_retry_after(b'{"retry_after": 86401}', now=now) == (None, True)
+    assert _downstream_retry_after(b"Retry-After: 10000000000", now=now) == (None, True)
+    assert _downstream_retry_after(b"Retry-After: invalid", now=now) == (None, False)
+    assert _downstream_retry_after(
+        b"Retry-After: Fri, 31 Dec 9999 23:59:59 -2359",
+        now=now,
+    ) == (None, False)
+    assert (
+        classify_failure(
+            DownstreamFailure(
+                "guided retry",
+                exit_code=1,
+                diagnostic="Retry-After: 120",
+                retry_after=timedelta(seconds=120),
+            )
+        )
+        is ErrorClass.DOWNSTREAM_RATE_LIMIT
+    )
+
+
 class _Queue:
     def __init__(self, lease: ActionLease) -> None:
         self.lease = lease
@@ -1667,6 +1700,26 @@ class _FailRunner(_Runner):
             "raw downstream failure",
             exit_code=1,
             diagnostic="token=worker-secret C:\\Users\\person\\.databrickscfg /home/person/config",
+        )
+
+
+class _RateLimitRunner(_Runner):
+    def __init__(
+        self,
+        *,
+        retry_after: timedelta | None = timedelta(seconds=120),
+        retry_after_out_of_bounds: bool = False,
+    ) -> None:
+        self.retry_after = retry_after
+        self.retry_after_out_of_bounds = retry_after_out_of_bounds
+
+    async def run(self, *_: object, **__: object) -> CliExecution:
+        raise DownstreamFailure(
+            "rate limited",
+            exit_code=1,
+            diagnostic="HTTP 429 Retry-After: 120",
+            retry_after=self.retry_after,
+            retry_after_out_of_bounds=self.retry_after_out_of_bounds,
         )
 
 
@@ -2053,6 +2106,69 @@ def test_retryable_failure_schedules_one_durable_attempt_per_lease() -> None:
     completed = [event[2] for event in lifecycle.events if event[0] == "complete"]
     assert [attempt.ordinal for attempt in attempts] == [1, 2]
     assert completed[-1].outcome is ActionOutcome.PARTIAL
+
+
+def test_rate_limit_retry_respects_longer_downstream_guidance() -> None:
+    action = _action("databricks.uc.catalogs.read")
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {"profile": "local"},
+    )
+    lifecycle = _Lifecycle()
+    worker = DatabricksWorker(
+        worker_id="test",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC), attempt_ordinal=1)),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=_Ingestion(),
+        targets=_Targets(),
+        runner=_RateLimitRunner(),
+        max_attempts=2,
+    )
+
+    assert asyncio.run(worker.run_once())
+
+    attempt = next(event[2] for event in lifecycle.events if event[0] == "attempt")
+    assert attempt.error_class is ErrorClass.DOWNSTREAM_RATE_LIMIT
+    assert attempt.retry_at - attempt.ended_at == timedelta(seconds=120)
+    assert not any(event[0] == "complete" for event in lifecycle.events)
+
+
+def test_out_of_bounds_retry_after_disables_automatic_retry() -> None:
+    action = _action("databricks.uc.catalogs.read")
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {"profile": "local"},
+    )
+    lifecycle = _Lifecycle()
+    worker = DatabricksWorker(
+        worker_id="test",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC), attempt_ordinal=1)),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=_Ingestion(),
+        targets=_Targets(),
+        runner=_RateLimitRunner(retry_after=None, retry_after_out_of_bounds=True),
+        max_attempts=2,
+    )
+
+    assert asyncio.run(worker.run_once())
+
+    attempt = next(event[2] for event in lifecycle.events if event[0] == "attempt")
+    completion = next(event[2] for event in lifecycle.events if event[0] == "complete")
+    assert attempt.retry_at is None
+    assert completion.outcome is ActionOutcome.FAILED
+    assert completion.error_class is ErrorClass.DOWNSTREAM_RATE_LIMIT
 
 
 def test_stale_lease_or_guard_failure_never_finalizes_action() -> None:

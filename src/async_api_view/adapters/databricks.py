@@ -11,6 +11,7 @@ import asyncio
 import base64
 import binascii
 import json
+import math
 import os
 import re
 import tempfile
@@ -18,6 +19,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -62,6 +64,7 @@ DEFAULT_STDERR_CAP = 64 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_HEARTBEAT_SECONDS = 15.0
 MAX_RETRY_DELAY_SECONDS = 30.0
+MAX_DOWNSTREAM_RETRY_AFTER_SECONDS = 24 * 60 * 60
 MAX_COLLECTION_ITEMS = 10_000
 MAX_TABLE_COLUMNS = 1_000
 MAX_JSON_DEPTH = 32
@@ -107,6 +110,8 @@ _UNC_PATH = re.compile(r"\\\\[^\\\s,;]+\\[^\r\n,;]*")
 _POSIX_PATH = re.compile(r"(?i)/(?:users|home|etc|var|tmp|private|mnt)/[^\s\"',;]*")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f\x1b]")
 _BLOCKED_VALUE = re.compile(r"(^-|[\r\n\x00])")
+_RETRY_AFTER_SECONDS = re.compile(r"(?i)\bretry[-_ ]?after\b[\"']?\s*[:=]\s*[\"']?(\d+)\b")
+_RETRY_AFTER_HEADER = re.compile(r"(?im)^\s*retry-after\s*:\s*([^\r\n]{1,128})")
 
 
 class DatabricksAdapterError(RuntimeError):
@@ -134,10 +139,20 @@ class CliOutputLimit(DatabricksAdapterError):
 
 
 class DownstreamFailure(DatabricksAdapterError):
-    def __init__(self, message: str, *, exit_code: int, diagnostic: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: int,
+        diagnostic: str,
+        retry_after: timedelta | None = None,
+        retry_after_out_of_bounds: bool = False,
+    ) -> None:
         super().__init__(message)
         self.exit_code = exit_code
         self.diagnostic = diagnostic
+        self.retry_after = retry_after
+        self.retry_after_out_of_bounds = retry_after_out_of_bounds
 
 
 class InvalidDownstreamResponse(DatabricksAdapterError):
@@ -280,6 +295,39 @@ def redact_diagnostic(value: bytes | str, *, limit: int = 2048) -> str:
     text = _UNC_PATH.sub("[local-path]", text)
     text = _POSIX_PATH.sub("[local-path]", text)
     return " ".join(text.split())[:limit]
+
+
+def _downstream_retry_after(
+    stderr: bytes,
+    *,
+    now: datetime | None = None,
+) -> tuple[timedelta | None, bool]:
+    """Extract one bounded HTTP Retry-After delay before diagnostic redaction."""
+
+    text = stderr.decode("utf-8", "replace")
+    seconds_match = _RETRY_AFTER_SECONDS.search(text)
+    seconds: int | None = None
+    if seconds_match is not None:
+        digits = seconds_match.group(1).lstrip("0") or "0"
+        maximum = str(MAX_DOWNSTREAM_RETRY_AFTER_SECONDS)
+        if len(digits) > len(maximum) or (len(digits) == len(maximum) and digits > maximum):
+            return None, True
+        seconds = int(digits)
+    if seconds is None:
+        header_match = _RETRY_AFTER_HEADER.search(text)
+        if header_match is None:
+            return None, False
+        try:
+            retry_at = parsedate_to_datetime(header_match.group(1).strip())
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            current = (now or datetime.now(UTC)).astimezone(UTC)
+            seconds = max(0, math.ceil((retry_at.astimezone(UTC) - current).total_seconds()))
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None, False
+    if seconds > MAX_DOWNSTREAM_RETRY_AFTER_SECONDS:
+        return None, True
+    return timedelta(seconds=seconds), False
 
 
 def safe_diagnostic(error: ErrorClass) -> str:
@@ -727,10 +775,13 @@ class CliRunner:
             timeout_message="Databricks CLI timed out",
         )
         if execution.exit_code != 0:
+            retry_after, retry_after_out_of_bounds = _downstream_retry_after(execution.stderr)
             raise DownstreamFailure(
                 "Databricks CLI exited unsuccessfully",
                 exit_code=execution.exit_code,
                 diagnostic=redact_diagnostic(execution.stderr),
+                retry_after=retry_after,
+                retry_after_out_of_bounds=retry_after_out_of_bounds,
             )
         return execution
 
@@ -1704,6 +1755,8 @@ def classify_failure(exc: BaseException) -> ErrorClass:
     if isinstance(exc, (CliOutputLimit, InvalidDownstreamResponse)):
         return ErrorClass.INVALID_DOWNSTREAM_RESPONSE
     if isinstance(exc, DownstreamFailure):
+        if exc.retry_after is not None or exc.retry_after_out_of_bounds:
+            return ErrorClass.DOWNSTREAM_RATE_LIMIT
         message = exc.diagnostic.lower()
         if "429" in message or "rate limit" in message:
             return ErrorClass.DOWNSTREAM_RATE_LIMIT
@@ -1739,10 +1792,14 @@ def _retryable(error: ErrorClass) -> bool:
     }
 
 
-def _retry_delay(error: ErrorClass, ordinal: int) -> timedelta:
+def _retry_delay(
+    error: ErrorClass,
+    ordinal: int,
+    downstream_retry_after: timedelta | None = None,
+) -> timedelta:
     base_seconds = 5.0 if error is ErrorClass.DOWNSTREAM_RATE_LIMIT else 1.0
     seconds = min(MAX_RETRY_DELAY_SECONDS, base_seconds * (2 ** min(ordinal - 1, 5)))
-    return timedelta(seconds=seconds)
+    return max(timedelta(seconds=seconds), downstream_retry_after or timedelta())
 
 
 class DatabricksWorker:
@@ -1941,9 +1998,19 @@ class DatabricksWorker:
         except Exception as exc:
             error = classify_failure(exc)
             ended = datetime.now(UTC)
+            downstream_failure = exc if isinstance(exc, DownstreamFailure) else None
             retry_at = (
-                ended + _retry_delay(error, ordinal)
-                if ordinal < self.max_attempts and _retryable(error)
+                ended
+                + _retry_delay(
+                    error,
+                    ordinal,
+                    downstream_failure.retry_after if downstream_failure is not None else None,
+                )
+                if ordinal < self.max_attempts
+                and _retryable(error)
+                and not (
+                    downstream_failure is not None and downstream_failure.retry_after_out_of_bounds
+                )
                 else None
             )
             if not await self._record_attempt(

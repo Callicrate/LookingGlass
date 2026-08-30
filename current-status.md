@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 20:09 ET
+Updated: 2026-08-29 20:31 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 449 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
+- Latest checks: 452 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: failure observability/secrecy is independently clear after separating stale lease fences from lifecycle persistence outages and hardening storage redaction; no finding is currently open.
+- Active review round: final documentation truth is independently clear after implementing bounded downstream Retry-After guidance; no finding is currently open.
 - Next progress report due: 2026-08-29 21:10 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -129,6 +129,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Bound shared JSON depth, containers, nodes, cycles, and digest rejection.
 - [x] Degrade worker health when lifecycle persistence fails without false stale-lease alerts.
 - [x] Harden storage diagnostics against prefixed secret keys and terminal controls.
+- [x] Implement the documented bounded downstream Retry-After contract.
 
 ## Evidence and decisions
 
@@ -259,6 +260,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Real SQLite heartbeat fencing now rejects exact expiry and raises the domain fence rather than creating a false outage; record/complete and heartbeat persistence regressions are independently clear.
 - Storage defense-in-depth redaction now covers prefixed environment/JSON secret keys plus C0/C1 and bidi controls before durable attempts/events; exact cross-platform parity is 449 passed plus one complementary platform skip.
 - The 20:09 Murmuration tend again found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
+- Documentation review reproduced a 429 with `Retry-After: 120` scheduling the old five-second local delay despite the architecture promise.
+- Raw bounded stderr now yields structured delta-seconds or HTTP-date guidance before redaction; rate-limit retries use the larger local/downstream delay up to 24 hours, while larger guidance disables automatic retry rather than retrying early.
+- Arbitrary-length numeric and overflow-prone date inputs fail closed without unsafe integer/date conversion; independent re-review is clear at exact 452-test Windows/Ubuntu parity.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
@@ -346,7 +350,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Configuration now rejects alternate `127.x` bind addresses that cannot reliably match `.localhost` resolution; the full suite passes 223 tests at 86% branch coverage.
 - A fresh residual review also reproduced immediate retry of transient CLI failures with no `retry_at`, and dispatch after an action deadline has expired; both medium defects are next in the queue.
 - Retryable failures now write one durable attempt with a future `retry_at` and return; the worker performs at most one CLI call per lease instead of looping immediately.
-- Retry delays use bounded exponential policy: one second for timeout/transient failures, five seconds for rate limits, and a 30-second ceiling.
+- Local retry delays use bounded exponential policy: one second for timeout/transient failures, five seconds for rate limits, and a 30-second local ceiling; valid downstream Retry-After guidance can extend rate-limit delay to 24 hours, while larger guidance disables automatic retry.
 - `ActionLease` now carries the transactionally elected next durable ordinal; reopen tests prove early leasing fails and ordinal two becomes eligible exactly at `retry_at`.
 - Independent review found no blocker; strict positive-integer ordinal validation was added, the suite passes 228 tests, and adapter/storage branch coverage increased to 78%/85%.
 - The pre-dispatch guard now cancels `deadline <= now` actions before binding resolution or command construction; a vertical regression proves zero CLI calls.
