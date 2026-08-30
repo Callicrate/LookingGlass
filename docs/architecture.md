@@ -1245,6 +1245,8 @@ The CLI runner MUST:
 - pass the profile and JSON-output selection as separate structured arguments;
 - resolve the executable only through explicit absolute `PATH` entries and run from a fresh empty directory beneath a private per-user root whose full ancestor chain contains no CLI-recognized bundle configuration;
 - remove inherited Databricks and bundle override variables so the named profile remains authoritative while ordinary home, trust-store, proxy, and cloud SDK settings remain available;
+- bind each mapped child process to a minimal snapshot derived from the same guarded standard-configuration parse whose route fingerprint passed authority verification, containing only defaults and the selected profile, using a private temporary file and a Rookery-owned child-only `DATABRICKS_CONFIG_FILE`;
+- hold a private per-command lock while that snapshot exists, remove it before releasing the lock on ordinary exit, and perform a bounded locked recovery scan before every later command so newly crash-retained snapshots are removed only after acquiring their abandoned locks while concurrent invocations remain untouched;
 - validate the installed CLI version and required command groups at startup;
 - capture stdout, stderr, exit code, timeout, and correlation ID;
 - parse only the expected JSON contract for the pinned capability version;
@@ -1487,7 +1489,7 @@ Canonical configuration includes:
 
 The local TOML file is desired enabled state for its Databricks resources.
 Each new entry has an explicit stable configuration ID.
-Each entry also carries the SHA-256 fingerprint of its normalized workspace host. The raw host remains in the CLI-owned profile and is never stored in canonical state. The worker re-reads the standard profile and verifies that fingerprint before every remote command.
+Each entry also carries the SHA-256 fingerprint of its normalized workspace route. Version 1 host-only fingerprints remain stable for profiles without additional selectors; profiles with `workspace_id`, `account_id`, `azure_workspace_resource_id`, or `azure_environment` use the version 2 host-plus-selector witness. Raw route values remain in the CLI-owned profile and are never stored in canonical state. Before every remote command, the worker reads one guarded standard-configuration snapshot, verifies that route fingerprint, minimizes the snapshot to defaults plus the selected profile, and pins the child to those bytes in a private ephemeral file. An A-to-B-to-A retarget of either the source host or a shared-host workspace selector during execution therefore cannot change the process authority.
 Legacy entries without an ID remain compatible, but adding an explicit ID/fingerprint creates a new verified authority rather than adopting cache whose remote-host witness was never recorded.
 Display-name and profile-reference changes under the same ID, authority fingerprint, and Workspace root update one local system. Credential rotation inside the same named profile preserves identity; retargeting the profile fails before dispatch because the actual host fingerprint changes.
 Removing an entry disables its system, binding, capabilities, and configured scopes without deleting cached facts.
@@ -1530,6 +1532,23 @@ Automated `uv` and GitHub Actions update proposals MUST run the complete cross-p
 - An action pins the exact adapter and capability version admitted.
 - Adapter upgrades SHOULD support side-by-side contract validation before activation.
 - Rollback MUST be possible by pausing a capability or selecting the prior compatible adapter version.
+
+### Offline upgrade envelope
+
+Migration `0018_action_state_projections` rebuilds current action-state projections from retained action scopes, so its first open is intentionally offline and proportional to retained history.
+On 2026-08-30, a fresh-process Windows benchmark down-leveled current synthetic stores to migration 0017, populated one terminal action scope per history row, and reopened them through the normal store path to apply migrations 0018 through 0020.
+Each run finished with the expected projection cardinality, migration ledger, `PRAGMA integrity_check = ok`, and no foreign-key violation.
+
+| Historical action scopes | Projection-key shape | Upgrade time | Peak working-set increase | Final database growth |
+|---:|---|---:|---:|---:|
+| 100,000 | One shared key | 1.27 s | 5.7 MiB | 0.06 MiB |
+| 100,000 | Distinct target per row | 2.78 s | 5.8 MiB | 90.4 MiB |
+| 250,000 | One shared key | 3.22 s | 5.8 MiB | 0.06 MiB |
+| 250,000 | Distinct target per row | 6.77 s | 9.5 MiB | 226.0 MiB |
+
+The benchmark host was Windows 11 on an Intel Xeon w5-2465X with 64 GiB RAM, Python 3.12.13, and SQLite 3.53.1.
+These measurements are evidence for the supported single-user local scale, not a universal latency guarantee.
+Operators with more than 250,000 retained action scopes should budget proportional exclusive startup time and rehearse the upgrade on a verified copy; the required pre-migration backup remains the recovery boundary.
 
 ### Time and clock behavior
 

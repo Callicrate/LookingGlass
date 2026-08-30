@@ -4,7 +4,7 @@
 __pycache__/
 *.py[cod]
 .coverage
-coverage-report.json
+coverage-report*.json
 htmlcov/
 dist/
 .local/
