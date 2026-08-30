@@ -110,6 +110,11 @@ CAPABILITIES = frozenset(
 )
 
 _PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_PROFILE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_SECTION_HEADER = re.compile(r"^\s*\[([^\]\r\n]+)\]")
+_RESERVED_PROFILE = "__settings__"
+_INI_TRUE = frozenset({"1", "t", "true"})
+_INI_FALSE = frozenset({"0", "f", "false"})
 _VERSION = re.compile(r"(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:[^0-9]|$)")
 _BEARER_SECRET = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 _SECRET = re.compile(
@@ -378,32 +383,115 @@ def workspace_authority_fingerprint(
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _profile_value(
+def _profile_parser() -> configparser.ConfigParser:
+    """Build an INI parser without Python's cross-section DEFAULT inheritance."""
+
+    parser = configparser.ConfigParser(
+        default_section=None,
+        empty_lines_in_values=False,
+        interpolation=None,
+        strict=False,
+    )
+    parser.optionxform = str
+    return parser
+
+
+def _preprocess_selected_profile(payload: str, *, profile: str) -> str:
+    """Reject permissive key/continuation syntax and apply pinned CLI comment precedence."""
+
+    processed: list[str] = []
+    selected = False
+    for line in payload.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        line_ending = line[len(content) :]
+        section = _SECTION_HEADER.match(content)
+        if section is not None:
+            selected = section.group(1).strip() == profile
+            processed.append(line)
+            continue
+        stripped = content.lstrip()
+        if not stripped or stripped.startswith(("#", ";")):
+            processed.append(line)
+            continue
+        delimiter_indexes = tuple(
+            index for index in (stripped.find("="), stripped.find(":")) if index >= 0
+        )
+        if not delimiter_indexes:
+            raise CliUnavailable("Databricks profile configuration uses unsupported key syntax")
+        delimiter_index = min(delimiter_indexes)
+        key = stripped[:delimiter_index].strip()
+        if _PROFILE_KEY.fullmatch(key) is None:
+            raise CliUnavailable("Databricks profile configuration uses noncanonical keys")
+        value = stripped[delimiter_index + 1 :].lstrip()
+        if value.rstrip().endswith("\\"):
+            raise CliUnavailable("Databricks profile configuration uses unsupported continuation")
+        if value.startswith(("`", '"""')):
+            raise CliUnavailable("Databricks profile configuration uses unsupported quoted values")
+        if not selected:
+            processed.append(line)
+            continue
+        hash_comment = value.find(" #")
+        if hash_comment >= 0:
+            value = value[:hash_comment]
+        else:
+            semicolon_comment = value.find(" ;")
+            if semicolon_comment >= 0:
+                value = value[:semicolon_comment]
+        value = value.rstrip()
+        processed.append(f"{key} = {value}{line_ending}")
+    return "".join(processed)
+
+
+def _normalized_profile_value(value: str) -> str:
+    if "\n" in value or "\r" in value:
+        raise CliUnavailable("Databricks profile configuration uses unsupported multiline values")
+    normalized = value.strip()
+    if len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in {'"', "'"}:
+        quote = normalized[0]
+        if quote not in normalized[1:-1]:
+            normalized = normalized[1:-1]
+    if normalized.startswith(("`", '"""')):
+        raise CliUnavailable("Databricks profile configuration uses unsupported quoted values")
+    return normalized
+
+
+def _selected_profile_items(
     parser: configparser.ConfigParser,
     *,
     profile: str,
-    key: str,
-) -> str | None:
-    if profile == "DEFAULT":
-        return parser.defaults().get(key)
-    return parser.get(profile, key, raw=True, fallback=None)
+) -> dict[str, str]:
+    if not parser.has_section(profile):
+        raise CliUnavailable("Databricks profile has no workspace authority")
+    items: dict[str, str] = {}
+    for key, value in parser.items(profile, raw=True):
+        if _PROFILE_KEY.fullmatch(key) is None:
+            raise CliUnavailable("Databricks profile configuration uses noncanonical keys")
+        items[key] = _normalized_profile_value(value)
+    return items
+
+
+def _quoted_profile_value(value: str) -> str:
+    if " #" in value or " ;" in value:
+        if "`" in value:
+            raise CliUnavailable("Databricks profile value cannot be represented safely")
+        return f"`{value}`"
+    for quote in ('"', "'", "`"):
+        if quote not in value:
+            return f"{quote}{value}{quote}"
+    raise CliUnavailable("Databricks profile value cannot be represented safely")
 
 
 def _minimal_profile_snapshot(
-    parser: configparser.ConfigParser,
     *,
     profile: str,
+    items: Mapping[str, str],
 ) -> bytes:
-    """Serialize only defaults and the selected profile from the verified parse."""
+    """Serialize only the selected profile's own values from the verified parse."""
 
-    snapshot = configparser.ConfigParser(interpolation=None, strict=True)
-    snapshot["DEFAULT"] = dict(parser.defaults())
-    if profile != "DEFAULT":
-        if not parser.has_section(profile):  # pragma: no cover - authority lookup guard
-            raise CliUnavailable("Databricks profile configuration is invalid")
-        snapshot[profile] = dict(parser.items(profile, raw=True))
     output = StringIO()
-    snapshot.write(output)
+    output.write(f"[{profile}]\n")
+    for key, value in items.items():
+        output.write(f"{key} = {_quoted_profile_value(value)}\n")
     payload = output.getvalue().encode()
     if len(payload) > MAX_DATABRICKS_CONFIG_BYTES:  # pragma: no cover - subset invariant
         raise CliUnavailable("Databricks profile configuration exceeds the size limit")
@@ -417,7 +505,7 @@ def _databricks_profile_authority(
 ) -> tuple[str, bytes]:
     """Return the route fingerprint and a minimal verified CLI config snapshot."""
 
-    if _PROFILE.fullmatch(profile) is None:
+    if profile == _RESERVED_PROFILE or _PROFILE.fullmatch(profile) is None:
         raise CliUnavailable("Databricks profile name is invalid")
     path = (config_file or (Path.home() / ".databrickscfg")).absolute()
     try:
@@ -430,15 +518,14 @@ def _databricks_profile_authority(
         raise
     except (OSError, UnicodeError):
         raise CliUnavailable("Databricks profile configuration is unavailable") from None
-    parser = configparser.ConfigParser(interpolation=None, strict=True)
+    parser = _profile_parser()
     invalid_configuration = False
     try:
         payload = payload_bytes.decode("utf-8-sig")
+        payload = _preprocess_selected_profile(payload, profile=profile)
         parser.read_string(payload)
-        if profile != "DEFAULT" and not parser.has_section(profile):
-            host = None
-        else:
-            host = _profile_value(parser, profile=profile, key="host")
+        items = _selected_profile_items(parser, profile=profile)
+        host = items.get("host")
     except (configparser.Error, UnicodeError):
         invalid_configuration = True
         host = None
@@ -446,18 +533,21 @@ def _databricks_profile_authority(
         raise CliUnavailable("Databricks profile configuration is invalid")
     if host is None:
         raise CliUnavailable("Databricks profile has no workspace authority")
+    skip_verify = items.get("skip_verify")
+    if skip_verify is not None:
+        normalized_skip_verify = skip_verify.casefold()
+        if normalized_skip_verify in _INI_TRUE:
+            raise CliUnavailable("Databricks profile cannot disable TLS certificate verification")
+        if normalized_skip_verify not in _INI_FALSE:
+            raise CliUnavailable("Databricks profile skip_verify setting is invalid")
     fingerprint = workspace_authority_fingerprint(
         host,
-        workspace_id=_profile_value(parser, profile=profile, key="workspace_id"),
-        account_id=_profile_value(parser, profile=profile, key="account_id"),
-        azure_workspace_resource_id=_profile_value(
-            parser,
-            profile=profile,
-            key="azure_workspace_resource_id",
-        ),
-        azure_environment=_profile_value(parser, profile=profile, key="azure_environment"),
+        workspace_id=items.get("workspace_id"),
+        account_id=items.get("account_id"),
+        azure_workspace_resource_id=items.get("azure_workspace_resource_id"),
+        azure_environment=items.get("azure_environment"),
     )
-    return fingerprint, _minimal_profile_snapshot(parser, profile=profile)
+    return fingerprint, _minimal_profile_snapshot(profile=profile, items=items)
 
 
 def databricks_profile_authority_fingerprint(

@@ -419,7 +419,8 @@ def test_profile_authority_fingerprint_normalizes_and_fails_closed(
 
     config.write_text(
         "[DEFAULT]\nhost = https://workspace.example.com\n"
-        "[PRIMARY]\nworkspace_id = 111\ntoken = selected-placeholder\n"
+        "[PRIMARY]\nhost = https://workspace.example.com\n"
+        "workspace_id = 111\ntoken = selected-placeholder\n"
         "[OTHER]\nworkspace_id = 222\ntoken = unrelated-placeholder\n",
         encoding="utf-8",
     )
@@ -438,7 +439,8 @@ def test_profile_authority_fingerprint_normalizes_and_fails_closed(
         assert kwargs["profile_config_snapshot"] == verified_snapshot
         config.write_text(
             "[DEFAULT]\nhost = https://workspace.example.com\n"
-            "[PRIMARY]\nworkspace_id = 222\ntoken = selected-placeholder\n",
+            "[PRIMARY]\nhost = https://workspace.example.com\n"
+            "workspace_id = 222\ntoken = selected-placeholder\n",
             encoding="utf-8",
         )
         config.write_bytes(verified_source)
@@ -462,6 +464,200 @@ def test_profile_authority_fingerprint_normalizes_and_fails_closed(
     execution = asyncio.run(runner.run(invocation, correlation_id="test"))
     assert b"/from-a" in execution.stdout
     assert config.read_bytes() == verified_source
+
+
+def test_profile_snapshot_uses_only_selected_cli_section_semantics(tmp_path: Path) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        "[DEFAULT]\n"
+        "host = https://profile-a.invalid\n"
+        "token = synthetic-default-placeholder\n"
+        "[PRIMARY]\n"
+        "host = https://profile-b.invalid # selected route\n"
+        "auth_type = pat\n"
+        "token = selected#placeholder # selected comment\n",
+        encoding="utf-8",
+    )
+
+    default_fingerprint, _default_snapshot = databricks_adapter._databricks_profile_authority(
+        "DEFAULT", config_file=config
+    )
+    primary_fingerprint, primary_snapshot = databricks_adapter._databricks_profile_authority(
+        "PRIMARY", config_file=config
+    )
+
+    assert default_fingerprint != primary_fingerprint
+    assert b"synthetic-default-placeholder" not in primary_snapshot
+    assert b"selected#placeholder" in primary_snapshot
+    assert b"selected comment" not in primary_snapshot
+    parser = databricks_adapter._profile_parser()
+    parser.read_string(primary_snapshot.decode())
+    assert databricks_adapter._selected_profile_items(parser, profile="PRIMARY") == {
+        "host": "https://profile-b.invalid",
+        "auth_type": "pat",
+        "token": "selected#placeholder",
+    }
+
+
+def test_profile_keys_remain_case_sensitive_and_settings_is_reserved(tmp_path: Path) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text("[PRIMARY]\nHost = https://workspace.example.com\n", encoding="utf-8")
+
+    with pytest.raises(CliUnavailable, match="no workspace authority"):
+        databricks_profile_authority_fingerprint("PRIMARY", config_file=config)
+    with pytest.raises(CliUnavailable, match="name is invalid"):
+        databricks_profile_authority_fingerprint("__settings__", config_file=config)
+
+
+@pytest.mark.parametrize("quote", ['"', "`"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "host",
+        "workspace_id",
+        "account_id",
+        "azure_workspace_resource_id",
+        "azure_environment",
+    ],
+)
+def test_profile_rejects_quoted_route_keys(
+    tmp_path: Path,
+    quote: str,
+    key: str,
+) -> None:
+    config = tmp_path / ".databrickscfg"
+    override = "https://profile-b.invalid" if key == "host" else "route-b"
+    config.write_text(
+        "[PRIMARY]\nhost = https://profile-a.invalid\nworkspace_id = route-a\n"
+        f"{quote}{key}{quote} = {override}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CliUnavailable, match="noncanonical keys"):
+        databricks_profile_authority_fingerprint("PRIMARY", config_file=config)
+
+
+@pytest.mark.parametrize("quoted_key", ['"skip_verify"', "`skip_verify`"])
+def test_profile_rejects_quoted_tls_bypass_key(tmp_path: Path, quoted_key: str) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        f"[PRIMARY]\nhost = https://workspace.example.com\n{quoted_key} = true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CliUnavailable, match="noncanonical keys"):
+        databricks_profile_authority_fingerprint("PRIMARY", config_file=config)
+
+
+def test_profile_rejects_cli_continuation_that_can_consume_a_credential(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        "[PRIMARY]\nhost = https://workspace.example.com\n"
+        "workspace_id = 111\\\n"
+        "token = synthetic-selected-placeholder\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CliUnavailable, match="unsupported continuation"):
+        databricks_profile_authority_fingerprint("PRIMARY", config_file=config)
+
+
+def test_profile_rejects_unselected_continuation_that_can_consume_a_section(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        "[PRIMARY]\nhost = https://profile-a.invalid\n"
+        "token = synthetic-primary-placeholder\n"
+        "[OTHER]\nnote = consume-next-section\\\n"
+        "[PRIMARY]\nhost = https://profile-b.invalid\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CliUnavailable, match="unsupported continuation"):
+        databricks_profile_authority_fingerprint("PRIMARY", config_file=config)
+
+
+def test_profile_rejects_continuation_before_removing_inline_comment(tmp_path: Path) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        "[PRIMARY]\nhost = https://workspace.example.com\n"
+        "workspace_id = 111 # comment\\\n"
+        "token = synthetic-selected-placeholder\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CliUnavailable, match="unsupported continuation"):
+        databricks_profile_authority_fingerprint("PRIMARY", config_file=config)
+
+
+def test_profile_uses_pinned_hash_before_semicolon_comment_precedence(tmp_path: Path) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        "[PRIMARY]\nhost = https://workspace.example.com\ntoken = alpha ;retained # discarded\n",
+        encoding="utf-8",
+    )
+
+    _fingerprint, snapshot = databricks_adapter._databricks_profile_authority(
+        "PRIMARY", config_file=config
+    )
+
+    assert b"token = `alpha ;retained`" in snapshot
+
+
+@pytest.mark.parametrize("profile", ["DEFAULT", "PRIMARY"])
+@pytest.mark.parametrize("value", ["true", "TRUE", "T", "1"])
+def test_profile_rejects_tls_verification_bypass(
+    tmp_path: Path,
+    profile: str,
+    value: str,
+) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        f"[{profile}]\nhost = https://workspace.example.com\nskip_verify = {value}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CliUnavailable, match="cannot disable TLS"):
+        databricks_profile_authority_fingerprint(profile, config_file=config)
+
+
+@pytest.mark.parametrize("value", ["false", "FALSE", "F", "0"])
+def test_profile_accepts_explicit_certificate_verification(tmp_path: Path, value: str) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        f"[PRIMARY]\nhost = https://workspace.example.com\nskip_verify = {value}\n",
+        encoding="utf-8",
+    )
+
+    assert databricks_profile_authority_fingerprint("PRIMARY", config_file=config) == (
+        workspace_authority_fingerprint("https://workspace.example.com")
+    )
+
+
+def test_profile_rejects_invalid_tls_verification_setting_before_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        "[PRIMARY]\nhost = https://workspace.example.com\nskip_verify = yes\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner(profile_config_path=config)
+    monkeypatch.setattr(
+        runner,
+        "_execute",
+        lambda *_args, **_kwargs: pytest.fail("insecure profile reached process execution"),
+    )
+
+    with pytest.raises(CliUnavailable, match="skip_verify setting is invalid"):
+        runner.profile_authority_snapshot(
+            profile="PRIMARY",
+            expected_fingerprint=workspace_authority_fingerprint("https://workspace.example.com"),
+        )
 
 
 def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
@@ -2074,7 +2270,10 @@ def test_worker_pins_same_host_workspace_selector_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = tmp_path / ".databrickscfg"
-    source_a = b"[DEFAULT]\nhost = https://unified.example.com\n[PRIMARY]\nworkspace_id = 111\n"
+    source_a = (
+        b"[DEFAULT]\nhost = https://default.example.com\n"
+        b"[PRIMARY]\nhost = https://unified.example.com\nworkspace_id = 111\n"
+    )
     config.write_bytes(source_a)
     expected = databricks_profile_authority_fingerprint("PRIMARY", config_file=config)
     action = _action("databricks.workspace.children.read", "membership")
@@ -2096,9 +2295,17 @@ def test_worker_pins_same_host_workspace_selector_snapshot(
     async def execute_from_snapshot(*_args: object, **kwargs: object) -> CliExecution:
         snapshot = kwargs["profile_config_snapshot"]
         assert isinstance(snapshot, bytes)
-        assert b"workspace_id = 111" in snapshot
+        snapshot_parser = databricks_adapter._profile_parser()
+        snapshot_parser.read_string(snapshot.decode())
+        assert (
+            databricks_adapter._selected_profile_items(snapshot_parser, profile="PRIMARY")[
+                "workspace_id"
+            ]
+            == "111"
+        )
         config.write_text(
-            "[DEFAULT]\nhost = https://unified.example.com\n[PRIMARY]\nworkspace_id = 222\n",
+            "[DEFAULT]\nhost = https://default.example.com\n"
+            "[PRIMARY]\nhost = https://unified.example.com\nworkspace_id = 222\n",
             encoding="utf-8",
         )
         config.write_bytes(source_a)
