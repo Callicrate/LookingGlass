@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 09:59 ET
+Updated: 2026-08-30 10:15 ET
 
 ## Contents
 
@@ -17,12 +17,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 596 passed / 8 platform skips; Ubuntu/WSL 598 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
-- Coverage: Windows 90.27% statements / 76.64% branch-only / 86.98% combined; Ubuntu/WSL 87.58% / 75.36% / 84.63%.
+- Latest checks: Windows 598 passed / 8 platform skips; Ubuntu/WSL 600 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
+- Coverage: Windows 90.27% statements / 76.54% branch-only / 86.95% combined; Ubuntu/WSL 87.58% / 75.27% / 84.61%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-090125.md` now records eight medium standalone/runtime/supply-chain defects. All have candidates; final hash/manifest/fresh-upgrade re-review is running.
+- Active review round: `critical-reviews/20260830-090125.md` is closed after nine medium standalone/runtime/supply-chain defects were repaired and independently cleared through Windows, WSL, contaminated-artifact, stale-package, and PowerShell rollback probes.
 - Latest checkpoint: `progress/20260830-095908.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 9 record committed closures, and the operational 09:48 pass stayed read-only while release review remains uncommitted.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -70,7 +70,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close store-owned action lease clock review.
 - [x] State the package-index/cache requirement without claiming an offline standalone bundle.
 - [x] Propagate post-start global CLI certification loss to runtime health and refresh controls.
-- [ ] Close standalone dependency/supply-chain review.
+- [x] Close standalone dependency/supply-chain review.
 - [x] Bind standalone dependency versions and bytes to the locked hash-bearing runtime graph.
 - [x] Bind CI artifact identity and checksum manifests to a completely clean source commit.
 - [x] Require official certified CLI bytes before compatibility execution.
@@ -579,6 +579,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Worker-global certification/runtime failures now record the action then reach supervision, disabling controls and retrying doctor; profile-local configuration failures remain action-scoped. Independent re-review is clear.
 - Hash-required private-environment install, corrupt-hash rejection, clean commit manifests, official CLI origin, and fresh sibling upgrades with prior-only hook removal pass on Windows and WSL; final supply-chain re-review is running.
 - Current exact gates pass at 598/8 on Windows and 600/6 on Ubuntu/WSL. The release candidate now contains 90 sdist entries, 66 wheel entries, 34 installed assets, and a lock-derived constraints artifact; commit manifest publication waits for a clean commit by design.
+- Final supply-chain re-review clears hash enforcement, all-untracked manifest cleanliness, official CLI origin, prior-only executable hook removal, fresh relocatable upgrade, and injected PowerShell failure/rollback paths.
+- Repeated release archives remain byte-identical at sdist `6FEC48A998F6A416C28BB1581DBF7112E02D00BC79AECBF7DFF3998E260CA0CF` and wheel `5E8B336634CB4BBDAA45E769853A0624F2ACF87517EDFB0CC6E28999DA5D4213`; runtime constraints hash is `A68A3A853DCC1F17527EDEF0C43000C191EB78B259F09EBFA01BFFBCD2B2A01C`.
 
 ## Risks / watch list
 
@@ -591,6 +593,6 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The 05:28 profile/startup ledger and all five earlier ledgers have no remaining open finding.
 - The 06:37 recovery/parser ledger and all earlier ledgers have no remaining open finding.
 - The 07:29 compatibility/upgrade ledger and all earlier ledgers have no remaining open finding.
-- The 09:01 standalone/runtime ledger remains open only for the final supply-chain pass and exact gates.
+- The 09:01 standalone/runtime ledger and all earlier ledgers have no remaining open finding.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
