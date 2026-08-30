@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 17:53 ET
+Updated: 2026-08-30 17:58 ET
 
 ## Contents
 
@@ -22,9 +22,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` includes `205d835`, the independently cleared migration-byte provenance and legacy-adoption implementation.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Latest review round: `critical-reviews/20260830-170000.md` is closed with no remaining finding after testing exact migration bytes across source, installed wheels, legacy adoption, rollback, backup, and reopen.
+- Active review round: `critical-reviews/20260830-175800.md` is testing operator-facing CLI/browser failure recovery, redaction, exit classification, and installed-help parity.
 - Latest checkpoint: `progress/20260830-172526.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 17:22 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and forum readiness. Topic 40 remains at post 13 pending clean closure evidence.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 17:55 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and published the clean closure as topic 40 post 14.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -68,6 +68,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close authority-read containment and readable-view query-plan review.
 - [x] Close desired-configuration repair and restart-atomicity review.
 - [x] Close migration byte-provenance and ledger-immutability review.
+- [ ] Close operator failure-recovery and error-surface review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
