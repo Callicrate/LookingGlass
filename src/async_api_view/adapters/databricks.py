@@ -1999,20 +1999,21 @@ class DatabricksWorker:
             error = classify_failure(exc)
             ended = datetime.now(UTC)
             downstream_failure = exc if isinstance(exc, DownstreamFailure) else None
-            retry_at = (
-                ended
-                + _retry_delay(
-                    error,
-                    ordinal,
-                    downstream_failure.retry_after if downstream_failure is not None else None,
-                )
-                if ordinal < self.max_attempts
+            retry_at: datetime | None = None
+            if (
+                ordinal < self.max_attempts
                 and _retryable(error)
                 and not (
                     downstream_failure is not None and downstream_failure.retry_after_out_of_bounds
                 )
-                else None
-            )
+            ):
+                candidate_retry_at = ended + _retry_delay(
+                    error,
+                    ordinal,
+                    downstream_failure.retry_after if downstream_failure is not None else None,
+                )
+                if action.deadline is None or candidate_retry_at < action.deadline:
+                    retry_at = candidate_retry_at
             if not await self._record_attempt(
                 lease,
                 ActionAttempt(

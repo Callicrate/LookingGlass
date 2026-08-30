@@ -2171,6 +2171,41 @@ def test_out_of_bounds_retry_after_disables_automatic_retry() -> None:
     assert completion.error_class is ErrorClass.DOWNSTREAM_RATE_LIMIT
 
 
+def test_retry_after_beyond_action_deadline_disables_automatic_retry() -> None:
+    action = replace(
+        _action("databricks.uc.catalogs.read"),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+    )
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {"profile": "local"},
+    )
+    lifecycle = _Lifecycle()
+    worker = DatabricksWorker(
+        worker_id="test",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC), attempt_ordinal=1)),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=_Ingestion(),
+        targets=_Targets(),
+        runner=_RateLimitRunner(),
+        max_attempts=2,
+    )
+
+    assert asyncio.run(worker.run_once())
+
+    attempt = next(event[2] for event in lifecycle.events if event[0] == "attempt")
+    completion = next(event[2] for event in lifecycle.events if event[0] == "complete")
+    assert attempt.retry_at is None
+    assert completion.outcome is ActionOutcome.FAILED
+    assert completion.error_class is ErrorClass.DOWNSTREAM_RATE_LIMIT
+
+
 def test_stale_lease_or_guard_failure_never_finalizes_action() -> None:
     action = _action("databricks.uc.catalogs.read")
     binding = ConnectionBinding(

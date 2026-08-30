@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 20:31 ET
+Updated: 2026-08-29 20:35 ET
 
 ## Goal
 
@@ -9,10 +9,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 452 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
+- Latest checks: 453 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: final documentation truth is independently clear after implementing bounded downstream Retry-After guidance; no finding is currently open.
+- Active review round: final documentation truth and bounded downstream Retry-After behavior are independently clear; no finding is currently open and final convergence is active.
 - Next progress report due: 2026-08-29 21:10 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -263,6 +263,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Documentation review reproduced a 429 with `Retry-After: 120` scheduling the old five-second local delay despite the architecture promise.
 - Raw bounded stderr now yields structured delta-seconds or HTTP-date guidance before redaction; rate-limit retries use the larger local/downstream delay up to 24 hours, while larger guidance disables automatic retry rather than retrying early.
 - Arbitrary-length numeric and overflow-prone date inputs fail closed without unsafe integer/date conversion; independent re-review is clear at exact 452-test Windows/Ubuntu parity.
+- Bounded guidance that reaches or exceeds the action deadline now disables automatic retry instead of leaving the action in `retry_wait` until a predictably rejected dispatch; exact cross-platform parity is 453 passed plus one complementary platform skip.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
