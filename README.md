@@ -46,7 +46,7 @@ The current runnable slice can:
 Check available profiles without printing credential values:
 
 ```powershell
-databricks auth profiles
+databricks auth profiles --profile 'YOUR_PROFILE' --skip-validate
 ```
 
 Generate the non-secret fingerprint of the profile's resolved workspace route, including any workspace, account, or Azure routing selectors, then copy the digest into `authority_fingerprint`:
