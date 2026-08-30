@@ -17,6 +17,7 @@ FORBIDDEN_SDIST_PATHS = (
     "/progress/",
     "/.murmuration/",
     "/.github/",
+    "/critical-reviews/",
     "/current-status.md",
 )
 RUNTIME_ASSET_DIRECTORIES = (
@@ -94,6 +95,14 @@ def _verify_archive_versions(source_archive: Path, wheel_archive: Path) -> None:
         or wheel_archive.suffix != ".whl"
     ):
         raise RuntimeError(f"distribution archives do not match project version {prefix}")
+
+
+def forbidden_source_entries(source_names: list[str]) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in source_names
+        if any(forbidden in name for forbidden in FORBIDDEN_SDIST_PATHS)
+    )
 
 
 def _venv_python(environment: Path) -> Path:
@@ -371,11 +380,7 @@ def main() -> None:
     _verify_archive_versions(source_archive, wheel_archive)
     with open_tar(source_archive) as archive:
         source_names = archive.getnames()
-    leaked = [
-        name
-        for name in source_names
-        if any(forbidden in name for forbidden in FORBIDDEN_SDIST_PATHS)
-    ]
+    leaked = forbidden_source_entries(source_names)
     if leaked:
         raise RuntimeError(f"source distribution contains workspace-only files: {leaked}")
     expected_assets = expected_runtime_assets()

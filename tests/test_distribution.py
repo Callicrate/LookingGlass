@@ -11,6 +11,7 @@ if _SPEC is None or _SPEC.loader is None:  # pragma: no cover - test environment
 _VERIFIER = module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_VERIFIER)
 expected_runtime_assets = _VERIFIER.expected_runtime_assets
+forbidden_source_entries = _VERIFIER.forbidden_source_entries
 verify_wheel_runtime_assets = _VERIFIER.verify_wheel_runtime_assets
 
 
@@ -67,3 +68,12 @@ def test_wheel_asset_verification_rejects_stale_content(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="content mismatch"):
         verify_wheel_runtime_assets(archive_path, frozenset(expected), source_root)
+
+
+def test_source_distribution_rejects_workspace_review_surfaces() -> None:
+    assert forbidden_source_entries(
+        [
+            "async_api_view-0.1.0/README.md",
+            "async_api_view-0.1.0/critical-reviews/20260830-010345.md",
+        ]
+    ) == ("async_api_view-0.1.0/critical-reviews/20260830-010345.md",)
