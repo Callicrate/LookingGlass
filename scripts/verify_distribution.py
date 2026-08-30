@@ -402,6 +402,73 @@ def validate_installed_audit(audit_output: str, expected_packages: int) -> None:
         )
 
 
+def smoke_uv_tool_install(
+    wheel_archive: Path,
+    *,
+    uv: Path,
+    temporary: str,
+    process_environment: dict[str, str],
+) -> None:
+    """Exercise the documented Python-pinned tool install and force-upgrade path."""
+
+    tool_root = Path(temporary) / "uv-tools"
+    tool_bin = Path(temporary) / "uv-tool-bin"
+    tool_environment = dict(process_environment)
+    tool_environment["UV_TOOL_DIR"] = str(tool_root)
+    tool_environment["UV_TOOL_BIN_DIR"] = str(tool_bin)
+    base_command = [
+        str(uv),
+        "tool",
+        "install",
+        "--python",
+        "3.12",
+        "--no-config",
+        str(wheel_archive.resolve()),
+    ]
+    for force in (False, True):
+        command = [*base_command[:-1]]
+        if force:
+            command.append("--force")
+        command.append(base_command[-1])
+        subprocess.run(  # noqa: S603 - absolute uv and verified local wheel
+            command,
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=tool_environment,
+            text=True,
+            timeout=180,
+        )
+        python = _venv_python(tool_root / "async-api-view")
+        version = subprocess.run(  # noqa: S603 - interpreter in disposable tool environment
+            [
+                str(python),
+                "-c",
+                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+            ],
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=tool_environment,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+        if version != "3.12":
+            raise RuntimeError(
+                f"documented uv tool {'upgrade' if force else 'install'} used Python {version}"
+            )
+    cli = tool_bin / ("async-api-view.exe" if os.name == "nt" else "async-api-view")
+    subprocess.run(  # noqa: S603 - disposable documented tool entry point
+        [str(cli), "--help"],
+        check=True,
+        capture_output=True,
+        cwd=temporary,
+        env=tool_environment,
+        text=True,
+        timeout=30,
+    )
+
+
 def smoke_installed_wheel(
     wheel_archive: Path,
     expected_assets: frozenset[str],
@@ -420,6 +487,12 @@ def smoke_installed_wheel(
         }
         process_environment["PYTHONNOUSERSITE"] = "1"
         uv = _uv_executable()
+        smoke_uv_tool_install(
+            wheel_archive,
+            uv=uv,
+            temporary=temporary,
+            process_environment=process_environment,
+        )
         subprocess.run(  # noqa: S603 - absolute uv from the verified build environment
             [
                 str(uv),
