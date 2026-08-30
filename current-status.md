@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 16:20 ET
+Updated: 2026-08-30 16:24 ET
 
 ## Contents
 
@@ -22,7 +22,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` includes `e5444ea`, the independently cleared authority-containment and cursor-plan implementation.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-153000.md` is closed after one high authority failure, one high action-history cost regression, and two medium relationship/prefix cost regressions passed exact behavior, scale, rendered UI, real migration, independent-review, and package gates.
+- Active review round: `critical-reviews/20260830-162400.md` is testing desired-configuration repair and restart atomicity across corrupt, stale, retargeted, removed, and partially applied authority graphs.
 - Latest checkpoint: `progress/20260830-162005.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 16:16 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and forum readiness. Topic 40 remains at post 13 pending clean closure evidence.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -66,6 +66,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close static-contract and reachable-runtime-defect review without broad suppressions.
 - [x] Close stored-state corruption-containment and read-availability review.
 - [x] Close authority-read containment and readable-view query-plan review.
+- [ ] Close desired-configuration repair and restart-atomicity review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
