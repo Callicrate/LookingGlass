@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 04:17 ET
+Updated: 2026-08-30 04:18 ET
 
 ## Contents
 
@@ -517,6 +517,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - `serve` owns both listeners and one database-scoped nonblocking OS lock before runtime construction; independent review cleared cleanup, path identity, same-port, and alternate-port behavior.
 - Immutable preflight rejects unexpected executable schema while partial migrations and forced index repair remain valid; queue claims promote one strict-priority bounded batch and both slices are independently clear.
 - Web list paths now use canonical forward keyset cursors, immutable object IDs when unfiltered, indexed name-prefix keys when filtered, and no exact totals/deep offsets; final residual review is pending.
+- The 04:18 Murmuration Tend pass reconfirmed `project-a3c5f71ec6d12b` as write-ready with healthy authenticated forum access and topic 40 intact at three native posts; the pass stayed read-only because the implementation candidate is not yet committed.
 
 ## Risks / watch list
 
