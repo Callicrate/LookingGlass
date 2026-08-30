@@ -757,7 +757,7 @@ async def test_final_start_authorization_blocks_revoked_remote_dispatch(
                     """
                 )
             else:
-                deadline = datetime.now(UTC)
+                deadline = runtime.store.authority_time()
                 deadline_text = deadline.isoformat().replace("+00:00", "Z")
                 runtime.store._connection.execute(
                     "UPDATE adapter_actions SET deadline = ? WHERE action_id = ?",
@@ -1990,7 +1990,7 @@ async def test_recovered_worker_uses_a_new_delivery_batch(
     )
 
     monkeypatch.setattr(runtime.store, "record_attempt", original_record_attempt)
-    recovered_at = datetime.now(UTC)
+    recovered_at = runtime.store.authority_time()
     runtime.store._connection.execute(
         "UPDATE adapter_actions SET leased_until = ? WHERE action_id = ?",
         (

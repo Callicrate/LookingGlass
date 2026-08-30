@@ -1467,6 +1467,7 @@ def _compose_runtime(
         ingestion=ingestor,
         targets=resolver,
         runner=actual_runner,
+        clock=store.authority_time,
     )
     local_authorizer = LocalCallerAuthorizer()
     app = create_app(

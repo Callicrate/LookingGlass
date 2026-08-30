@@ -24,7 +24,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -2310,6 +2310,7 @@ def normalize(
     )
     batch = ObservationBatch(
         **base,
+        observed_at_is_local=True,
         facet_observations=tuple(
             replace(item, authorized_by=action.requested_scopes) for item in facets
         ),
@@ -2481,9 +2482,12 @@ class DatabricksWorker:
         runner: CliRunner,
         max_attempts: int = 2,
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         if max_attempts < 1 or heartbeat_seconds <= 0:
             raise ValueError("worker limits must be positive")
+        if clock is not None and not callable(clock):
+            raise TypeError("clock must be callable")
         self.worker_id = _safe_text(worker_id, name="worker id", maximum=256)
         self.queue = queue
         self.lifecycle = lifecycle
@@ -2494,24 +2498,34 @@ class DatabricksWorker:
         self.runner = runner
         self.max_attempts = max_attempts
         self.heartbeat_seconds = heartbeat_seconds
+        self._clock = clock or (lambda: datetime.now(UTC))
         self.ingestion_generation = 0
+
+    def _record_time(self, *, floor: datetime | None = None) -> datetime:
+        sampled = self._clock()
+        if not isinstance(sampled, datetime) or sampled.tzinfo is None:
+            raise TypeError("worker clock must return a timezone-aware datetime")
+        normalized = sampled.astimezone(UTC)
+        if floor is not None and normalized < floor:
+            return floor
+        return normalized
 
     async def startup(self) -> None:
         await self.runner.doctor()
 
     async def run_once(self, *, now: datetime | None = None) -> bool:
-        current = (now or datetime.now(UTC)).astimezone(UTC)
+        current = now.astimezone(UTC) if now is not None else self._record_time()
         lease = await self.queue.lease_next(
             adapter_key=DATABRICKS_ADAPTER_KEY, worker_id=self.worker_id, now=current
         )
         if lease is None:
             return False
-        await self.process(lease, now=now)
+        await self.process(lease, now=current)
         return True
 
     async def process(self, lease: ActionLease, *, now: datetime | None = None) -> None:
         action = lease.action
-        current = (now or datetime.now(UTC)).astimezone(UTC)
+        current = now.astimezone(UTC) if now is not None else self._record_time()
         if (
             action.adapter_key != DATABRICKS_ADAPTER_KEY
             or action.adapter_version != DATABRICKS_ADAPTER_VERSION
@@ -2574,7 +2588,7 @@ class DatabricksWorker:
                 current,
             )
             return
-        started = current if now is not None else datetime.now(UTC)
+        started = current
         final_decision = await self.guard.authorize_start(
             action_id=action.action_id,
             lease_id=lease.lease_id,
@@ -2593,7 +2607,7 @@ class DatabricksWorker:
                 target=target,
                 delivery_id=lease.lease_id,
                 stdout=execution.stdout,
-                observed_at=datetime.now(UTC),
+                observed_at=self._record_time(floor=started),
             )
             ingestion_results: list[IngestionResult] = []
             for index, batch in enumerate(normalized.batches):
@@ -2603,7 +2617,7 @@ class DatabricksWorker:
                             action_id=action.action_id,
                             lease_id=lease.lease_id,
                             worker_id=self.worker_id,
-                            at=datetime.now(UTC),
+                            at=self._record_time(floor=started),
                         )
                     except ActionLeaseLost:
                         return
@@ -2626,6 +2640,7 @@ class DatabricksWorker:
                     ) from exc
                 if result.status.value == "rejected":
                     error = ErrorClass.ADAPTER_CONTRACT_MISMATCH
+                    ended = self._record_time(floor=started)
                     if not await self._record_attempt(
                         lease,
                         ActionAttempt(
@@ -2633,20 +2648,14 @@ class DatabricksWorker:
                             action.action_id,
                             ordinal,
                             started,
-                            datetime.now(UTC),
+                            ended,
                             ActionOutcome.FAILED,
                             error,
                             redacted_diagnostic=safe_diagnostic(error),
                         ),
                     ):
                         return
-                    await self._complete(
-                        lease,
-                        action,
-                        ActionOutcome.FAILED,
-                        error,
-                        datetime.now(UTC),
-                    )
+                    await self._complete(lease, action, ActionOutcome.FAILED, error, ended)
                     return
                 ingestion_results.append(result)
             incomplete = any(
@@ -2660,6 +2669,7 @@ class DatabricksWorker:
                 or incomplete
                 else ActionOutcome.SUCCEEDED
             )
+            ended = self._record_time(floor=started)
             if not await self._record_attempt(
                 lease,
                 ActionAttempt(
@@ -2667,19 +2677,19 @@ class DatabricksWorker:
                     action.action_id,
                     ordinal,
                     started,
-                    datetime.now(UTC),
+                    ended,
                     outcome,
                 ),
             ):
                 return
-            await self._complete(lease, action, outcome, None, datetime.now(UTC))
+            await self._complete(lease, action, outcome, None, ended)
             return
         except LifecyclePersistenceFailure:
             raise
         except Exception as exc:
             worker_global_failure = isinstance(exc, CliIncompatible | CliRuntimeUnavailable)
             error = classify_failure(exc)
-            ended = datetime.now(UTC)
+            ended = self._record_time(floor=started)
             downstream_failure = exc if isinstance(exc, DownstreamFailure) else None
             retry_at: datetime | None = None
             if (
@@ -2767,7 +2777,7 @@ class DatabricksWorker:
                             action_id=lease.action.action_id,
                             lease_id=lease.lease_id,
                             worker_id=self.worker_id,
-                            at=datetime.now(UTC),
+                            at=self._record_time(),
                         )
                     except ActionLeaseLost:
                         task.cancel()

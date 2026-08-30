@@ -177,6 +177,13 @@ _CAPABILITY_KEY_ALTER_TABLES = {
     "ALTER TABLE adapter_action_scopes ADD COLUMN capability_key TEXT;": "adapter_action_scopes",
 }
 _REQUIRED_RUNTIME_INDEXES = {
+    "ix_observation_batches_received_at": (
+        "observation_batches",
+        (("received_at", 1, "BINARY"), ("batch_id", 1, "BINARY")),
+        0,
+        "CREATE INDEX ix_observation_batches_received_at "
+        "ON observation_batches (received_at DESC, batch_id DESC)",
+    ),
     "ix_adapter_action_scopes_target_facet": (
         "adapter_action_scopes",
         tuple(
@@ -868,7 +875,19 @@ class SQLiteStore:
             raise ValueError(
                 f"minimum_write_headroom_bytes must be at least {MIN_WRITE_RESERVE_BYTES}"
             )
-        self._clock = clock or _now
+        if clock is None:
+            wall_anchor = _now()
+            elapsed_anchor = time.monotonic()
+
+            def elapsed_utc_clock() -> datetime:
+                elapsed = max(0.0, time.monotonic() - elapsed_anchor)
+                return wall_anchor + timedelta(seconds=elapsed)
+
+            self._clock = elapsed_utc_clock
+        else:
+            self._clock = clock
+        self._clock_guard = threading.Lock()
+        self._last_authority_time: datetime | None = None
         self.database_path = absolute_local_path(database_path)
         self.minimum_write_headroom_bytes = minimum_write_headroom_bytes
         self._available_bytes_probe = available_bytes_probe or (
@@ -932,6 +951,7 @@ class SQLiteStore:
                 self._migrate()
                 self._repair_required_runtime_indexes()
                 self._validate_current_schema()
+                self._restore_authority_floor(connection)
                 recovery_now = self._current_time()
                 self._quarantine_invalid_queue_timing(connection, now=recovery_now)
                 disabled_systems = tuple(
@@ -962,7 +982,61 @@ class SQLiteStore:
     def _current_time(self) -> datetime:
         """Return the store-owned UTC clock used for action-lease authority."""
 
-        return require_utc(self._clock(), "SQLiteStore clock")
+        sampled = require_utc(self._clock(), "SQLiteStore clock")
+        with self._clock_guard:
+            if self._last_authority_time is None or sampled > self._last_authority_time:
+                self._last_authority_time = sampled
+            return self._last_authority_time
+
+    def _advance_authority_floor(self, value: datetime) -> datetime:
+        value = require_utc(value, "authority floor")
+        with self._clock_guard:
+            if self._last_authority_time is None or value > self._last_authority_time:
+                self._last_authority_time = value
+            return self._last_authority_time
+
+    def _restore_authority_floor(self, connection: sqlite3.Connection) -> None:
+        candidates: list[datetime] = []
+        lease_queries = (
+            """
+            SELECT MAX(lease_authority_at) AS lease_authority_at FROM refresh_intent_scopes
+            WHERE state = 'leased' AND rookery_is_canonical_timestamp(lease_authority_at) = 1
+            """,
+            """
+            SELECT MAX(leased_until) AS leased_until FROM adapter_actions
+            WHERE state IN ('leased', 'running')
+              AND rookery_is_canonical_timestamp(leased_until) = 1
+            """,
+        )
+        intent_lease = connection.execute(lease_queries[0]).fetchone()
+        if intent_lease is not None:
+            value = _dt(intent_lease["lease_authority_at"])
+            if value is not None:
+                candidates.append(value)
+        action_lease = connection.execute(lease_queries[1]).fetchone()
+        if action_lease is not None:
+            value = _dt(action_lease["leased_until"])
+            if value is not None:
+                candidates.append(value - _DEFAULT_LEASE)
+        if candidates:
+            self._advance_authority_floor(max(candidates))
+
+    def _next_receipt_time(
+        self, connection: sqlite3.Connection
+    ) -> tuple[datetime, datetime | None]:
+        prior_row = connection.execute(
+            """
+            SELECT received_at FROM observation_batches
+                INDEXED BY ix_observation_batches_received_at
+            ORDER BY received_at DESC, batch_id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        prior = _dt(prior_row["received_at"]) if prior_row is not None else None
+        received_at = self._current_time()
+        if prior is not None and received_at <= prior:
+            received_at = prior + timedelta(microseconds=1)
+        return received_at, prior
 
     def authority_time(self) -> datetime:
         """Expose one store-owned time sample to the local durable coordinator."""
@@ -3107,13 +3181,15 @@ class SQLiteStore:
             result = connection.execute(
                 """
                 UPDATE refresh_intent_scopes
-                SET state = 'leased', lease_id = ?, lease_worker_id = ?, leased_until = ?
+                SET state = 'leased', lease_id = ?, lease_worker_id = ?, leased_until = ?,
+                    lease_authority_at = ?
                 WHERE intent_scope_id = ? AND state = 'queued'
                 """,
                 (
                     lease_id,
                     worker_id,
                     _utc_text(leased_until),
+                    _utc_text(authority_now),
                     row["intent_scope_id"],
                 ),
             )
@@ -3175,7 +3251,7 @@ class SQLiteStore:
             SET state = 'expired', disposition_reason = 'request_expired',
                 eligible_at = NULL, linked_action_id = NULL,
                 satisfying_observation_id = NULL, lease_id = NULL,
-                lease_worker_id = NULL, leased_until = NULL
+                lease_worker_id = NULL, leased_until = NULL, lease_authority_at = NULL
             WHERE intent_scope_id = ?
             """,
             (intent_scope_id,),
@@ -3221,7 +3297,7 @@ class SQLiteStore:
                 UPDATE refresh_intent_scopes
                 SET state = ?, disposition_reason = ?, eligible_at = ?, linked_action_id = ?,
                     satisfying_observation_id = ?, lease_id = NULL,
-                    lease_worker_id = NULL, leased_until = NULL
+                    lease_worker_id = NULL, leased_until = NULL, lease_authority_at = NULL
                 WHERE intent_scope_id = ?
                 """,
                 (
@@ -6418,20 +6494,40 @@ class SQLiteStore:
         item becomes a redacted ingestion issue; it never clears known facts or
         enables absence reconciliation for the batch.
         """
-        try:
-            batch_digest = _batch_digest(batch)
-        except ValueError:
-            return IngestionResult(batch_id=batch.batch_id, status=IngestionStatus.REJECTED)
+        local_observation_time = batch.observed_at_is_local
         with self._immediate_transaction() as connection:
             prior = connection.execute(
                 """
                 SELECT system_id, connection_binding_id, adapter_key, adapter_version,
                        action_id, observed_at, received_at, status, accepted_ids_json,
-                       issue_count, batch_digest
+                       issue_count, batch_digest, observed_at_is_local
                 FROM observation_batches WHERE batch_id = ?
                 """,
                 (batch.batch_id,),
             ).fetchone()
+            if prior is not None and bool(prior["observed_at_is_local"]) != local_observation_time:
+                return IngestionResult(batch_id=batch.batch_id, status=IngestionStatus.REJECTED)
+            if prior is not None:
+                received_at = _dt(prior["received_at"])
+                observed_at = (
+                    _dt(prior["observed_at"]) if local_observation_time else batch.observed_at
+                )
+            else:
+                if local_observation_time:
+                    received_at, _latest_receipt = self._next_receipt_time(connection)
+                    observed_at = received_at
+                else:
+                    observed_at = batch.observed_at
+                    received_at = batch.received_at
+            if received_at is None:
+                raise ValueError("stored batch receipt time is unavailable")
+            if observed_at is None:
+                raise ValueError("stored batch observation time is unavailable")
+            batch = replace(batch, observed_at=observed_at, received_at=received_at)
+            try:
+                batch_digest = _batch_digest(batch)
+            except ValueError:
+                return IngestionResult(batch_id=batch.batch_id, status=IngestionStatus.REJECTED)
             if prior is not None:
                 if prior["batch_digest"] == batch_digest:
                     return IngestionResult(
@@ -6479,8 +6575,9 @@ class SQLiteStore:
                 INSERT INTO observation_batches (
                     batch_id, system_id, connection_binding_id, adapter_key,
                     adapter_version, action_id, observed_at, received_at,
-                    status, accepted_ids_json, issue_count, batch_digest
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'accepted', '[]', 0, ?)
+                    status, accepted_ids_json, issue_count, batch_digest,
+                    observed_at_is_local
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'accepted', '[]', 0, ?, ?)
                 """,
                 (
                     batch.batch_id,
@@ -6492,6 +6589,7 @@ class SQLiteStore:
                     _utc_text(batch.observed_at),
                     _utc_text(batch.received_at),
                     batch_digest,
+                    int(batch.observed_at_is_local),
                 ),
             )
             facet_accepted_ids: list[str] = []

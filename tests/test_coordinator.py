@@ -583,10 +583,19 @@ def test_queue_claim_migration_backfills_immutable_intent_order(tmp_path) -> Non
             "ALTER TABLE refresh_intent_scopes DROP COLUMN queue_requested_at"
         )
         store._connection.execute(
+            "ALTER TABLE refresh_intent_scopes DROP COLUMN lease_authority_at"
+        )
+        store._connection.execute(
+            "ALTER TABLE observation_batches DROP COLUMN observed_at_is_local"
+        )
+        store._connection.execute(
             "DELETE FROM schema_migrations WHERE version = '0017_queue_claim_order'"
         )
         store._connection.execute(
             "DELETE FROM schema_migrations WHERE version = '0019_web_cursor_indexes'"
+        )
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = '0023_time_authority'"
         )
 
     with SQLiteStore(path) as migrated:
@@ -974,7 +983,7 @@ def test_intent_expiry_during_coordinator_claim_fences_final_admission(
 def test_headroom_loss_during_action_admission_defers_without_creating_action(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = SQLiteStore(tmp_path / "headroom-admission-race.sqlite3")
+    store = SQLiteStore(tmp_path / "headroom-admission-race.sqlite3", clock=lambda: NOW)
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
     )

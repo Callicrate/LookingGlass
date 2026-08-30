@@ -42,6 +42,8 @@ from async_api_view.adapters.databricks import (
     workspace_authority_fingerprint,
 )
 from async_api_view.contracts import (
+    ActionAttempt,
+    ActionCompletion,
     ActionLease,
     ActionLeaseLost,
     ActionOutcome,
@@ -62,6 +64,7 @@ from async_api_view.contracts import (
 )
 
 _DELIVERY_ID = str(uuid4())
+_NOW = datetime(2026, 8, 30, 12, tzinfo=UTC)
 
 
 def normalize(**kwargs):
@@ -2593,6 +2596,89 @@ def test_worker_uses_only_ports() -> None:
         for event in lifecycle.events
         if isinstance(event, tuple) and event[0] in {"attempt", "complete"}
     )
+
+
+def test_worker_clamps_success_records_when_utc_rolls_back() -> None:
+    action = _action("databricks.uc.catalogs.read")
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {"profile": "local"},
+    )
+    current = [_NOW]
+
+    class RollbackRunner(_Runner):
+        async def run(self, *_: object, **__: object) -> CliExecution:
+            current[0] = _NOW - timedelta(seconds=1)
+            return await super().run()
+
+    lifecycle = _Lifecycle()
+    ingestion = _Ingestion()
+    worker = DatabricksWorker(
+        worker_id="rollback-success",
+        queue=_Queue(ActionLease(action, uuid4(), _NOW + timedelta(seconds=60))),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=ingestion,
+        targets=_Targets(),
+        runner=RollbackRunner(),
+        clock=lambda: current[0],
+    )
+
+    assert asyncio.run(worker.run_once())
+
+    attempt = next(event[2] for event in lifecycle.events if event[0] == "attempt")
+    completion = next(event[2] for event in lifecycle.events if event[0] == "complete")
+    assert isinstance(attempt, ActionAttempt)
+    assert isinstance(completion, ActionCompletion)
+    assert attempt.started_at == _NOW
+    assert attempt.ended_at == _NOW
+    assert completion.completed_at == _NOW
+    assert ingestion.batches[0].observed_at == _NOW
+
+
+def test_worker_clamps_failure_and_retry_records_when_utc_rolls_back() -> None:
+    action = _action("databricks.uc.catalogs.read")
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {"profile": "local"},
+    )
+    current = [_NOW]
+
+    class RollbackTimeoutRunner(_Runner):
+        async def run(self, *_: object, **__: object) -> CliExecution:
+            current[0] = _NOW - timedelta(seconds=1)
+            raise CliTimeout("timed out after UTC rollback")
+
+    lifecycle = _Lifecycle()
+    worker = DatabricksWorker(
+        worker_id="rollback-failure",
+        queue=_Queue(ActionLease(action, uuid4(), _NOW + timedelta(seconds=60))),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=_Ingestion(),
+        targets=_Targets(),
+        runner=RollbackTimeoutRunner(),
+        clock=lambda: current[0],
+    )
+
+    assert asyncio.run(worker.run_once())
+
+    attempt = next(event[2] for event in lifecycle.events if event[0] == "attempt")
+    assert isinstance(attempt, ActionAttempt)
+    assert attempt.started_at == _NOW
+    assert attempt.ended_at == _NOW
+    assert attempt.outcome is ActionOutcome.FAILED
+    assert attempt.retry_at is not None and attempt.retry_at > _NOW
 
 
 def test_worker_ingests_every_collection_chunk_and_stops_when_heartbeat_is_lost() -> None:

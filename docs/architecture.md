@@ -1568,6 +1568,10 @@ Trusted local service time drives leases, cooldowns, observation receipt, and sc
 Remote times are nullable facts.
 Clock skew between local processes must remain within a documented operational tolerance, or one authoritative persistence clock MUST be used.
 
+The current store anchors UTC once per process and advances lease/deadline/cooldown authority by monotonic elapsed time, with a nondecreasing floor for injected clocks. On startup it restores the floor from active lease issuance times, never from future lease deadlines. A process restart necessarily takes a new UTC anchor; the database-scoped process lock and bounded lease duration remain the cross-process recovery boundary.
+
+Worker action records use the store authority clock and clamp every observation, attempt end, retry, and completion to the attempt start, so UTC rollback cannot create an invalid range after remote execution. SQLite assigns every accepted batch a strictly increasing durable receipt time. Databricks currently exposes no source event timestamp, so its equal local observation/receipt sample is replaced by that logical receipt; adapters with genuine source observation time retain observed-time precedence. Exact batch replay reconstructs stored ordering time before digest comparison.
+
 ### Scale assumptions
 
 No hard throughput or latency SLO is specified because object counts, system counts, and desired freshness are unknown.

@@ -417,6 +417,7 @@ class ObservationBatch(JSONDTO):
     relationship_observations: tuple[RelationshipObservation, ...] = ()
     coverage: tuple[CoverageDeclaration, ...] = ()
     action_id: str | UUID | None = None
+    observed_at_is_local: bool = False
     contract_version: str = CONTRACT_VERSION
 
     def __post_init__(self) -> None:
@@ -451,6 +452,7 @@ class ObservationBatch(JSONDTO):
         require_text(self.adapter_version, "adapter_version", max_length=64)
         _set_utc(self, "observed_at")
         _set_utc(self, "received_at")
+        require_bool(self.observed_at_is_local, "observed_at_is_local")
         if self.received_at < self.observed_at:
             raise ValueError("received_at must not precede observed_at")
         for declaration in self.coverage:
@@ -469,6 +471,7 @@ def canonical_observation_batch_bytes(batch: ObservationBatch) -> bytes:
 
     require_instance(batch, ObservationBatch, "batch")
     value = batch.to_dict()
+    value.pop("observed_at_is_local", None)
     for collection_name in ("facet_observations", "relationship_observations"):
         for item in value[collection_name]:
             if not item.get("authorized_by"):

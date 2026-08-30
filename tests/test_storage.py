@@ -28,6 +28,7 @@ from async_api_view.contracts import (
     FacetObservation,
     FieldCoverage,
     GuardDisposition,
+    IngestionStatus,
     IntentScopeState,
     ObjectLocator,
     ObservationBatch,
@@ -88,6 +89,8 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0019_web_cursor_indexes",
             "0020_retired_authorities",
             "0021_intent_aggregate_indexes",
+            "0022_observation_receipt_order",
+            "0023_time_authority",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -153,7 +156,7 @@ def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_
     with SQLiteStore(path) as store:
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
         )
 
 
@@ -168,7 +171,7 @@ def test_new_database_is_migrated_and_marked_before_wal_activation(
         assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
         )
         original(store)
 
@@ -463,7 +466,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -501,7 +504,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -536,7 +539,7 @@ def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_pa
 
     check = sqlite3.connect(path)
     try:
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -753,7 +756,7 @@ def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path)
     check = sqlite3.connect(destination)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 21
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
     finally:
         check.close()
 
@@ -1612,6 +1615,8 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0019_web_cursor_indexes",
         "0020_retired_authorities",
         "0021_intent_aggregate_indexes",
+        "0022_observation_receipt_order",
+        "0023_time_authority",
     )
     assert versions == (expected,) * workers
 
@@ -1756,6 +1761,8 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0019_web_cursor_indexes",
             "0020_retired_authorities",
             "0021_intent_aggregate_indexes",
+            "0022_observation_receipt_order",
+            "0023_time_authority",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -2534,6 +2541,118 @@ def test_low_headroom_does_not_block_final_authority_cancellation(tmp_path) -> N
     stored = store.get_stored_action(lease.action.action_id)
     assert stored is not None and stored.state is ActionState.CANCELLED
     assert store.list_intent_scopes(receipt.intent_id)[0].state is IntentScopeState.ADMITTED
+
+
+def test_default_store_authority_uses_elapsed_time_across_utc_jumps(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wall_time = [NOW]
+    elapsed_time = [100.0]
+    monkeypatch.setattr(sqlite_storage, "_now", lambda: wall_time[0])
+    monkeypatch.setattr(sqlite_storage.time, "monotonic", lambda: elapsed_time[0])
+    store = SQLiteStore(tmp_path / "elapsed-authority.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+    )
+    receipt = run(
+        store.submit_refresh(
+            RefreshIntent(
+                intent_id=uuid4(),
+                idempotency_key=str(uuid4()),
+                origin=RefreshOrigin.MANUAL,
+                actor_id="local-user",
+                scopes=(scope,),
+                requested_at=NOW,
+            )
+        )
+    )
+    first = run(store.lease_next_intent_scope(worker_id="first", now=NOW))
+    assert first is not None
+
+    wall_time[0] = NOW + timedelta(days=1)
+    elapsed_time[0] += 1
+    assert store.authority_time() == NOW + timedelta(seconds=1)
+    wall_time[0] = NOW - timedelta(hours=1)
+    elapsed_time[0] += 60
+
+    recovered = run(store.lease_next_intent_scope(worker_id="recovered", now=wall_time[0]))
+    assert recovered is not None and recovered.intent_scope_id == first.intent_scope_id
+    assert recovered.lease_id != first.lease_id
+    assert store.list_intent_scopes(receipt.intent_id)[0].state is IntentScopeState.LEASED
+
+
+def test_restart_restores_actual_mixed_duration_lease_authority(tmp_path) -> None:
+    path = tmp_path / "mixed-duration-leases.sqlite3"
+    current_time = [NOW]
+    store = SQLiteStore(path, clock=lambda: current_time[0])
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+    )
+
+    def submit(requested_at: datetime) -> str:
+        receipt = run(
+            store.submit_refresh(
+                RefreshIntent(
+                    intent_id=uuid4(),
+                    idempotency_key=str(uuid4()),
+                    origin=RefreshOrigin.MANUAL,
+                    actor_id="local-user",
+                    scopes=(scope,),
+                    requested_at=requested_at,
+                )
+            )
+        )
+        return receipt.scope_ids[0]
+
+    long_scope_id = submit(NOW)
+    short_scope_id = submit(NOW + timedelta(microseconds=1))
+    long_lease = run(
+        store.lease_next_intent_scope(
+            worker_id="long",
+            now=NOW,
+            lease_duration=timedelta(minutes=10),
+        )
+    )
+    short_lease = run(
+        store.lease_next_intent_scope(
+            worker_id="short",
+            now=NOW,
+            lease_duration=timedelta(seconds=60),
+        )
+    )
+    assert long_lease is not None and long_lease.intent_scope_id == long_scope_id
+    assert short_lease is not None and short_lease.intent_scope_id == short_scope_id
+    store.close()
+
+    reopened = SQLiteStore(path, clock=lambda: current_time[0])
+    assert reopened.authority_time() == NOW
+    assert run(reopened.lease_next_intent_scope(worker_id="early", now=NOW)) is None
+    current_time[0] = NOW + timedelta(seconds=60)
+    recovered = run(reopened.lease_next_intent_scope(worker_id="replacement", now=current_time[0]))
+    assert recovered is not None and recovered.intent_scope_id == short_scope_id
+    reopened.set_intent_scope_disposition(
+        intent_scope_id=long_scope_id,
+        lease_id=long_lease.lease_id,
+        state=IntentScopeState.SATISFIED,
+        reason="still_current",
+    )
+    assert reopened.list_intent_scopes(long_lease.intent.intent_id)[0].state is (
+        IntentScopeState.SATISFIED
+    )
 
 
 def test_intent_scope_leases_use_the_store_clock_for_claims_and_dispositions(tmp_path) -> None:
@@ -4102,6 +4221,74 @@ def test_workspace_root_uses_normalized_external_identity(tmp_path) -> None:
     assert run(store.ingest(batch)).status.value == "accepted"
     assert len(store.list_objects(system_id=seeded.system.system_id)) == 1
     assert store.get_facet_sync(seeded.workspace_root_object_id, "metadata") is not None
+
+
+def test_regressed_databricks_local_time_uses_strict_store_receipt_order(tmp_path) -> None:
+    path = tmp_path / "receipt-order.sqlite3"
+    current_time = [NOW]
+    store = SQLiteStore(path, clock=lambda: current_time[0])
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    authority = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+        coverage=RefreshCoverage.COLLECTION_MEMBERS,
+    )
+
+    def batch(value: str, observed_at: datetime) -> ObservationBatch:
+        return ObservationBatch(
+            batch_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            observed_at=observed_at,
+            received_at=observed_at,
+            observed_at_is_local=True,
+            facet_observations=(
+                FacetObservation(
+                    observation_id=uuid4(),
+                    target=ObjectLocator(
+                        object_type="folder",
+                        source_kind="databricks.workspace.folder",
+                        external_key="workspace:/Shared",
+                        display_name="Shared",
+                    ),
+                    facet="metadata",
+                    facet_version="1",
+                    update_mode=UpdateMode.SNAPSHOT,
+                    field_coverage=FieldCoverage.COMPLETE,
+                    payload={"value": value},
+                    authorized_by=(authority,),
+                ),
+            ),
+        )
+
+    first = batch("first", NOW)
+    assert run(store.ingest(first)).status is IngestionStatus.ACCEPTED
+    current_time[0] = NOW - timedelta(hours=1)
+    second = batch("second", current_time[0])
+    assert run(store.ingest(second)).status is IngestionStatus.ACCEPTED
+    projected = store.get_facet_sync(seeded.workspace_root_object_id, "metadata")
+    assert projected is not None and projected.payload == {"value": "second"}
+    second_row = store._connection.execute(
+        "SELECT observed_at, received_at FROM observation_batches WHERE batch_id = ?",
+        (second.batch_id,),
+    ).fetchone()
+    assert second_row["observed_at"] == second_row["received_at"]
+    assert second_row["received_at"] == "2026-08-24T12:00:00.000001Z"
+    store.close()
+
+    reopened = SQLiteStore(path, clock=lambda: current_time[0])
+    third = batch("third", current_time[0])
+    assert run(reopened.ingest(third)).status is IngestionStatus.ACCEPTED
+    projected = reopened.get_facet_sync(seeded.workspace_root_object_id, "metadata")
+    assert projected is not None and projected.payload == {"value": "third"}
+    assert run(reopened.ingest(third)).status is IngestionStatus.DUPLICATE
 
 
 @pytest.mark.parametrize("locator_kind", ["canonical", "external"])
