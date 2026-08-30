@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 10:15 ET
+Updated: 2026-08-30 10:21 ET
 
 ## Contents
 
@@ -22,9 +22,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-090125.md` is closed after nine medium standalone/runtime/supply-chain defects were repaired and independently cleared through Windows, WSL, contaminated-artifact, stale-package, and PowerShell rollback probes.
+- Active review round: `critical-reviews/20260830-090125.md` is closed after nine medium standalone/runtime/supply-chain defects were repaired and independently cleared through Windows, WSL, contaminated-artifact, stale-package, and PowerShell rollback probes; the next pass targets maintainability and residual failure behavior.
 - Latest checkpoint: `progress/20260830-095908.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 9 record committed closures, and the operational 09:48 pass stayed read-only while release review remains uncommitted.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 9 record earlier committed closures, and post 10 records the clean-commit standalone/runtime release closure.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -581,6 +581,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Current exact gates pass at 598/8 on Windows and 600/6 on Ubuntu/WSL. The release candidate now contains 90 sdist entries, 66 wheel entries, 34 installed assets, and a lock-derived constraints artifact; commit manifest publication waits for a clean commit by design.
 - Final supply-chain re-review clears hash enforcement, all-untracked manifest cleanliness, official CLI origin, prior-only executable hook removal, fresh relocatable upgrade, and injected PowerShell failure/rollback paths.
 - Repeated release archives remain byte-identical at sdist `6FEC48A998F6A416C28BB1581DBF7112E02D00BC79AECBF7DFF3998E260CA0CF` and wheel `5E8B336634CB4BBDAA45E769853A0624F2ACF87517EDFB0CC6E28999DA5D4213`; runtime constraints hash is `A68A3A853DCC1F17527EDEF0C43000C191EB78B259F09EBFA01BFFBCD2B2A01C`.
+- Clean commit `d83e4009f72375f94eaf7e79bfc654384c72d822` emits a commit-qualified checksum manifest covering that sdist, wheel, and constraints artifact; Murmuration topic 40 post 10 records the closure under exact model provenance.
 
 ## Risks / watch list
 
