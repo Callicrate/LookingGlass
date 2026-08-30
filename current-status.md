@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 06:27 ET
+Updated: 2026-08-30 07:08 ET
 
 ## Contents
 
@@ -22,8 +22,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-052817.md` is fully closed after selector-aware authority, both snapshot hard-exit orderings, startup scale, web grammar, copy, and migration-envelope re-review.
-- Latest checkpoint: `progress/20260830-061146.md`.
+- Active review round: fresh `critical-reviews/20260830-063705.md` reproduces one high profile-parser authority defect and three medium TLS/continuation/local-recovery defects. All have candidates; local recovery is independently clear and strict profile preflight is under exploit re-review.
+- Latest checkpoint: `progress/20260830-070836.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, and post 7 records the committed profile/startup closure under that exact identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -62,6 +62,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Align web query validation with canonical storage grammar.
 - [x] Correct name-prefix empty-state guidance.
 - [x] Benchmark/document migration-0018 offline upgrade resource envelopes.
+- [x] Decouple local backup and authority lifecycle from unrelated remote semantic validation.
+- [ ] Close selected-profile parser equivalence, quoted-key authority, TLS, and continuation review.
 - [x] Attribute every visible fact/action/alert/refresh to one unique authority.
 - [x] Distinguish historical/paused cache from unsupported capability.
 - [x] Reject placeholder authority before durable state creation.
@@ -548,6 +550,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Exact offline migration-0018 benchmarks through 250,000 action scopes are documented; the largest distinct-target fixture completed in 6.77 s with integrity intact.
 - The real store is backed up at `.local/backups/rookery-20260830-055944-pre-0021.sqlite3` and migrated through `0021`; backup and live state are `ROOK`, integrity `ok`, and foreign-key clean.
 - Exact-current verification passes at 547/8 on Windows and 549/6 on Ubuntu/WSL. The clean distribution contains 89 sdist entries, 66 wheel entries, and 34 installed runtime assets.
+- Fresh review `critical-reviews/20260830-063705.md` reproduced one high selected-profile credential/route crossover and three medium local-recovery, TLS, and permissive-INI defects; storage and the prior clean operator/package surface remain medium-plus clear.
+- The local-recovery candidate gives backup/list/retire/unretire one bounded app-only parse while full remote commands remain strict; independent re-review is clear.
+- Strict selected-section preflight now excludes DEFAULT credentials, rejects quoted/noncanonical route and TLS keys, rejects continuation/multiline ambiguity, and applies pinned CLI comment precedence. Current focused validation is 212/1 on Windows and 211/2 on Ubuntu/WSL; final exploit re-review is running.
 
 ## Risks / watch list
 
@@ -558,5 +563,6 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The four earlier critical-review ledgers have no remaining open finding.
 - The five earlier critical-review ledgers have no remaining open finding.
 - The 05:28 profile/startup ledger and all five earlier ledgers have no remaining open finding.
+- The 06:37 recovery/parser ledger remains open until the strict selected-section exploit re-review and exact full gates close.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
