@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import traceback
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -294,18 +295,43 @@ def test_runner_rejects_mapped_observation_without_authority_fingerprint(
         asyncio.run(runner.run(invocation, correlation_id="test"))
 
 
+_DOCTOR_HELP = b"""Usage:
+databricks workspace list PATH [flags]
+databricks workspace get-status PATH [flags]
+databricks workspace export SOURCE_PATH [flags]
+databricks catalogs list [flags]
+databricks schemas list CATALOG_NAME [flags]
+databricks tables list CATALOG_NAME SCHEMA_NAME [flags]
+databricks volumes list CATALOG_NAME SCHEMA_NAME [flags]
+--profile
+--output
+--format
+"""
+
+
 class ScriptedDoctorRunner(CliRunner):
     def __init__(
         self,
         version: bytes,
         *,
         failed_args: tuple[str, ...] | None = None,
+        help_text: bytes = _DOCTOR_HELP,
     ) -> None:
         super().__init__()
         self.version = version
         self.failed_args = failed_args
+        self.help_text = help_text
         self.calls: list[tuple[str, ...]] = []
+        self.executable_generation = 1
         self._resolved_executable = "C:\\trusted\\databricks.exe"
+
+    def _current_executable_witness(self) -> databricks_adapter._ExecutableWitness:
+        return databricks_adapter._ExecutableWitness(
+            identity=(1, self.executable_generation),
+            size=1,
+            modified_ns=self.executable_generation,
+            sha256=f"{self.executable_generation:064x}",
+        )
 
     async def run_unmapped(self, invocation: CliInvocation) -> CliExecution:
         args = invocation.argv[1:]
@@ -314,48 +340,81 @@ class ScriptedDoctorRunner(CliRunner):
             correlation_id="doctor",
             duration=timedelta(),
             exit_code=int(args == self.failed_args),
-            stdout=self.version if args == ("--version",) else b"",
+            stdout=self.version if args == ("--version",) else self.help_text,
             stderr=b"",
         )
 
 
-@pytest.mark.parametrize(
-    "version",
-    [
-        b"Databricks CLI v0.298.0",
-        b"Databricks CLI v0.299.1",
-        b"Databricks CLI v1.0.0",
-    ],
-)
-def test_doctor_accepts_supported_and_newer_cli_versions(version: bytes) -> None:
-    runner = ScriptedDoctorRunner(version)
+def test_doctor_accepts_only_certified_cli_and_reachable_leaf_contracts() -> None:
+    runner = ScriptedDoctorRunner(b"Databricks CLI v0.298.0")
 
     asyncio.run(runner.doctor())
 
     assert runner.calls == [
         ("--version",),
-        ("workspace", "--help"),
-        ("catalogs", "--help"),
-        ("schemas", "--help"),
-        ("tables", "--help"),
-        ("volumes", "--help"),
+        ("workspace", "list", "--help"),
+        ("workspace", "get-status", "--help"),
+        ("workspace", "export", "--help"),
+        ("catalogs", "list", "--help"),
+        ("schemas", "list", "--help"),
+        ("tables", "list", "--help"),
+        ("volumes", "list", "--help"),
     ]
 
 
-@pytest.mark.parametrize("version", [b"Databricks CLI v0.297.9", b"unknown version"])
-def test_doctor_rejects_old_or_unparseable_cli_versions(version: bytes) -> None:
-    with pytest.raises(CliIncompatible, match=r"0\.298 or newer"):
-        asyncio.run(ScriptedDoctorRunner(version).doctor())
+@pytest.mark.parametrize(
+    "version",
+    [
+        b"Databricks CLI v0.297.9",
+        b"Databricks CLI v0.298.0 extra",
+        b"Databricks CLI v0.298.1",
+        b"Databricks CLI v0.299.0",
+        b"Databricks CLI v1.10.0",
+        b"dependency 0.298.0",
+        b"unknown version",
+    ],
+)
+def test_doctor_rejects_uncertified_or_unparseable_cli_versions(version: bytes) -> None:
+    runner = ScriptedDoctorRunner(version)
+
+    with pytest.raises(CliIncompatible, match=r"certified version 0\.298\.0"):
+        asyncio.run(runner.doctor())
+
+    assert runner.calls == [("--version",)]
 
 
 def test_doctor_rejects_missing_required_help_surface() -> None:
     runner = ScriptedDoctorRunner(
         b"Databricks CLI v0.298.0",
-        failed_args=("tables", "--help"),
+        failed_args=("tables", "list", "--help"),
     )
 
-    with pytest.raises(CliIncompatible, match="tables --help"):
+    with pytest.raises(CliIncompatible, match="tables list --help"):
         asyncio.run(runner.doctor())
+
+
+def test_doctor_rejects_leaf_help_missing_required_flags() -> None:
+    runner = ScriptedDoctorRunner(
+        b"Databricks CLI v0.298.0",
+        help_text=_DOCTOR_HELP.replace(b"--profile\n", b""),
+    )
+
+    with pytest.raises(CliIncompatible, match="--profile"):
+        asyncio.run(runner.doctor())
+
+
+def test_mapped_compatibility_recertifies_changed_executable_before_dispatch() -> None:
+    runner = ScriptedDoctorRunner(b"Databricks CLI v0.298.0")
+    asyncio.run(runner.doctor())
+    original_calls = len(runner.calls)
+    runner.executable_generation = 2
+    runner.version = b"Databricks CLI v1.10.0"
+
+    with pytest.raises(CliIncompatible, match="certified version"):
+        asyncio.run(runner.ensure_executable_compatibility())
+
+    assert runner.calls[original_calls:] == [("--version",)]
+    assert runner._certified_executable_witness is None
 
 
 def test_profile_authority_fingerprint_normalizes_and_fails_closed(
@@ -447,6 +506,7 @@ def test_profile_authority_fingerprint_normalizes_and_fails_closed(
         return CliExecution("test", timedelta(), 0, b'[{"path":"/from-a"}]', b"")
 
     monkeypatch.setattr(runner, "_execute", retarget_during_execution)
+    monkeypatch.setattr(runner, "ensure_executable_compatibility", lambda: asyncio.sleep(0))
     invocation = CliInvocation(
         "databricks.workspace.children.read",
         (
@@ -728,6 +788,7 @@ def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
         "profile_authority_snapshot",
         lambda **_kwargs: b"[configured-profile]\nhost = https://a.example\n",
     )
+    monkeypatch.setattr(runner, "ensure_executable_compatibility", lambda: asyncio.sleep(0))
 
     async def exercise() -> None:
         await runner.run_unmapped(CliInvocation("doctor", ("databricks", "--version")))
@@ -791,6 +852,8 @@ def test_cli_work_root_is_private_and_confined_to_home(tmp_path: Path) -> None:
 def test_active_cli_snapshot_is_not_recovered(tmp_path: Path) -> None:
     root = tmp_path / "cli-work"
     root.mkdir()
+    unrelated = root / "unrelated-metadata"
+    unrelated.write_text("preserve", encoding="utf-8")
     directory = root / f"{databricks_adapter._CLI_WORK_PREFIX}active"
     directory.mkdir()
     snapshot = directory / databricks_adapter._CLI_PROFILE_SNAPSHOT
@@ -799,6 +862,40 @@ def test_active_cli_snapshot_is_not_recovered(tmp_path: Path) -> None:
     with databricks_adapter.ExclusiveFileLock(directory / databricks_adapter._CLI_ACTIVE_LOCK):
         assert not databricks_adapter._recover_orphaned_cli_work_directories(root)
         assert snapshot.exists()
+        assert unrelated.read_text(encoding="utf-8") == "preserve"
+
+
+def test_young_legacy_snapshot_waits_for_recovery_grace(tmp_path: Path) -> None:
+    root = tmp_path / "cli-work"
+    root.mkdir()
+    directory = root / f"{databricks_adapter._CLI_WORK_PREFIX}legacy"
+    directory.mkdir()
+    snapshot = directory / databricks_adapter._CLI_PROFILE_SNAPSHOT
+    snapshot.write_bytes(b"[PROFILE]\ntoken = synthetic-placeholder\n")
+
+    assert not databricks_adapter._recover_orphaned_cli_work_directories(root)
+    assert snapshot.exists()
+
+
+def test_orphan_recovery_removes_snapshot_but_preserves_unknown_diagnostics(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cli-work"
+    root.mkdir()
+    directory = root / f"{databricks_adapter._CLI_WORK_PREFIX}orphan"
+    directory.mkdir()
+    lock_path = directory / databricks_adapter._CLI_ACTIVE_LOCK
+    with databricks_adapter.ExclusiveFileLock(lock_path):
+        pass
+    snapshot = directory / databricks_adapter._CLI_PROFILE_SNAPSHOT
+    snapshot.write_bytes(b"[PROFILE]\ntoken = synthetic-placeholder\n")
+    diagnostic = directory / "non-secret-diagnostic"
+    diagnostic.write_text("preserve", encoding="utf-8")
+
+    assert databricks_adapter._recover_orphaned_cli_work_directories(root)
+    assert not snapshot.exists()
+    assert not lock_path.exists()
+    assert diagnostic.read_text(encoding="utf-8") == "preserve"
 
 
 def test_hard_exit_profile_snapshot_is_recovered_cross_platform(tmp_path: Path) -> None:
@@ -1113,6 +1210,106 @@ def test_compatibility_check_failures_reap_process_and_readers(
         assert process.stderr.settled
 
     asyncio.run(exercise())
+
+
+def test_cli_timeout_terminates_descendants_holding_output_pipes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root.mkdir(parents=True)
+    monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
+    heartbeat = tmp_path / "descendant-heartbeat"
+    child_code = "\n".join(
+        (
+            "import sys, time",
+            "from pathlib import Path",
+            "path = Path(sys.argv[1])",
+            "while True:",
+            "    path.write_text(str(time.time()), encoding='utf-8')",
+            "    time.sleep(0.05)",
+        )
+    )
+    parent_code = "\n".join(
+        (
+            "import subprocess, sys, time",
+            "from pathlib import Path",
+            "path = Path(sys.argv[1])",
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], str(path)])",
+            "for _ in range(100):",
+            "    if path.exists(): break",
+            "    time.sleep(0.01)",
+            "time.sleep(30)",
+        )
+    )
+    runner = CliRunner(timeout_seconds=1)
+
+    started = time.perf_counter()
+    with pytest.raises(CliTimeout):
+        asyncio.run(
+            runner._execute(
+                (sys.executable, "-c", parent_code, str(heartbeat), child_code),
+                correlation_id="process-tree",
+                timeout_message="synthetic CLI timed out",
+                profile_config_snapshot=(b"[PRIMARY]\nhost = https://workspace.example.com\n"),
+            )
+        )
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 3
+    assert heartbeat.exists()
+    settled = heartbeat.read_text(encoding="utf-8")
+    time.sleep(0.3)
+    assert heartbeat.read_text(encoding="utf-8") == settled
+    assert list(work_root.iterdir()) == []
+
+
+def test_cli_normal_completion_terminates_detached_descendants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root.mkdir(parents=True)
+    monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
+    heartbeat = tmp_path / "normal-descendant-heartbeat"
+    child_code = "\n".join(
+        (
+            "import sys, time",
+            "from pathlib import Path",
+            "path = Path(sys.argv[1])",
+            "while True:",
+            "    path.write_text(str(time.time()), encoding='utf-8')",
+            "    time.sleep(0.05)",
+        )
+    )
+    parent_code = "\n".join(
+        (
+            "import os, subprocess, sys, time",
+            "from pathlib import Path",
+            "path = Path(sys.argv[1])",
+            "with open(os.devnull, 'wb') as sink:",
+            "    subprocess.Popen([sys.executable, '-c', sys.argv[2], str(path)], "
+            "stdout=sink, stderr=sink)",
+            "for _ in range(100):",
+            "    if path.exists(): break",
+            "    time.sleep(0.01)",
+        )
+    )
+    runner = CliRunner(timeout_seconds=3)
+
+    asyncio.run(
+        runner._execute(
+            (sys.executable, "-c", parent_code, str(heartbeat), child_code),
+            correlation_id="normal-process-tree",
+            timeout_message="synthetic CLI timed out",
+        )
+    )
+
+    assert heartbeat.exists()
+    settled = heartbeat.read_text(encoding="utf-8")
+    time.sleep(0.3)
+    assert heartbeat.read_text(encoding="utf-8") == settled
+    assert list(work_root.iterdir()) == []
 
 
 @pytest.mark.parametrize(
@@ -2318,6 +2515,7 @@ def test_worker_pins_same_host_workspace_selector_snapshot(
         )
 
     monkeypatch.setattr(runner, "_execute", execute_from_snapshot)
+    monkeypatch.setattr(runner, "ensure_executable_compatibility", lambda: asyncio.sleep(0))
 
     class WorkspaceTargets:
         async def resolve(self, **_: object) -> ResolvedTarget:

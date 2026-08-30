@@ -17,6 +17,8 @@ import json
 import math
 import os
 import re
+import signal
+import stat
 import tempfile
 import threading
 import time
@@ -71,7 +73,7 @@ from async_api_view.local_files import (
 
 DATABRICKS_ADAPTER_KEY = "databricks"
 DATABRICKS_ADAPTER_VERSION = "1"
-MINIMUM_CLI_VERSION = (0, 298, 0)
+CERTIFIED_CLI_VERSIONS = frozenset({(0, 298, 0)})
 MAX_JSON_BYTES = 4 * 1024 * 1024
 DEFAULT_STDOUT_CAP = 8 * 1024 * 1024
 DEFAULT_STDERR_CAP = 64 * 1024
@@ -85,6 +87,7 @@ MAX_JSON_DEPTH = 32
 MAX_INGESTION_BATCH_BYTES = 1_000_000
 MAX_INGESTION_BATCH_UNITS = 250
 MAX_DATABRICKS_CONFIG_BYTES = 1024 * 1024
+MAX_CLI_EXECUTABLE_BYTES = 512 * 1024 * 1024
 _CLI_WORK_PREFIX = "rookery-databricks-"
 _CLI_ACTIVE_LOCK = ".active.lock"
 _CLI_PROFILE_SNAPSHOT = ".databrickscfg"
@@ -115,7 +118,7 @@ _SECTION_HEADER = re.compile(r"^\s*\[([^\]\r\n]+)\]")
 _RESERVED_PROFILE = "__settings__"
 _INI_TRUE = frozenset({"1", "t", "true"})
 _INI_FALSE = frozenset({"0", "f", "false"})
-_VERSION = re.compile(r"(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(?:[^0-9]|$)")
+_VERSION = re.compile(r"Databricks CLI v(\d+)\.(\d+)\.(\d+)")
 _BEARER_SECRET = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 _SECRET = re.compile(
     r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?|"
@@ -226,6 +229,14 @@ class CliExecution:
     exit_code: int
     stdout: bytes
     stderr: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecutableWitness:
+    identity: tuple[int, int]
+    size: int
+    modified_ns: int
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -749,13 +760,238 @@ async def _read_limited(stream: asyncio.StreamReader | None, cap: int) -> bytes:
     return bytes(chunks)
 
 
+class _ProcessTree:
+    """Own one CLI process tree until all output readers and descendants are done."""
+
+    def __init__(self, process: asyncio.subprocess.Process) -> None:
+        self.process = process
+        self._windows_job: int | None = None
+        if os.name == "nt" and isinstance(process, asyncio.subprocess.Process):
+            self._windows_job = self._assign_windows_job(process)
+            try:
+                self._resume_windows_process(process.pid)
+            except BaseException:
+                self._close_windows_job()
+                raise
+
+    @staticmethod
+    def _assign_windows_job(process: asyncio.subprocess.Process) -> int:
+        import ctypes
+        from ctypes import wintypes
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = (
+                ("read_operations", ctypes.c_ulonglong),
+                ("write_operations", ctypes.c_ulonglong),
+                ("other_operations", ctypes.c_ulonglong),
+                ("read_bytes", ctypes.c_ulonglong),
+                ("write_bytes", ctypes.c_ulonglong),
+                ("other_bytes", ctypes.c_ulonglong),
+            )
+
+        class BasicLimitInformation(ctypes.Structure):
+            _fields_ = (
+                ("per_process_user_time", ctypes.c_longlong),
+                ("per_job_user_time", ctypes.c_longlong),
+                ("limit_flags", wintypes.DWORD),
+                ("minimum_working_set", ctypes.c_size_t),
+                ("maximum_working_set", ctypes.c_size_t),
+                ("active_process_limit", wintypes.DWORD),
+                ("affinity", ctypes.c_size_t),
+                ("priority_class", wintypes.DWORD),
+                ("scheduling_class", wintypes.DWORD),
+            )
+
+        class ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = (
+                ("basic_limit_information", BasicLimitInformation),
+                ("io_info", IoCounters),
+                ("process_memory_limit", ctypes.c_size_t),
+                ("job_memory_limit", ctypes.c_size_t),
+                ("peak_process_memory_used", ctypes.c_size_t),
+                ("peak_job_memory_used", ctypes.c_size_t),
+            )
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.argtypes = (wintypes.LPVOID, wintypes.LPCWSTR)
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.SetInformationJobObject.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        )
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            code = ctypes.get_last_error()
+            raise OSError(code, f"could not create CLI process job: {ctypes.FormatError(code)}")
+        try:
+            limits = ExtendedLimitInformation()
+            limits.basic_limit_information.limit_flags = 0x00002000
+            if not kernel32.SetInformationJobObject(
+                job,
+                9,
+                ctypes.byref(limits),
+                ctypes.sizeof(limits),
+            ):
+                code = ctypes.get_last_error()
+                raise OSError(
+                    code,
+                    f"could not configure CLI process job: {ctypes.FormatError(code)}",
+                )
+            popen = process._transport.get_extra_info("subprocess")
+            process_handle = getattr(popen, "_handle", None)
+            if process_handle is None or not kernel32.AssignProcessToJobObject(
+                job, int(process_handle)
+            ):
+                code = ctypes.get_last_error()
+                raise OSError(code, f"could not own CLI process tree: {ctypes.FormatError(code)}")
+        except BaseException:
+            kernel32.CloseHandle(job)
+            raise
+        return int(job)
+
+    @staticmethod
+    def _resume_windows_process(process_id: int) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        class ThreadEntry32(ctypes.Structure):
+            _fields_ = (
+                ("size", wintypes.DWORD),
+                ("usage_count", wintypes.DWORD),
+                ("thread_id", wintypes.DWORD),
+                ("owner_process_id", wintypes.DWORD),
+                ("base_priority", wintypes.LONG),
+                ("priority_delta", wintypes.LONG),
+                ("flags", wintypes.DWORD),
+            )
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel32.Thread32First.argtypes = (wintypes.HANDLE, ctypes.POINTER(ThreadEntry32))
+        kernel32.Thread32First.restype = wintypes.BOOL
+        kernel32.Thread32Next.argtypes = (wintypes.HANDLE, ctypes.POINTER(ThreadEntry32))
+        kernel32.Thread32Next.restype = wintypes.BOOL
+        kernel32.OpenThread.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenThread.restype = wintypes.HANDLE
+        kernel32.ResumeThread.argtypes = (wintypes.HANDLE,)
+        kernel32.ResumeThread.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000004, 0)
+        if snapshot == ctypes.c_void_p(-1).value:
+            code = ctypes.get_last_error()
+            raise OSError(code, f"could not enumerate CLI threads: {ctypes.FormatError(code)}")
+        resumed = 0
+        try:
+            entry = ThreadEntry32()
+            entry.size = ctypes.sizeof(entry)
+            available = kernel32.Thread32First(snapshot, ctypes.byref(entry))
+            while available:
+                if entry.owner_process_id == process_id:
+                    thread = kernel32.OpenThread(0x0002, False, entry.thread_id)
+                    if not thread:
+                        code = ctypes.get_last_error()
+                        raise OSError(
+                            code,
+                            f"could not open suspended CLI thread: {ctypes.FormatError(code)}",
+                        )
+                    try:
+                        if kernel32.ResumeThread(thread) == 0xFFFFFFFF:
+                            code = ctypes.get_last_error()
+                            raise OSError(
+                                code,
+                                f"could not resume CLI process: {ctypes.FormatError(code)}",
+                            )
+                        resumed += 1
+                    finally:
+                        kernel32.CloseHandle(thread)
+                available = kernel32.Thread32Next(snapshot, ctypes.byref(entry))
+        finally:
+            kernel32.CloseHandle(snapshot)
+        if resumed == 0:
+            raise OSError("suspended CLI process had no resumable thread")
+
+    def kill(self) -> None:
+        if self._windows_job is not None:
+            self._terminate_windows_job()
+            return
+        if os.name != "nt" and isinstance(self.process, asyncio.subprocess.Process):
+            with suppress(ProcessLookupError):
+                os.killpg(self.process.pid, signal.SIGKILL)
+            return
+        if self.process.returncode is None:
+            self.process.kill()
+
+    def _close_windows_job(self) -> None:
+        handle = self._windows_job
+        if handle is None:
+            return
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        self._windows_job = None
+        if not kernel32.CloseHandle(handle):
+            code = ctypes.get_last_error()
+            raise OSError(code, f"could not close CLI process job: {ctypes.FormatError(code)}")
+
+    def _terminate_windows_job(self) -> None:
+        handle = self._windows_job
+        if handle is None:
+            return
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        try:
+            if not kernel32.TerminateJobObject(handle, 1):
+                code = ctypes.get_last_error()
+                raise OSError(
+                    code,
+                    f"could not terminate CLI process job: {ctypes.FormatError(code)}",
+                )
+            if kernel32.WaitForSingleObject(handle, 5000) != 0:
+                raise OSError("CLI process job did not terminate within five seconds")
+        finally:
+            self._close_windows_job()
+
+    def close(self) -> None:
+        self.kill()
+
+
 async def _terminate_process(
-    process: asyncio.subprocess.Process, *tasks: asyncio.Task[Any]
+    process: asyncio.subprocess.Process,
+    process_tree: _ProcessTree,
+    *tasks: asyncio.Task[Any],
 ) -> None:
-    if process.returncode is None:
-        process.kill()
-    await process.wait()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    process_tree.kill()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except TimeoutError:
+        if process.returncode is None:
+            process.kill()
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5)
+    except TimeoutError:
+        for task in tasks:
+            task.cancel()
 
 
 def _absolute_path_entries(value: str) -> tuple[str, ...]:
@@ -869,6 +1105,37 @@ def _usable_executable(path: Path) -> bool:
     return path.is_file() and (os.name == "nt" or os.access(path, os.X_OK))
 
 
+def _executable_witness(path: Path) -> _ExecutableWitness:
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+    if os.name != "nt":
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    digest = hashlib.sha256()
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_CLI_EXECUTABLE_BYTES:
+            raise OSError("Databricks CLI executable has an invalid file shape")
+        while block := os.read(descriptor, 1024 * 1024):
+            digest.update(block)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    path_details = path.stat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ) or (path_details.st_dev, path_details.st_ino) != (before.st_dev, before.st_ino):
+        raise OSError("Databricks CLI executable changed while being witnessed")
+    return _ExecutableWitness(
+        identity=(before.st_dev, before.st_ino),
+        size=before.st_size,
+        modified_ns=before.st_mtime_ns,
+        sha256=digest.hexdigest(),
+    )
+
+
 class CliRunner:
     """Async structured-argv runner with bounded in-memory process output."""
 
@@ -889,6 +1156,7 @@ class CliRunner:
         self.stderr_cap = stderr_cap
         self.profile_config_path = profile_config_path
         self._resolved_executable: str | None = None
+        self._certified_executable_witness: _ExecutableWitness | None = None
 
     def verify_profile_authority(self, *, profile: str, expected_fingerprint: str) -> None:
         """Fail before dispatch if the named profile no longer selects this workspace."""
@@ -943,6 +1211,19 @@ class CliRunner:
                 raise CliUnavailable("Databricks CLI executable was not found on an absolute PATH")
         return self._resolved_executable
 
+    def _current_executable_witness(self) -> _ExecutableWitness:
+        try:
+            return _executable_witness(Path(self.resolve_executable()))
+        except OSError as exc:
+            raise CliUnavailable("Databricks CLI executable could not be witnessed") from exc
+
+    async def ensure_executable_compatibility(self) -> None:
+        current = await asyncio.to_thread(self._current_executable_witness)
+        if self._certified_executable_witness == current:
+            return
+        self._certified_executable_witness = None
+        await self.doctor()
+
     async def _execute(
         self,
         argv: tuple[str, ...],
@@ -987,6 +1268,11 @@ class CliRunner:
                     harden_private_file(snapshot_path)
                     process_environment["DATABRICKS_CONFIG_FILE"] = str(snapshot_path)
                 try:
+                    process_options = (
+                        {"creationflags": 0x00000004}
+                        if os.name == "nt"
+                        else {"start_new_session": True}
+                    )
                     process = await asyncio.create_subprocess_exec(
                         *argv,
                         stdin=asyncio.subprocess.DEVNULL,
@@ -994,26 +1280,59 @@ class CliRunner:
                         stderr=asyncio.subprocess.PIPE,
                         env=process_environment,
                         cwd=working_directory,
+                        **process_options,
                     )
                 except OSError as exc:
                     raise CliUnavailable("Databricks CLI process could not start") from exc
-                stdout_task = asyncio.create_task(_read_limited(process.stdout, self.stdout_cap))
-                stderr_task = asyncio.create_task(_read_limited(process.stderr, self.stderr_cap))
-                wait_task = asyncio.create_task(process.wait())
                 try:
-                    stdout, stderr, exit_code = await asyncio.wait_for(
-                        asyncio.gather(stdout_task, stderr_task, wait_task),
-                        timeout=self.timeout_seconds,
+                    process_tree = _ProcessTree(process)
+                except OSError as exc:
+                    if process.returncode is None:
+                        process.kill()
+                    await process.wait()
+                    raise CliUnavailable("Rookery could not own the CLI process tree") from exc
+                try:
+                    stdout_task = asyncio.create_task(
+                        _read_limited(process.stdout, self.stdout_cap)
                     )
-                except TimeoutError as exc:
-                    await _terminate_process(process, stdout_task, stderr_task, wait_task)
-                    raise CliTimeout(timeout_message) from exc
-                except CliOutputLimit:
-                    await _terminate_process(process, stdout_task, stderr_task, wait_task)
-                    raise
-                except asyncio.CancelledError:
-                    await _terminate_process(process, stdout_task, stderr_task, wait_task)
-                    raise
+                    stderr_task = asyncio.create_task(
+                        _read_limited(process.stderr, self.stderr_cap)
+                    )
+                    wait_task = asyncio.create_task(process.wait())
+                    try:
+                        stdout, stderr, exit_code = await asyncio.wait_for(
+                            asyncio.gather(stdout_task, stderr_task, wait_task),
+                            timeout=self.timeout_seconds,
+                        )
+                    except TimeoutError as exc:
+                        await _terminate_process(
+                            process,
+                            process_tree,
+                            stdout_task,
+                            stderr_task,
+                            wait_task,
+                        )
+                        raise CliTimeout(timeout_message) from exc
+                    except CliOutputLimit:
+                        await _terminate_process(
+                            process,
+                            process_tree,
+                            stdout_task,
+                            stderr_task,
+                            wait_task,
+                        )
+                        raise
+                    except asyncio.CancelledError:
+                        await _terminate_process(
+                            process,
+                            process_tree,
+                            stdout_task,
+                            stderr_task,
+                            wait_task,
+                        )
+                        raise
+                finally:
+                    process_tree.close()
             finally:
                 if snapshot_path is not None:
                     _remove_guarded_private_file(snapshot_path)
@@ -1034,6 +1353,7 @@ class CliRunner:
             or re.fullmatch(r"[0-9a-f]{64}", invocation.authority_fingerprint) is None
         ):
             raise CommandRejected("Databricks invocation requires an authority fingerprint")
+        await self.ensure_executable_compatibility()
         profile = invocation.argv[-3]
         profile_config_snapshot = self.profile_authority_snapshot(
             profile=profile,
@@ -1059,37 +1379,72 @@ class CliRunner:
         return execution
 
     async def doctor(self) -> None:
-        """Verify 0.298-compatible version and required group help surfaces."""
+        """Verify one certified CLI release and every reachable leaf command surface."""
         self.resolve_executable()
+        self._certified_executable_witness = None
+        initial_witness = await asyncio.to_thread(self._current_executable_witness)
+        version_result = await self.run_unmapped(
+            CliInvocation("doctor", (self.executable, "--version"))
+        )
+        if version_result.exit_code != 0:
+            raise CliIncompatible("Databricks CLI does not support '--version'")
+        version_text = (version_result.stdout + b"\n" + version_result.stderr).decode(
+            "utf-8", "replace"
+        )
+        matched = _VERSION.fullmatch(version_text.strip())
+        version = tuple(int(part) for part in matched.groups()) if matched is not None else None
+        if version not in CERTIFIED_CLI_VERSIONS:
+            raise CliIncompatible(
+                "Databricks CLI must be the certified version 0.298.0; other releases require "
+                "compatibility review"
+            )
         checks = (
-            ("--version",),
-            *(
-                (group, "--help")
-                for group in ("workspace", "catalogs", "schemas", "tables", "volumes")
+            (("workspace", "list", "--help"), ("databricks workspace list PATH",)),
+            (("workspace", "get-status", "--help"), ("databricks workspace get-status PATH",)),
+            (
+                ("workspace", "export", "--help"),
+                ("databricks workspace export SOURCE_PATH", "--format"),
+            ),
+            (("catalogs", "list", "--help"), ("databricks catalogs list",)),
+            (("schemas", "list", "--help"), ("databricks schemas list CATALOG_NAME",)),
+            (
+                ("tables", "list", "--help"),
+                ("databricks tables list CATALOG_NAME SCHEMA_NAME",),
+            ),
+            (
+                ("volumes", "list", "--help"),
+                ("databricks volumes list CATALOG_NAME SCHEMA_NAME",),
             ),
         )
-        version_text = ""
-        for args in checks:
+        for args, required_text in checks:
             invocation = CliInvocation("doctor", (self.executable, *args))
             result = await self.run_unmapped(invocation)
             text = (result.stdout + b"\n" + result.stderr).decode("utf-8", "replace")
             if result.exit_code != 0:
                 raise CliIncompatible(f"Databricks CLI does not support {' '.join(args)!r}")
-            if args == ("--version",):
-                version_text = text
-        matched = _VERSION.search(version_text)
-        if matched is None or tuple(int(part) for part in matched.groups()) < MINIMUM_CLI_VERSION:
-            raise CliIncompatible("Databricks CLI must be version 0.298 or newer")
+            required = (*required_text, "--profile", "--output")
+            missing = tuple(token for token in required if token not in text)
+            if missing:
+                raise CliIncompatible(
+                    f"Databricks CLI {' '.join(args[:-1])!r} help lacks required contract: "
+                    f"{', '.join(missing)}"
+                )
+        final_witness = await asyncio.to_thread(self._current_executable_witness)
+        if final_witness != initial_witness:
+            raise CliIncompatible("Databricks CLI executable changed during compatibility checks")
+        self._certified_executable_witness = final_witness
 
     async def run_unmapped(self, invocation: CliInvocation) -> CliExecution:
         """Internal doctor path; public observation calls must use ``run``."""
         if invocation.capability_key != "doctor" or invocation.argv[1:] not in {
             ("--version",),
-            ("workspace", "--help"),
-            ("catalogs", "--help"),
-            ("schemas", "--help"),
-            ("tables", "--help"),
-            ("volumes", "--help"),
+            ("workspace", "list", "--help"),
+            ("workspace", "get-status", "--help"),
+            ("workspace", "export", "--help"),
+            ("catalogs", "list", "--help"),
+            ("schemas", "list", "--help"),
+            ("tables", "list", "--help"),
+            ("volumes", "list", "--help"),
         }:
             raise CommandRejected("unregistered Databricks compatibility check")
         resolved = self.resolve_executable()
