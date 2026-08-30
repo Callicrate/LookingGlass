@@ -70,6 +70,7 @@ future_remote_setting = "opaque"
     "content",
     [
         '[app]\nport = "not-an-integer"\n',
+        '[[app]]\ndatabase_path = "state.sqlite3"\n',
         '[unknown]\ndatabase_path = "state.sqlite3"\n',
     ],
 )
@@ -109,8 +110,12 @@ def test_rejects_worker_poll_interval_below_practical_floor(tmp_path: Path, valu
 
 
 def test_programmatic_settings_enforce_poll_and_profile_boundaries(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="must be a Path"):
+        AppSettings(database_path=str(tmp_path / "state.sqlite3"))  # type: ignore[arg-type]
     with pytest.raises(ConfigError, match=r"at least 0\.05"):
         AppSettings(database_path=tmp_path / "state.sqlite3", worker_poll_seconds=1e-12)
+    with pytest.raises(ConfigError, match="must be a number"):
+        AppSettings(database_path=tmp_path / "state.sqlite3", cli_timeout_seconds=True)
     with pytest.raises(ConfigError, match="must start with a letter or digit"):
         DatabricksSystemSettings("workspace", "-bad", "/")
 
@@ -175,6 +180,17 @@ def test_programmatic_databricks_settings_normalize_identity_and_root() -> None:
 def test_programmatic_project_settings_reject_duplicate_names_and_ids(tmp_path: Path) -> None:
     app = AppSettings(database_path=tmp_path / "state.sqlite3")
     first = DatabricksSystemSettings("workspace", "ONE", "/One", "primary")
+
+    with pytest.raises(ConfigError, match="app must be AppSettings"):
+        ProjectSettings("not-app-settings", ())  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="must be DatabricksSystemSettings"):
+        ProjectSettings(app, [])  # type: ignore[arg-type]
+    too_many = tuple(
+        DatabricksSystemSettings(f"workspace-{index}", f"PROFILE_{index}", f"/{index}")
+        for index in range(33)
+    )
+    with pytest.raises(ConfigError, match="at most 32"):
+        ProjectSettings(app, too_many)
 
     with pytest.raises(ConfigError, match="names must be unique"):
         ProjectSettings(
