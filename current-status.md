@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 07:08 ET
+Updated: 2026-08-30 07:26 ET
 
 ## Contents
 
@@ -17,12 +17,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 547 passed / 8 platform skips; Ubuntu/WSL 549 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
-- Coverage: Windows 90.76% statements / 76.75% branch-only / 87.39% combined; Ubuntu/WSL 89.24% / 76.22% / 86.11%.
+- Latest checks: Windows 582 passed / 8 platform skips; Ubuntu/WSL 584 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
+- Coverage: Windows 90.78% statements / 76.99% branch-only / 87.44% combined; Ubuntu/WSL 89.28% / 76.48% / 86.18%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: fresh `critical-reviews/20260830-063705.md` reproduces one high profile-parser authority defect and three medium TLS/continuation/local-recovery defects. All have candidates; local recovery is independently clear and strict profile preflight is under exploit re-review.
+- Active review round: fresh `critical-reviews/20260830-063705.md` is closed after one high profile-parser authority defect and three medium TLS/continuation/local-recovery defects were repaired and independently cleared through repeated real-CLI exploit probes.
 - Latest checkpoint: `progress/20260830-070836.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, and post 7 records the committed profile/startup closure under that exact identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -63,7 +63,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Correct name-prefix empty-state guidance.
 - [x] Benchmark/document migration-0018 offline upgrade resource envelopes.
 - [x] Decouple local backup and authority lifecycle from unrelated remote semantic validation.
-- [ ] Close selected-profile parser equivalence, quoted-key authority, TLS, and continuation review.
+- [x] Close selected-profile parser equivalence, quoted-key authority, TLS, and continuation review.
 - [x] Attribute every visible fact/action/alert/refresh to one unique authority.
 - [x] Distinguish historical/paused cache from unsupported capability.
 - [x] Reject placeholder authority before durable state creation.
@@ -552,7 +552,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Exact-current verification passes at 547/8 on Windows and 549/6 on Ubuntu/WSL. The clean distribution contains 89 sdist entries, 66 wheel entries, and 34 installed runtime assets.
 - Fresh review `critical-reviews/20260830-063705.md` reproduced one high selected-profile credential/route crossover and three medium local-recovery, TLS, and permissive-INI defects; storage and the prior clean operator/package surface remain medium-plus clear.
 - The local-recovery candidate gives backup/list/retire/unretire one bounded app-only parse while full remote commands remain strict; independent re-review is clear.
-- Strict selected-section preflight now excludes DEFAULT credentials, rejects quoted/noncanonical route and TLS keys, rejects continuation/multiline ambiguity, and applies pinned CLI comment precedence. Current focused validation is 212/1 on Windows and 211/2 on Ubuntu/WSL; final exploit re-review is running.
+- Strict selected-section preflight now excludes DEFAULT credentials, rejects quoted/noncanonical route and TLS keys, rejects continuation/multiline ambiguity, and applies pinned CLI comment precedence. Independent exploit re-review is clear.
+- Global physical-line preflight now rejects section-consuming syntax in selected and unselected profiles before authority interpretation; representable retained comment fragments use pinned CLI backtick semantics and otherwise fail closed. Repeated real CLI source/snapshot probes are clear.
+- Exact post-fix verification passes at 582/8 on Windows and 584/6 on Ubuntu/WSL. Repeated packages contain 89 sdist entries, 66 wheel entries, and 34 installed runtime assets; Windows hashes are sdist `1F70F5509C6A1E94F1E6446F3D91A9924C2C1A4FF92B5A618F6F9D15FE674655` and wheel `8FFCE045F45161A8C14B2516592F4819B992528ABE3DAF63CE96D514E69223AF`.
 
 ## Risks / watch list
 
@@ -563,6 +565,6 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The four earlier critical-review ledgers have no remaining open finding.
 - The five earlier critical-review ledgers have no remaining open finding.
 - The 05:28 profile/startup ledger and all five earlier ledgers have no remaining open finding.
-- The 06:37 recovery/parser ledger remains open until the strict selected-section exploit re-review and exact full gates close.
+- The 06:37 recovery/parser ledger and all earlier ledgers have no remaining open finding.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
