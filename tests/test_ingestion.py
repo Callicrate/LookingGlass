@@ -27,6 +27,7 @@ from async_api_view.contracts import (
 )
 from async_api_view.ingestion import SQLiteObservationIngestor
 from async_api_view.storage import SQLiteStore
+from async_api_view.storage import sqlite as sqlite_storage
 
 NOW = datetime(2026, 8, 24, 12, tzinfo=UTC)
 
@@ -90,12 +91,13 @@ def _rewind_projection_order_migration(store: SQLiteStore) -> None:
     ):
         store._connection.execute(f'DROP TRIGGER "{trigger}"')
     store._connection.execute("DROP TABLE relationship_read_index")
+    store._connection.execute("DROP TABLE migration_provenance")
     store._connection.execute(
         """
         DELETE FROM schema_migrations
         WHERE version IN (
             '0024_corruption_containment', '0025_authority_read_plans',
-            '0026_lazy_scope_warning'
+            '0026_lazy_scope_warning', '0027_migration_provenance'
         )
         """
     )
@@ -107,6 +109,24 @@ def _rewind_projection_order_migration(store: SQLiteStore) -> None:
         ("refresh_credit", "received_at"),
     ):
         store._connection.execute(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
+
+
+def _reapply_projection_order_migrations(
+    store: SQLiteStore, *, include_membership_boundary: bool
+) -> None:
+    versions = (
+        ("0015_relationship_coverage_watermarks",) if include_membership_boundary else ()
+    ) + ("0016_projection_received_order",)
+    resources = {resource.version: resource for resource in sqlite_storage._migration_resources()}
+    with store._immediate_transaction():
+        for version in versions:
+            script = resources[version].payload.decode("utf-8")
+            for statement in store._migration_statements(script):
+                store._execute_migration_statement(statement)
+        store._migrate()
+        store._repair_required_runtime_indexes()
+        store._validate_current_schema()
+        store._finalize_migration_provenance(store._connection)
 
 
 def test_partial_listing_preserves_members_and_observation_replay_is_idempotent(tmp_path) -> None:
@@ -324,12 +344,9 @@ def test_newer_complete_membership_suppresses_delayed_unknown_edge(tmp_path) -> 
         assert run(store.ingest(empty_boundary)).status.value == "accepted"
         _rewind_projection_order_migration(store)
         store._connection.execute("DROP TABLE relationship_coverage_watermarks")
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version IN (?, ?)",
-            (
-                "0015_relationship_coverage_watermarks",
-                "0016_projection_received_order",
-            ),
+        _reapply_projection_order_migrations(
+            store,
+            include_membership_boundary=True,
         )
 
     child = ObjectLocator(
@@ -500,12 +517,9 @@ def test_migration_reconciles_preexisting_stale_edge_and_skips_unknown_credit(
         )
         _rewind_projection_order_migration(store)
         store._connection.execute("DROP TABLE relationship_coverage_watermarks")
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version IN (?, ?)",
-            (
-                "0015_relationship_coverage_watermarks",
-                "0016_projection_received_order",
-            ),
+        _reapply_projection_order_migrations(
+            store,
+            include_membership_boundary=True,
         )
 
     with SQLiteStore(path) as migrated:
@@ -1497,9 +1511,9 @@ def test_migration_invalidates_ambiguous_legacy_equal_time_projection(tmp_path) 
             ),
         )
         _rewind_projection_order_migration(store)
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = ?",
-            ("0016_projection_received_order",),
+        _reapply_projection_order_migrations(
+            store,
+            include_membership_boundary=False,
         )
 
     with SQLiteStore(path) as migrated:
@@ -1570,9 +1584,9 @@ def test_migration_unknown_object_receipt_rejects_equal_observed_stale_delivery(
             if item.external_key == "workspace:/Shared/legacy-receipt.py"
         )
         _rewind_projection_order_migration(store)
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = ?",
-            ("0016_projection_received_order",),
+        _reapply_projection_order_migrations(
+            store,
+            include_membership_boundary=False,
         )
 
     with SQLiteStore(path) as migrated:
@@ -1639,9 +1653,9 @@ def test_migration_does_not_mix_same_external_identity_across_systems(tmp_path) 
                 )
             )
         _rewind_projection_order_migration(store)
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = ?",
-            ("0016_projection_received_order",),
+        _reapply_projection_order_migrations(
+            store,
+            include_membership_boundary=False,
         )
 
     with SQLiteStore(path) as migrated:
@@ -1734,9 +1748,9 @@ def test_migration_detects_decimal_revisions_beyond_sqlite_integer_range(tmp_pat
             item for item in store.list_objects() if item.external_key == equal_locator.external_key
         )
         _rewind_projection_order_migration(store)
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = ?",
-            ("0016_projection_received_order",),
+        _reapply_projection_order_migrations(
+            store,
+            include_membership_boundary=False,
         )
 
     with SQLiteStore(path) as migrated:

@@ -18,7 +18,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from functools import cache
@@ -105,6 +105,10 @@ from .models import (
 )
 
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")
+_MIGRATION_MANIFEST = "MANIFEST.sha256"
+_MIGRATION_MANIFEST_SHA256 = "05109034bd281e999d66242c73ac9cd1272fd08c6d9083d0bfca31af064968de"
+_MIGRATION_HEAD = "0027_migration_provenance"
+_MIGRATION_FILENAME = re.compile(r"\A(?P<ordinal>[0-9]{4})_[a-z0-9_]+\.sql\Z")
 _APPLICATION_ID = 0x524F4F4B  # ASCII "ROOK"
 _DEFAULT_LEASE = timedelta(seconds=60)
 _SQLITE_STARTUP_BUSY_TIMEOUT_MS = 5_000
@@ -131,6 +135,85 @@ _TERMINAL_INTENT_STATES = {
 }
 _ACTION_STATE_VALUES = frozenset(item.value for item in ActionState)
 _INTENT_SCOPE_STATE_VALUES = frozenset(item.value for item in IntentScopeState)
+
+
+@dataclass(frozen=True, slots=True)
+class _MigrationResource:
+    ordinal: int
+    version: str
+    path: Path
+    payload: bytes
+    content_sha256: str
+    content_bytes: int
+    chain_sha256: str
+
+
+@cache
+def _migration_resources() -> tuple[_MigrationResource, ...]:
+    manifest_path = _MIGRATIONS_DIR / _MIGRATION_MANIFEST
+    try:
+        manifest_payload = manifest_path.read_bytes()
+        manifest_text = manifest_payload.decode("ascii")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError("Rookery migration manifest is unavailable") from exc
+    if not manifest_text.endswith("\n") or "\r" in manifest_text:
+        raise RuntimeError("Rookery migration manifest has noncanonical line endings")
+    if hashlib.sha256(manifest_payload).hexdigest() != _MIGRATION_MANIFEST_SHA256:
+        raise RuntimeError("Rookery migration manifest does not match this build")
+    expected: list[tuple[str, str]] = []
+    for line in manifest_text.splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  ([0-9]{4}_[a-z0-9_]+\.sql)", line)
+        if match is None:
+            raise RuntimeError("Rookery migration manifest is malformed")
+        expected.append((match.group(2), match.group(1)))
+    paths = tuple(sorted(_MIGRATIONS_DIR.glob("*.sql"), key=lambda path: path.name))
+    if tuple(path.name for path in paths) != tuple(name for name, _digest in expected):
+        raise RuntimeError("Rookery migration resources do not match the manifest")
+    resources: list[_MigrationResource] = []
+    previous_chain = bytes(32)
+    seen_digests: set[str] = set()
+    for expected_ordinal, (path, (_name, manifest_digest)) in enumerate(
+        zip(paths, expected, strict=True),
+        start=1,
+    ):
+        filename = _MIGRATION_FILENAME.fullmatch(path.name)
+        if filename is None or int(filename.group("ordinal")) != expected_ordinal:
+            raise RuntimeError("Rookery migration ordinals must be unique and contiguous")
+        payload = path.read_bytes()
+        payload.decode("utf-8")
+        content_sha256 = hashlib.sha256(payload).hexdigest()
+        if content_sha256 != manifest_digest or content_sha256 in seen_digests:
+            raise RuntimeError("Rookery migration bytes do not match the manifest")
+        seen_digests.add(content_sha256)
+        version = path.stem
+        chain_material = b"".join(
+            (
+                b"rookery-migration-chain-v1\0",
+                previous_chain,
+                expected_ordinal.to_bytes(4, "big"),
+                version.encode("utf-8"),
+                b"\0",
+                bytes.fromhex(content_sha256),
+            )
+        )
+        chain_sha256 = hashlib.sha256(chain_material).hexdigest()
+        previous_chain = bytes.fromhex(chain_sha256)
+        resources.append(
+            _MigrationResource(
+                ordinal=expected_ordinal,
+                version=version,
+                path=path,
+                payload=payload,
+                content_sha256=content_sha256,
+                content_bytes=len(payload),
+                chain_sha256=chain_sha256,
+            )
+        )
+    if not resources:
+        raise RuntimeError("Rookery migration manifest is empty")
+    if resources[-1].version != _MIGRATION_HEAD:
+        raise RuntimeError("Rookery migration manifest head is incompatible")
+    return tuple(resources)
 
 
 class StorageHeadroomUnavailable(RuntimeError):
@@ -292,9 +375,9 @@ def _schema_signature_through(
             _stored_timestamp_canonical_value,
             deterministic=True,
         )
-        for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
-            reference.executescript(migration.read_text(encoding="utf-8"))
-            if migration.stem == final_version:
+        for migration in _migration_resources():
+            reference.executescript(migration.payload.decode("utf-8"))
+            if migration.version == final_version:
                 break
         else:  # pragma: no cover - source packaging invariant
             raise RuntimeError(f"unknown schema signature version {final_version}")
@@ -350,9 +433,9 @@ def _schema_ddl_through(
             )
             """
         )
-        for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
-            reference.executescript(migration.read_text(encoding="utf-8"))
-            if migration.stem == final_version:
+        for migration in _migration_resources():
+            reference.executescript(migration.payload.decode("utf-8"))
+            if migration.version == final_version:
                 break
         else:  # pragma: no cover - source packaging invariant
             raise RuntimeError(f"unknown schema DDL version {final_version}")
@@ -384,10 +467,10 @@ def _initial_schema_signature() -> tuple[tuple[str, frozenset[tuple[str, str, in
 
 
 def _current_schema_signature() -> tuple[tuple[str, frozenset[tuple[str, str, int, int]]], ...]:
-    migrations = sorted(_MIGRATIONS_DIR.glob("*.sql"))
+    migrations = _migration_resources()
     if not migrations:  # pragma: no cover - source packaging invariant
         raise RuntimeError("Rookery migrations are unavailable")
-    return _schema_signature_through(migrations[-1].stem)
+    return _schema_signature_through(migrations[-1].version)
 
 
 def _canonical_config_id(value: str) -> str:
@@ -441,6 +524,50 @@ def _schema_ddl(connection: sqlite3.Connection) -> dict[tuple[str, str], tuple[s
     }
 
 
+def _validate_migration_provenance(
+    connection: sqlite3.Connection,
+    *,
+    versions: tuple[str, ...],
+    resources: tuple[_MigrationResource, ...],
+) -> bool:
+    provenance_exists = connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'migration_provenance'"
+    ).fetchone()
+    if provenance_exists is None:
+        if any(
+            resource.version == "0027_migration_provenance"
+            for resource in resources[: len(versions)]
+        ):
+            raise sqlite3.DatabaseError("Rookery migration provenance is missing")
+        return False
+    rows = connection.execute(
+        """
+        SELECT version, ordinal, content_sha256, content_bytes,
+               chain_sha256, basis, recorded_at
+        FROM migration_provenance ORDER BY ordinal
+        """
+    ).fetchall()
+    if len(rows) != len(versions):
+        raise sqlite3.DatabaseError("Rookery migration provenance is incomplete")
+    for row, resource, version in zip(
+        rows,
+        resources[: len(versions)],
+        versions,
+        strict=True,
+    ):
+        if (
+            row["version"] != version
+            or row["ordinal"] != resource.ordinal
+            or row["content_sha256"] != resource.content_sha256
+            or row["content_bytes"] != resource.content_bytes
+            or row["chain_sha256"] != resource.chain_sha256
+            or row["basis"] not in {"executed", "ledger_adopted"}
+            or not _stored_timestamp_is_canonical(row["recorded_at"])
+        ):
+            raise sqlite3.DatabaseError("Rookery migration provenance does not match this build")
+    return True
+
+
 def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind:
     """Reject foreign or incompatible SQLite state without mutating it."""
 
@@ -477,9 +604,11 @@ def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()
     )
-    known_versions = tuple(migration.stem for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")))
-    if any(version not in known_versions for version in versions):
+    resources = _migration_resources()
+    known_versions = tuple(migration.version for migration in resources)
+    if versions != known_versions[: len(versions)]:
         raise sqlite3.DatabaseError("Rookery migration ledger contains an unknown version")
+    _validate_migration_provenance(connection, versions=versions, resources=resources)
     if not versions:
         if tables != {"schema_migrations"}:
             raise sqlite3.DatabaseError("Rookery database schema is incomplete")
@@ -1125,6 +1254,7 @@ class SQLiteStore:
         available_bytes_probe: Callable[[], int] | None = None,
         minimum_write_headroom_bytes: int = MIN_WRITE_RESERVE_BYTES,
     ) -> None:
+        _migration_resources()
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
         if available_bytes_probe is not None and not callable(available_bytes_probe):
@@ -1303,6 +1433,15 @@ class SQLiteStore:
                 self._restore_authority_floor(connection)
                 recovery_now = self._current_time()
                 self._quarantine_invalid_queue_timing(connection, now=recovery_now)
+                connection.execute(
+                    """
+                    DELETE FROM facet_action_status
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM adapter_actions AS action
+                        WHERE action.action_id = facet_action_status.action_id
+                    )
+                    """
+                )
                 disabled_systems = tuple(
                     row["system_id"]
                     for row in connection.execute(
@@ -1315,6 +1454,7 @@ class SQLiteStore:
                     now_text=_utc_text(recovery_now),
                     reason="authority_legacy_disabled",
                 )
+                self._finalize_migration_provenance(connection)
                 connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
                 self._harden_storage_files()
             self._enable_wal_mode()
@@ -1677,19 +1817,130 @@ class SQLiteStore:
                 )
                 """
             )
-            for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
-                script = migration.read_text(encoding="utf-8")
+            resources = _migration_resources()
+            initial_versions = {
+                row["version"]
+                for row in self._connection.execute(
+                    "SELECT version FROM schema_migrations"
+                ).fetchall()
+            }
+            executed_versions: set[str] = set()
+            for migration in resources:
+                script = migration.payload.decode("utf-8")
                 applied = self._connection.execute(
                     "SELECT 1 FROM schema_migrations WHERE version = ?",
-                    (migration.stem,),
+                    (migration.version,),
                 ).fetchone()
                 if applied is None:
                     for statement in self._migration_statements(script):
                         self._execute_migration_statement(statement)
                     self._connection.execute(
                         "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                        (migration.stem, _utc_text(_now())),
+                        (migration.version, _utc_text(_now())),
                     )
+                    executed_versions.add(migration.version)
+            self._migration_initial_versions = initial_versions
+            self._migration_executed_versions = executed_versions
+
+    def _finalize_migration_provenance(self, connection: sqlite3.Connection) -> None:
+        resources = _migration_resources()
+        initial_versions = self._migration_initial_versions
+        executed_versions = self._migration_executed_versions
+        existing_versions = {
+            row["version"]
+            for row in connection.execute("SELECT version FROM migration_provenance").fetchall()
+        }
+        adopted_versions = initial_versions - existing_versions
+        if adopted_versions:
+            self._reconcile_adopted_relationship_projection(connection)
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise sqlite3.DatabaseError("Rookery migration adoption failed integrity check")
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise sqlite3.DatabaseError("Rookery migration adoption found foreign-key errors")
+        recorded_at = _utc_text(_now())
+        for migration in resources:
+            if migration.version not in initial_versions | executed_versions:
+                break
+            if migration.version in existing_versions:
+                continue
+            basis = "executed" if migration.version in executed_versions else "ledger_adopted"
+            connection.execute(
+                """
+                INSERT INTO migration_provenance (
+                    version, ordinal, content_sha256, content_bytes,
+                    chain_sha256, basis, recorded_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    migration.version,
+                    migration.ordinal,
+                    migration.content_sha256,
+                    migration.content_bytes,
+                    migration.chain_sha256,
+                    basis,
+                    recorded_at,
+                ),
+            )
+        versions = tuple(
+            row["version"]
+            for row in connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        )
+        _validate_migration_provenance(
+            connection,
+            versions=versions,
+            resources=resources,
+        )
+
+    @staticmethod
+    def _reconcile_adopted_relationship_projection(connection: sqlite3.Connection) -> None:
+        """Repair migration-0025's derived index before claiming current-state adoption."""
+
+        connection.execute(
+            """
+            DELETE FROM relationship_read_index
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM relationships AS relationship
+                JOIN remote_objects AS object
+                  ON object.object_id = relationship.object_id
+                WHERE relationship.relationship_id = relationship_read_index.relationship_id
+                  AND relationship.system_id IS relationship_read_index.system_id
+                  AND relationship.subject_id IS relationship_read_index.subject_id
+                  AND relationship.predicate IS relationship_read_index.predicate
+                  AND relationship.presence IS relationship_read_index.presence
+                  AND object.object_type IS relationship_read_index.object_type
+                  AND relationship.object_id IS relationship_read_index.object_id
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO relationship_read_index (
+                relationship_id, system_id, subject_id, predicate,
+                presence, object_type, object_id
+            )
+            SELECT
+                relationship.relationship_id,
+                relationship.system_id,
+                relationship.subject_id,
+                relationship.predicate,
+                relationship.presence,
+                object.object_type,
+                relationship.object_id
+            FROM relationships AS relationship
+            JOIN remote_objects AS object ON object.object_id = relationship.object_id
+            ON CONFLICT(relationship_id) DO UPDATE SET
+                system_id = excluded.system_id,
+                subject_id = excluded.subject_id,
+                predicate = excluded.predicate,
+                presence = excluded.presence,
+                object_type = excluded.object_type,
+                object_id = excluded.object_id
+            """
+        )
 
     def _validate_current_schema(self) -> None:
         current_schema = dict(_current_schema_signature())
@@ -1719,13 +1970,13 @@ class SQLiteStore:
             }
             if not expected_signature.issubset(actual_signature):
                 raise sqlite3.DatabaseError(f"Rookery current {table_name} schema is incompatible")
-        migrations = sorted(_MIGRATIONS_DIR.glob("*.sql"))
+        migrations = _migration_resources()
         if not migrations:  # pragma: no cover - source packaging invariant
             raise RuntimeError("Rookery migrations are unavailable")
         expected_ddl = {
             (object_type, name): (table_name, sql)
             for object_type, name, table_name, sql in _schema_ddl_through(
-                migrations[-1].stem,
+                migrations[-1].version,
                 include_runtime_repairs=True,
             )
         }

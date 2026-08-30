@@ -41,6 +41,18 @@ def run(awaitable):
     return asyncio.run(awaitable)
 
 
+def _reapply_recorded_migrations(store: SQLiteStore, *versions: str) -> None:
+    resources = {resource.version: resource for resource in sqlite_storage._migration_resources()}
+    with store._immediate_transaction():
+        for version in versions:
+            for statement in store._migration_statements(
+                resources[version].payload.decode("utf-8")
+            ):
+                store._execute_migration_statement(statement)
+        store._repair_required_runtime_indexes()
+        store._validate_current_schema()
+
+
 def _scope(system_id: str, configured_scope_id: str) -> RefreshScope:
     return RefreshScope(
         system_id=system_id,
@@ -84,6 +96,7 @@ def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     ):
         store._connection.execute(f'DROP TRIGGER "{trigger}"')
     store._connection.execute("DROP TABLE relationship_read_index")
+    store._connection.execute("DROP TABLE migration_provenance")
     for view in (
         "readable_operational_events",
         "readable_facet_action_status",
@@ -106,7 +119,7 @@ def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
         DELETE FROM schema_migrations
         WHERE version IN (
             '0024_corruption_containment', '0025_authority_read_plans',
-            '0026_lazy_scope_warning'
+            '0026_lazy_scope_warning', '0027_migration_provenance'
         )
         """
     )
@@ -634,14 +647,11 @@ def test_queue_claim_migration_backfills_immutable_intent_order(tmp_path) -> Non
         store._connection.execute(
             "ALTER TABLE observation_batches DROP COLUMN observed_at_is_local"
         )
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = '0017_queue_claim_order'"
-        )
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = '0019_web_cursor_indexes'"
-        )
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = '0023_time_authority'"
+        _reapply_recorded_migrations(
+            store,
+            "0017_queue_claim_order",
+            "0019_web_cursor_indexes",
+            "0023_time_authority",
         )
 
     with SQLiteStore(path) as migrated:

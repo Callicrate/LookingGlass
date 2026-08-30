@@ -10,9 +10,11 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tomllib
+from contextlib import closing
 from email.parser import Parser
 from email.policy import default
 from pathlib import Path, PurePosixPath
@@ -21,11 +23,17 @@ from tempfile import TemporaryDirectory
 from zipfile import ZipFile
 
 FORBIDDEN_SDIST_PATHS = (
+    "/.coverage",
+    "/.pytest_cache/",
+    "/.ruff_cache/",
+    "/__pycache__/",
     "/progress/",
     "/.murmuration/",
     "/.github/",
     "/critical-reviews/",
     "/current-status.md",
+    "/coverage-report",
+    "/htmlcov/",
 )
 SDIST_EXCLUDED_PREFIXES = (
     ".github/",
@@ -903,6 +911,63 @@ def smoke_installed_wheel(
             or not database.is_file()
         ):
             raise RuntimeError("installed CLI could not complete checkout-free initialization")
+        with closing(sqlite3.connect(database)) as installed_state:
+            provenance_rows = installed_state.execute(
+                """
+                SELECT version, ordinal, content_sha256, content_bytes, chain_sha256, basis
+                FROM migration_provenance ORDER BY ordinal
+                """
+            ).fetchall()
+        expected_provenance = _wheel_migration_provenance(wheel_archive)
+        if tuple(provenance_rows) != expected_provenance:
+            raise RuntimeError("installed migration provenance is incomplete")
+
+
+def _wheel_migration_provenance(wheel_archive: Path) -> tuple[tuple[object, ...], ...]:
+    """Derive deterministic provenance directly from packaged bytes, outside runtime code."""
+
+    prefix = "async_api_view/storage/migrations/"
+    manifest_name = f"{prefix}MANIFEST.sha256"
+    with ZipFile(wheel_archive) as archive:
+        manifest = archive.read(manifest_name).decode("ascii")
+        manifest_rows: list[tuple[str, str]] = []
+        for line in manifest.splitlines():
+            match = re.fullmatch(r"([0-9a-f]{64})  ([0-9]{4}_[a-z0-9_]+\.sql)", line)
+            if match is None:
+                raise RuntimeError("installed migration manifest is malformed")
+            manifest_rows.append((match.group(2), match.group(1)))
+        sql_names = sorted(
+            name.removeprefix(prefix)
+            for name in archive.namelist()
+            if name.startswith(prefix) and name.endswith(".sql")
+        )
+        if sql_names != [name for name, _digest in manifest_rows]:
+            raise RuntimeError("installed migration manifest does not match packaged resources")
+        previous_chain = bytes(32)
+        expected: list[tuple[object, ...]] = []
+        for ordinal, (name, manifest_digest) in enumerate(manifest_rows, start=1):
+            payload = archive.read(f"{prefix}{name}")
+            content_sha256 = hashlib.sha256(payload).hexdigest()
+            if content_sha256 != manifest_digest:
+                raise RuntimeError("installed migration bytes do not match the packaged manifest")
+            version = name.removesuffix(".sql")
+            chain_sha256 = hashlib.sha256(
+                b"".join(
+                    (
+                        b"rookery-migration-chain-v1\0",
+                        previous_chain,
+                        ordinal.to_bytes(4, "big"),
+                        version.encode("utf-8"),
+                        b"\0",
+                        bytes.fromhex(content_sha256),
+                    )
+                )
+            ).hexdigest()
+            previous_chain = bytes.fromhex(chain_sha256)
+            expected.append(
+                (version, ordinal, content_sha256, len(payload), chain_sha256, "executed")
+            )
+    return tuple(expected)
 
 
 def verify_sdist_rebuild(source_archive: Path, wheel_archive: Path) -> None:

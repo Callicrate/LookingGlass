@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import os
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -54,6 +56,25 @@ def run(awaitable):
     return asyncio.run(awaitable)
 
 
+def _clear_migration_caches() -> None:
+    sqlite_storage._migration_resources.cache_clear()
+    sqlite_storage._schema_signature_through.cache_clear()
+    sqlite_storage._schema_ddl_through.cache_clear()
+
+
+def _reapply_recorded_migration(store: SQLiteStore, version: str) -> None:
+    resource = next(
+        migration
+        for migration in sqlite_storage._migration_resources()
+        if migration.version == version
+    )
+    with store._immediate_transaction():
+        for statement in store._migration_statements(resource.payload.decode("utf-8")):
+            store._execute_migration_statement(statement)
+        store._repair_required_runtime_indexes()
+        store._validate_current_schema()
+
+
 def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     for view in (
         "readable_action_activity_recency",
@@ -72,6 +93,7 @@ def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     ):
         store._connection.execute(f'DROP TRIGGER "{trigger}"')
     store._connection.execute("DROP TABLE relationship_read_index")
+    store._connection.execute("DROP TABLE migration_provenance")
     for view in (
         "readable_operational_events",
         "readable_facet_action_status",
@@ -94,7 +116,7 @@ def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
         DELETE FROM schema_migrations
         WHERE version IN (
             '0024_corruption_containment', '0025_authority_read_plans',
-            '0026_lazy_scope_warning'
+            '0026_lazy_scope_warning', '0027_migration_provenance'
         )
         """
     )
@@ -140,6 +162,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0024_corruption_containment",
             "0025_authority_read_plans",
             "0026_lazy_scope_warning",
+            "0027_migration_provenance",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -159,6 +182,261 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
         ).fetchall()
         assert any("ix_relationships_subject_predicate" in row[3] for row in child_plan)
         assert not any("TEMP B-TREE" in row[3] for row in child_plan)
+
+
+def test_migration_provenance_records_execution_and_survives_backup(tmp_path) -> None:
+    path = tmp_path / "provenance.sqlite3"
+    backup = tmp_path / "provenance-backup.sqlite3"
+    with SQLiteStore(path) as store:
+        rows = store._connection.execute(
+            """
+            SELECT version, ordinal, content_sha256, content_bytes,
+                   chain_sha256, basis
+            FROM migration_provenance ORDER BY ordinal
+            """
+        ).fetchall()
+        with pytest.raises(sqlite3.IntegrityError, match="provenance is immutable"):
+            store._connection.execute(
+                "UPDATE migration_provenance SET basis = 'ledger_adopted' WHERE ordinal = 1"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="provenance is immutable"):
+            store._connection.execute("DELETE FROM migration_provenance WHERE ordinal = 1")
+    backup_sqlite_database(path, backup)
+    with sqlite3.connect(backup) as copied:
+        copied_rows = copied.execute(
+            """
+            SELECT version, ordinal, content_sha256, content_bytes,
+                   chain_sha256, basis
+            FROM migration_provenance ORDER BY ordinal
+            """
+        ).fetchall()
+
+    expected = [
+        (
+            migration.version,
+            migration.ordinal,
+            migration.content_sha256,
+            migration.content_bytes,
+            migration.chain_sha256,
+            "executed",
+        )
+        for migration in sqlite_storage._migration_resources()
+    ]
+    assert [tuple(row) for row in rows] == expected
+    assert [tuple(row) for row in rows] == copied_rows
+
+
+def test_legacy_migration_provenance_adoption_is_explicit(tmp_path) -> None:
+    path = tmp_path / "legacy-provenance.sqlite3"
+    with SQLiteStore(path) as store:
+        store._connection.execute("DROP TABLE migration_provenance")
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = '0027_migration_provenance'"
+        )
+
+    with SQLiteStore(path) as adopted:
+        basis_counts = dict(
+            adopted._connection.execute(
+                "SELECT basis, COUNT(*) FROM migration_provenance GROUP BY basis"
+            ).fetchall()
+        )
+
+        assert basis_counts == {"executed": 1, "ledger_adopted": 26}
+
+
+def test_legacy_provenance_adoption_repairs_relationship_read_projection(tmp_path) -> None:
+    path = tmp_path / "legacy-provenance-projection.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        child = store.upsert_object(
+            RemoteObject(
+                object_id=uuid4(),
+                system_id=seeded.system.system_id,
+                object_type="file",
+                object_type_version="1",
+                source_kind="synthetic.file",
+                external_key="/adoption-child",
+                display_name="adoption-child",
+                presence=PresenceState.PRESENT,
+                first_seen_at=NOW,
+            )
+        )
+        store._connection.execute(
+            """
+            INSERT INTO relationships (
+                relationship_id, system_id, subject_id, predicate, object_id,
+                presence, observed_at, supporting_observation_id
+            ) VALUES (?, ?, ?, 'contains', ?, 'present', ?, ?)
+            """,
+            (
+                str(uuid4()),
+                seeded.system.system_id,
+                seeded.workspace_root_object_id,
+                child.object_id,
+                NOW.isoformat(),
+                str(uuid4()),
+            ),
+        )
+        store._connection.execute("DROP TABLE migration_provenance")
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = '0027_migration_provenance'"
+        )
+        store._connection.execute("DELETE FROM relationship_read_index")
+
+    with SQLiteStore(path) as adopted:
+        related = adopted.list_related_objects_after_sync(
+            seeded.workspace_root_object_id,
+            after_id=None,
+            limit=21,
+            predicate="contains",
+            object_type="file",
+        )
+        assert [item.object.object_id for item in related] == [child.object_id]
+        assert (
+            adopted._connection.execute("SELECT COUNT(*) FROM relationship_read_index").fetchone()[
+                0
+            ]
+            == 1
+        )
+
+
+def test_historical_migration_byte_drift_fails_before_database_mutation(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "drift.sqlite3"
+    with SQLiteStore(path):
+        pass
+    migrations = tmp_path / "migrations"
+    shutil.copytree(sqlite_storage._MIGRATIONS_DIR, migrations)
+    changed = migrations / "0026_lazy_scope_warning.sql"
+    changed.write_bytes(
+        changed.read_bytes()
+        + b"\nINSERT INTO systems (system_id, display_name, system_kind, enabled, "
+        + b"record_created_at, record_updated_at) VALUES "
+        + b"('00000000-0000-4000-8000-000000000026', 'provenance-probe', "
+        + b"'probe.system', 1, '2026-08-30T00:00:00.000000Z', "
+        + b"'2026-08-30T00:00:00.000000Z');\n"
+    )
+    manifest = migrations / "MANIFEST.sha256"
+    lines = manifest.read_text(encoding="ascii").splitlines()
+    changed_hash = hashlib.sha256(changed.read_bytes()).hexdigest()
+    lines = [
+        f"{changed_hash}  {changed.name}" if line.endswith(f"  {changed.name}") else line
+        for line in lines
+    ]
+    manifest.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")
+    manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    monkeypatch.setattr(sqlite_storage, "_MIGRATIONS_DIR", migrations)
+    monkeypatch.setattr(sqlite_storage, "_MIGRATION_MANIFEST_SHA256", manifest_hash)
+    _clear_migration_caches()
+    try:
+        with pytest.raises(sqlite3.DatabaseError, match="provenance"):
+            SQLiteStore(path)
+    finally:
+        _clear_migration_caches()
+
+    with sqlite3.connect(path) as check:
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM systems WHERE display_name = 'provenance-probe'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate_ordinal", "reordered"])
+def test_migration_manifest_rejects_resource_shape_drift(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    migrations = tmp_path / mutation
+    shutil.copytree(sqlite_storage._MIGRATIONS_DIR, migrations)
+    manifest = migrations / "MANIFEST.sha256"
+    lines = manifest.read_text(encoding="ascii").splitlines()
+    if mutation == "missing":
+        (migrations / "0027_migration_provenance.sql").unlink()
+    elif mutation == "extra":
+        (migrations / "0028_extra.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    elif mutation == "duplicate_ordinal":
+        duplicate = migrations / "0027_duplicate.sql"
+        duplicate.write_text("SELECT 1;\n", encoding="utf-8")
+        digest = hashlib.sha256(duplicate.read_bytes()).hexdigest()
+        lines.insert(-1, f"{digest}  {duplicate.name}")
+        manifest.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")
+    else:
+        lines[-1], lines[-2] = lines[-2], lines[-1]
+        manifest.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")
+    monkeypatch.setattr(sqlite_storage, "_MIGRATIONS_DIR", migrations)
+    monkeypatch.setattr(
+        sqlite_storage,
+        "_MIGRATION_MANIFEST_SHA256",
+        hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    )
+    _clear_migration_caches()
+    try:
+        with pytest.raises(RuntimeError, match="migration"):
+            sqlite_storage._migration_resources()
+    finally:
+        _clear_migration_caches()
+
+
+def test_failed_pending_migration_persists_neither_ledger_nor_provenance(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "failed-pending.sqlite3"
+    with SQLiteStore(path):
+        pass
+    migrations = tmp_path / "failed-migrations"
+    shutil.copytree(sqlite_storage._MIGRATIONS_DIR, migrations)
+    pending = migrations / "0028_failure.sql"
+    pending.write_text(
+        "CREATE TABLE should_roll_back (value TEXT);\nINSERT INTO missing_table VALUES (1);\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    manifest = migrations / "MANIFEST.sha256"
+    lines = manifest.read_text(encoding="ascii").splitlines()
+    lines.append(f"{hashlib.sha256(pending.read_bytes()).hexdigest()}  {pending.name}")
+    manifest.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")
+    monkeypatch.setattr(sqlite_storage, "_MIGRATIONS_DIR", migrations)
+    monkeypatch.setattr(
+        sqlite_storage,
+        "_MIGRATION_MANIFEST_SHA256",
+        hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(sqlite_storage, "_MIGRATION_HEAD", pending.stem)
+    _clear_migration_caches()
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="missing_table"):
+            SQLiteStore(path)
+    finally:
+        _clear_migration_caches()
+
+    with sqlite3.connect(path) as check:
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = ?", (pending.stem,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM migration_provenance WHERE version = ?", (pending.stem,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            check.execute(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'should_roll_back'"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 @pytest.mark.parametrize(
@@ -205,7 +483,7 @@ def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_
     with SQLiteStore(path) as store:
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 26
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
         )
 
 
@@ -220,7 +498,7 @@ def test_new_database_is_migrated_and_marked_before_wal_activation(
         assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 26
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
         )
         original(store)
 
@@ -515,7 +793,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 26
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -553,7 +831,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 26
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -588,7 +866,7 @@ def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_pa
 
     check = sqlite3.connect(path)
     try:
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 26
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -805,7 +1083,7 @@ def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path)
     check = sqlite3.connect(destination)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 26
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
     finally:
         check.close()
 
@@ -1592,9 +1870,6 @@ def test_override_identity_migration_keeps_latest_null_facet_row(tmp_path) -> No
     scope_id = str(uuid4())
     with SQLiteStore(path) as store:
         store._connection.execute("DROP INDEX ux_refresh_overrides_identity")
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = '0011_refresh_override_identity'"
-        )
         store._connection.executemany(
             """
             INSERT INTO refresh_overrides (
@@ -1606,6 +1881,7 @@ def test_override_identity_migration_keeps_latest_null_facet_row(tmp_path) -> No
                 (scope_id, 14_400, "2026-08-24T13:00:00.000000Z"),
             ),
         )
+        _reapply_recorded_migration(store, "0011_refresh_override_identity")
 
     with SQLiteStore(path) as migrated:
         rows = migrated._connection.execute(
@@ -1669,6 +1945,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0024_corruption_containment",
         "0025_authority_read_plans",
         "0026_lazy_scope_warning",
+        "0027_migration_provenance",
     )
     assert versions == (expected,) * workers
 
@@ -2015,6 +2292,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0024_corruption_containment",
             "0025_authority_read_plans",
             "0026_lazy_scope_warning",
+            "0027_migration_provenance",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -3216,9 +3494,7 @@ def test_action_projection_migration_backfills_history_and_triggers(tmp_path) ->
         store._connection.execute("DROP TRIGGER trg_action_projection_timestamp_correction")
         store._connection.execute("DROP TABLE facet_action_status")
         store._connection.execute("DROP TABLE action_scope_cooldown")
-        store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = '0018_action_state_projections'"
-        )
+        _reapply_recorded_migration(store, "0018_action_state_projections")
 
     with SQLiteStore(path) as migrated:
         policy = migrated.scope_policy_state(scope)

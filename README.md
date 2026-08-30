@@ -147,7 +147,7 @@ try {
 ```
 
 Keep `$previous` until the upgraded command and local state have passed validation. Remove the private environment to uninstall the command; configuration and cached SQLite state remain operator-owned files. A fresh sibling prevents packages removed from the new lock, including executable `.pth` hooks, from surviving an upgrade. Keep the matching constraints, relocatable Python 3.12 environment, `--require-hashes`, `--no-build`, and `--no-deps` separation on every install. Installation and upgrade still require the configured package index or a complete populated cache; a staging failure leaves the active environment untouched.
-The first later `init`, `run-once`, or `serve` invocation automatically applies pending migrations. In-place downgrade is unsupported because an older binary rejects migration-ledger versions it does not know. Keep the pre-upgrade backup until the upgraded version has passed local validation; restore remains a separate unsupported workflow.
+The first later `init`, `run-once`, or `serve` invocation automatically applies pending migrations. Rookery binds the ordered migration inventory to packaged SQL bytes and rejects a database whose recorded provenance disagrees with the installed build before applying new changes. A recognized pre-provenance database records older versions as `ledger_adopted`, not `executed`; that label confirms only the accepted ledger/schema bridge and does not retroactively prove which historical DML bytes ran. In-place downgrade is unsupported because an older binary rejects migration-ledger versions it does not know. Keep the pre-upgrade backup until the upgraded version has passed local validation; restore remains a separate unsupported workflow.
 
 ## Source checkout setup
 

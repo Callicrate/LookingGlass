@@ -1417,6 +1417,7 @@ It MUST NOT expose a network-accessible multi-user interface without a new authe
 The configured SQLite parent and each backup destination parent are dedicated current-user state directories, not shared folders or Git worktree roots.
 Rookery MUST reject redirects and multiply hard-linked state files, establish current-user ownership, and restrict directories/files to `0700`/`0600` on POSIX or protected current-user DACLs on Windows.
 Before any write-capable open, WAL transition, sidecar creation, migration, repair, or backup publication for an existing database, Rookery MUST validate its application identity and minimum schema through an immutable read-only connection that does not open WAL shared state.
+The installed build MUST bind one canonical, contiguous migration inventory to the exact packaged SQL bytes and MUST reject any present durable migration provenance that differs before applying new changes. Provenance rows are immutable through the normal schema. `executed` and `ledger_adopted` basis labels plus their local timestamps are descriptive database metadata, not an authenticated audit against an owner who can rewrite the SQLite file; `ledger_adopted` MUST NOT be presented as proof that historical DML bytes executed. Before legacy adoption, Rookery MUST repair rebuildable migration-derived read state needed by the current runtime and pass current schema, SQLite integrity, and foreign-key validation in the same startup transaction.
 New and markerless stores MUST migrate and persist the `ROOK` application ID in rollback-journal mode before enabling WAL; an unmarked store with WAL/SHM sidecars MUST fail closed until its owning version cleanly checkpoints it.
 If that preflight identifies foreign SQLite state, startup and backup MUST leave its bytes, journal mode, and sidecar set unchanged.
 A successful backup MUST synchronize the validated snapshot file and final publication metadata before returning; a failed or unsupported durability barrier MUST publish no claimed recovery copy.
@@ -1539,6 +1540,7 @@ Automated `uv` and GitHub Actions update proposals MUST run the complete cross-p
 - Core request, action, observation, type, facet, and capability contracts MUST have explicit versions.
 - Schema changes SHOULD be additive when possible.
 - Before an upgrade's first stateful invocation, preserve a verified pre-migration backup. In-place database downgrade is unsupported until a validated restore or down-migration path exists.
+- Applied migration versions MUST bind to the exact ordered SQL resources in the installed build. Legacy `ledger_adopted` rows establish compatibility with the recognized ledger/schema boundary only and MUST NOT be treated as historical execution evidence.
 - Local backup and authority inventory/retirement MUST validate bounded top-level and app settings but MUST NOT depend on semantically valid remote-system declarations; commands that reconcile or execute remote work retain full configuration validation.
 - A reader encountering an unsupported facet MUST preserve it as unsupported rather than delete it.
 - An action pins the exact adapter and capability version admitted.

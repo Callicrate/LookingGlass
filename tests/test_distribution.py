@@ -81,9 +81,15 @@ def test_source_distribution_rejects_workspace_review_surfaces() -> None:
     assert forbidden_source_entries(
         [
             "async_api_view-0.1.0/README.md",
+            "async_api_view-0.1.0/.coverage-wsl-final",
             "async_api_view-0.1.0/critical-reviews/20260830-010345.md",
+            "async_api_view-0.1.0/coverage-report-wsl.json",
         ]
-    ) == ("async_api_view-0.1.0/critical-reviews/20260830-010345.md",)
+    ) == (
+        "async_api_view-0.1.0/.coverage-wsl-final",
+        "async_api_view-0.1.0/critical-reviews/20260830-010345.md",
+        "async_api_view-0.1.0/coverage-report-wsl.json",
+    )
 
 
 def test_wheel_package_verification_rejects_stale_or_unexpected_python(tmp_path) -> None:
