@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 11:57 ET
+Updated: 2026-08-30 12:47 ET
 
 ## Contents
 
@@ -17,13 +17,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 620 passed / 8 platform skips; Ubuntu/WSL 622 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
-- Coverage: Windows 90.26% statements / 76.60% branch-only / 86.95% combined; Ubuntu/WSL 87.62% / 75.36% / 84.65%.
+- Latest checks: Windows 625 passed / 8 platform skips; Ubuntu/WSL 627 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
+- Coverage: Windows 90.30% statements / 76.64% branch-only / 86.98% combined; Ubuntu/WSL 87.69% / 75.42% / 84.71%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-112242.md` is closed in commit `0f32af3` after two medium pre-exhaustion and backup-capacity defects were repaired and independently cleared; the Windows verifier rename denial did not survive five clean-clone repetitions.
-- Latest checkpoint: `progress/20260830-115643.md`.
+- Active review round: `critical-reviews/20260830-120045.md` is closed in commit `d8c92ba` after three medium worker-record, receipt-order, and lease-authority defects plus two re-review residuals were repaired and independently cleared.
+- Latest checkpoint: `progress/20260830-124634.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 10 record earlier committed closures, and post 11 records the independently cleared runtime, temporal, and recovery closure.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -59,6 +59,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
 - [x] Close the 10:22 maintainability and residual-failure review after independent re-review.
 - [x] Review and improve durable-state capacity/headroom behavior without weakening audit or projection guarantees.
+- [x] Close wall-clock regression and durable event-time ordering review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
@@ -588,6 +589,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Final isolated gates pass at 614/8 on Windows and 616/6 on Ubuntu/WSL with 90.25%/76.57%/86.93% and 87.59%/75.31%/84.61% statement/branch-only/combined coverage.
 - Murmuration topic 40 post 11 records commits `b959697` and `ff03b47` plus the clean `ff03b47` checksum manifest under exact `openai/gpt-5.6-sol` provenance.
 - Commit `0f32af3` protects caller-available write headroom before new intent/action/dispatch work, defers temporary capacity loss without remote execution, preserves terminal writes, and preflights online backup page bytes plus reserve.
+- Commit `d8c92ba` separates monotonic lease authority, nondecreasing worker records, and explicit durable receipt provenance; real state is at migration 0023 with two verified pre-migration backups.
 
 ## Risks / watch list
 
