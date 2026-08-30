@@ -778,9 +778,12 @@ def _quarantine_event_key(item_kind: str, persisted_id: object) -> str:
     return f"{item_kind}-{identifier_digest}-contract-rejected"
 
 
-def _scope_columns(scope: RefreshScope) -> tuple[str, str, str, str, str, str | None, str, str]:
+type _ScopeColumns = tuple[str, str, str, str, str, str | None, str, str]
+
+
+def _scope_columns(scope: RefreshScope) -> _ScopeColumns:
     return (
-        scope.system_id,
+        str(scope.system_id),
         scope.target.kind.value,
         scope.target.target_id,
         scope.object_type,
@@ -4296,11 +4299,12 @@ class SQLiteStore:
             ).fetchone()
             if row is None:
                 raise ValueError("unknown adapter action")
+            leased_until = _dt(row["leased_until"])
             if (
                 row["state"] != ActionState.LEASED.value
                 or row["lease_id"] != lease_id
-                or _dt(row["leased_until"]) is None
-                or _dt(row["leased_until"]) <= lease_now
+                or leased_until is None
+                or leased_until <= lease_now
             ):
                 raise ValueError("adapter action lease is not valid for logical start")
             connection.execute(
@@ -4894,16 +4898,16 @@ class SQLiteStore:
             """,
             (action_id,),
         ).fetchall()
-        expired_scope_ids = tuple(
-            row["intent_scope_id"]
-            for row in linked_scopes
-            if _dt(row["expires_at"]) is not None and _dt(row["expires_at"]) <= authority_now
-        )
-        live_scope_ids = tuple(
-            row["intent_scope_id"]
-            for row in linked_scopes
-            if row["intent_scope_id"] not in expired_scope_ids
-        )
+        expired_scope_ids: list[str] = []
+        live_scope_ids: list[str] = []
+        for row in linked_scopes:
+            expires_at = _dt(row["expires_at"])
+            destination = (
+                expired_scope_ids
+                if expires_at is not None and expires_at <= authority_now
+                else live_scope_ids
+            )
+            destination.append(row["intent_scope_id"])
         for intent_scope_id in expired_scope_ids:
             connection.execute(
                 """
@@ -5689,7 +5693,7 @@ class SQLiteStore:
             if batch.action_id is not None
             else None
         )
-        seen: set[tuple[str, str, str, str, str, str, str]] = set()
+        seen: set[_ScopeColumns] = set()
         for declaration in declarations:
             scope = declaration.scope
             if scope.system_id != batch.system_id:
@@ -6095,8 +6099,12 @@ class SQLiteStore:
             else observation.payload
         )
         merged.update(update_payload)
-        changed = existing is None or merged != prior_payload
-        state_changed_at = batch.observed_at if changed else _dt(existing["state_changed_at"])
+        if existing is None or merged != prior_payload:
+            state_changed_at = batch.observed_at
+        else:
+            state_changed_at = _dt(existing["state_changed_at"])
+            if state_changed_at is None:  # pragma: no cover - schema invariant
+                raise ValueError("stored facet lacks state-change time")
         connection.execute(
             """
             INSERT INTO facets (
@@ -6191,21 +6199,24 @@ class SQLiteStore:
             """,
             (batch.system_id, subject_id, observation.predicate, object_id),
         ).fetchone()
-        if (
-            existing is not None
-            and projected_from_watermark
-            and projected_at == _dt(existing["observed_at"])
-            and projected_received_at
-            <= (_dt(existing["received_at"]) or _dt(existing["observed_at"]))
-        ):
-            return
-        if existing is not None and not _received_order_allows(
-            observed_at=projected_at,
-            received_at=projected_received_at,
-            existing_observed_at=_dt(existing["observed_at"]),
-            existing_received_at=_dt(existing["received_at"]),
-        ):
-            return
+        if existing is not None:
+            existing_observed_at = _dt(existing["observed_at"])
+            if existing_observed_at is None:  # pragma: no cover - schema invariant
+                raise ValueError("stored relationship lacks observed time")
+            existing_received_at = _dt(existing["received_at"])
+            if (
+                projected_from_watermark
+                and projected_at == existing_observed_at
+                and projected_received_at <= (existing_received_at or existing_observed_at)
+            ):
+                return
+            if not _received_order_allows(
+                observed_at=projected_at,
+                received_at=projected_received_at,
+                existing_observed_at=existing_observed_at,
+                existing_received_at=existing_received_at,
+            ):
+                return
         relationship_id = (
             existing["relationship_id"]
             if existing is not None

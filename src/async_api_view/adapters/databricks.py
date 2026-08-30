@@ -125,6 +125,7 @@ _PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _PROFILE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SECTION_HEADER = re.compile(r"^\s*\[([^\]\r\n]+)\]")
 _RESERVED_PROFILE = "__settings__"
+_NO_DEFAULT_SECTION = "\0"
 _INI_TRUE = frozenset({"1", "t", "true"})
 _INI_FALSE = frozenset({"0", "f", "false"})
 _VERSION = re.compile(r"Databricks CLI v(\d+)\.(\d+)\.(\d+)")
@@ -407,22 +408,29 @@ def workspace_authority_fingerprint(
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+class _ProfileParser(configparser.ConfigParser):
+    def optionxform(self, optionstr: str) -> str:
+        """Keep profile keys case-sensitive like the certified CLI parser."""
+
+        return optionstr
+
+
 def _profile_parser() -> configparser.ConfigParser:
     """Build an INI parser without Python's cross-section DEFAULT inheritance."""
 
-    parser = configparser.ConfigParser(
-        default_section=None,
+    return _ProfileParser(
+        default_section=_NO_DEFAULT_SECTION,
         empty_lines_in_values=False,
         interpolation=None,
         strict=False,
     )
-    parser.optionxform = str
-    return parser
 
 
 def _preprocess_selected_profile(payload: str, *, profile: str) -> str:
     """Reject permissive key/continuation syntax and apply pinned CLI comment precedence."""
 
+    if _NO_DEFAULT_SECTION in payload:
+        raise CliUnavailable("Databricks profile configuration contains a null byte")
     processed: list[str] = []
     selected = False
     for line in payload.splitlines(keepends=True):
@@ -543,18 +551,20 @@ def _databricks_profile_authority(
     except (OSError, UnicodeError):
         raise CliUnavailable("Databricks profile configuration is unavailable") from None
     parser = _profile_parser()
+    items: dict[str, str] | None = None
     invalid_configuration = False
     try:
         payload = payload_bytes.decode("utf-8-sig")
         payload = _preprocess_selected_profile(payload, profile=profile)
         parser.read_string(payload)
         items = _selected_profile_items(parser, profile=profile)
-        host = items.get("host")
     except (configparser.Error, UnicodeError):
         invalid_configuration = True
-        host = None
     if invalid_configuration:
         raise CliUnavailable("Databricks profile configuration is invalid")
+    if items is None:  # pragma: no cover - exhaustive parse outcome
+        raise CliUnavailable("Databricks profile configuration is invalid")
+    host = items.get("host")
     if host is None:
         raise CliUnavailable("Databricks profile has no workspace authority")
     skip_verify = items.get("skip_verify")
@@ -837,6 +847,8 @@ class _ProcessTree:
         kernel32.SetInformationJobObject.restype = wintypes.BOOL
         kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
         kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         kernel32.CloseHandle.restype = wintypes.BOOL
         job = kernel32.CreateJobObjectW(None, None)
@@ -857,13 +869,19 @@ class _ProcessTree:
                     code,
                     f"could not configure CLI process job: {ctypes.FormatError(code)}",
                 )
-            popen = process._transport.get_extra_info("subprocess")
-            process_handle = getattr(popen, "_handle", None)
-            if process_handle is None or not kernel32.AssignProcessToJobObject(
-                job, int(process_handle)
-            ):
+            process_handle = kernel32.OpenProcess(0x00000101, False, process.pid)
+            if not process_handle:
                 code = ctypes.get_last_error()
-                raise OSError(code, f"could not own CLI process tree: {ctypes.FormatError(code)}")
+                raise OSError(code, f"could not open CLI process: {ctypes.FormatError(code)}")
+            try:
+                if not kernel32.AssignProcessToJobObject(job, process_handle):
+                    code = ctypes.get_last_error()
+                    raise OSError(
+                        code,
+                        f"could not own CLI process tree: {ctypes.FormatError(code)}",
+                    )
+            finally:
+                kernel32.CloseHandle(process_handle)
         except BaseException:
             kernel32.CloseHandle(job)
             raise
@@ -1312,10 +1330,16 @@ class CliRunner:
                     raise CliRuntimeUnavailable("Databricks CLI process could not start") from exc
                 try:
                     process_tree = _ProcessTree(process)
-                except OSError as exc:
-                    if process.returncode is None:
-                        process.kill()
-                    await process.wait()
+                except BaseException as exc:
+                    try:
+                        if process.returncode is None:
+                            process.kill()
+                    except ProcessLookupError:
+                        pass
+                    finally:
+                        await process.wait()
+                    if not isinstance(exc, Exception):
+                        raise
                     raise CliRuntimeUnavailable(
                         "Rookery could not own the CLI process tree"
                     ) from exc

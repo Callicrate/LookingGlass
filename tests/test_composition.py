@@ -981,6 +981,37 @@ async def test_run_once_skips_incompatible_intent_and_drains_valid_work(tmp_path
 
 
 @pytest.mark.anyio
+async def test_intent_view_preserves_valid_unsupported_system_target(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    system_id = (await runtime.backend.dashboard()).refresh_options[0].system_id
+    intent_id = str(uuid4())
+    await runtime.store.submit_refresh(
+        RefreshIntent(
+            intent_id=intent_id,
+            idempotency_key=str(uuid4()),
+            origin=RefreshOrigin.MANUAL,
+            actor_id="contract-probe",
+            scopes=(
+                RefreshScope(
+                    system_id=system_id,
+                    target=TargetRef(TargetKind.SYSTEM, system_id),
+                    object_type="databricks.system",
+                    facet="metadata",
+                ),
+            ),
+            requested_at=datetime.now(UTC),
+        )
+    )
+
+    view = await runtime.backend.intent(intent_id)
+
+    assert view is not None
+    assert view.scopes[0].target_kind == "system"
+    assert view.scopes[0].target_id == system_id
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_dashboard_reads_action_and_object_snapshots_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

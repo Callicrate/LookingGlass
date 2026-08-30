@@ -590,6 +590,14 @@ def test_profile_keys_remain_case_sensitive_and_settings_is_reserved(tmp_path: P
         databricks_profile_authority_fingerprint("__settings__", config_file=config)
 
 
+def test_profile_parser_rejects_null_bytes(tmp_path: Path) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_bytes(b"[PRIMARY]\nhost = https://workspace.example.com\x00\n")
+
+    with pytest.raises(CliUnavailable, match="null byte"):
+        databricks_profile_authority_fingerprint("PRIMARY", config_file=config)
+
+
 @pytest.mark.parametrize("quote", ['"', "`"])
 @pytest.mark.parametrize(
     "key",
@@ -1139,6 +1147,48 @@ def test_cli_process_creation_failure_is_controlled_and_cleans_workdir(
     with pytest.raises(CliUnavailable, match="process could not start"):
         asyncio.run(runner.run_unmapped(CliInvocation("doctor", ("databricks", "--version"))))
 
+    assert list(work_root.iterdir()) == []
+
+
+def test_cli_process_ownership_failure_reaps_child_and_cleans_workdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root.mkdir(parents=True)
+    monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
+
+    class StartedProcess:
+        returncode: int | None = None
+        killed = False
+        wait_calls = 0
+
+        def kill(self) -> None:
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self) -> int:
+            self.wait_calls += 1
+            return self.returncode or 0
+
+    process = StartedProcess()
+
+    async def create_process(*_args: object, **_kwargs: object) -> StartedProcess:
+        return process
+
+    def reject_ownership(_process: object) -> None:
+        raise AttributeError("simulated asyncio transport change")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(databricks_adapter, "_ProcessTree", reject_ownership)
+    runner = CliRunner()
+    runner._resolved_executable = "C:\\trusted\\databricks.exe"
+
+    with pytest.raises(CliUnavailable, match="could not own the CLI process tree"):
+        asyncio.run(runner.run_unmapped(CliInvocation("doctor", ("databricks", "--version"))))
+
+    assert process.killed
+    assert process.wait_calls == 1
     assert list(work_root.iterdir()) == []
 
 

@@ -429,7 +429,7 @@ class IntentScopeView:
     label: str
     state: str
     system_id: str = ""
-    target_kind: Literal["configured_scope", "object"] = "configured_scope"
+    target_kind: Literal["configured_scope", "object", "system"] = "configured_scope"
     target_id: str = ""
     capability_key: str = ""
     facet: str = ""
