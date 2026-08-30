@@ -554,8 +554,8 @@ def backup_sqlite_database(source_path: str | Path, destination_path: str | Path
                     destination_connection.row_factory = sqlite3.Row
                     if _validate_database_identity(destination_connection) is not source_kind:
                         raise RuntimeError("backup changed the Rookery database identity")
-                harden_private_file(temporary_path)
-                temporary_guard.verify()
+                temporary_guard.harden()
+                temporary_guard.sync()
                 destination_directory_guard.verify()
                 source_guard.verify()
                 os.link(temporary_path, destination)
@@ -563,12 +563,16 @@ def backup_sqlite_database(source_path: str | Path, destination_path: str | Path
                 temporary_guard.verify(expected_links=2)
                 if regular_file_identity(destination, expected_links=2) != temporary_identity:
                     raise OSError("backup destination does not match the validated snapshot")
+                destination_directory_guard.sync()
                 temporary_guard.close()
                 temporary_path.unlink()
+                destination_directory_guard.sync()
                 with RegularFileGuard(destination) as destination_guard:
                     if destination_guard.identity != temporary_identity:
                         raise OSError("backup destination changed during publication")
                     destination_guard.harden()
+                    destination_guard.sync()
+                    destination_directory_guard.sync()
                     destination_guard.verify()
                     published = True
                     return destination

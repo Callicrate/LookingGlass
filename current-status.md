@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 00:59 ET
+Updated: 2026-08-30 01:24 ET
 
 ## Contents
 
@@ -17,11 +17,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 476 tests passed with 10 Windows platform/privilege skips and 480 tests passed with 6 Ubuntu/WSL platform skips; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and branch coverage pass at 88%/87% respectively.
+- Latest checks: 488 tests passed with 11 Windows platform/privilege skips and 493 tests passed with 6 Ubuntu/WSL platform skips; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and branch coverage pass at 88%/87% respectively.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: all four findings from `critical-reviews/20260829-221329.md` are repaired, verified on both supported CI platforms, and independently cleared.
+- Active review round: all findings from `critical-reviews/20260829-221329.md` and `critical-reviews/20260830-010345.md` are repaired, verified on both supported CI platforms, and independently cleared.
 - Latest checkpoint: `progress/20260830-005857.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum, notifications, and all six BookStack books are available.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -58,6 +58,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Remediate the high IPv6 loopback activation-takeover finding.
 - [x] Remediate foreign-database mutation ordering and owner-only database permissions.
 - [x] Strengthen isolated-wheel verification against the locked runtime graph.
+- [x] Make bounded `run-once` incompletion explicit and resumable.
+- [x] Add file and directory durability barriers before backup success.
+- [x] Document pre-migration backup, unsupported downgrade, and uncompacted growth.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -474,6 +477,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Final remote-start authorization compares a SHA-256 digest of the exact adapter/settings/secret-reference binding used to build argv; a concurrent profile rotation cancels stale dispatch with zero runner calls.
 - The 06:43 Murmuration tending pass again found no Rookery-specific public context and remained read-only because the native project profile is unavailable.
 - A fresh multi-process storage/runtime audit cleared transaction, lease recovery, aggregate, configuration reconciliation, backup, and poison-row behavior with 92 focused tests.
+- The fresh recovery review is recorded at `critical-reviews/20260830-010345.md`; its three medium findings and low operator omission are repaired and independently cleared.
+- `run-once` now exposes `--max-cycles`, returns exit 3 for bounded incompletion, resumes cleanly, and retains a safe 10,000-cycle default for direct callers.
+- Backup now flushes the validated file plus final directory publication metadata on Windows and POSIX, fails closed on synchronization errors, and rechecks destination identity after every blocking durability operation.
+- Upgrade guidance now requires a stopped pre-migration checkpoint, states that in-place downgrade is unsupported, and warns that durable history plus backups are not automatically pruned.
+- The real post-durability checkpoint `.local/backups/rookery-20260830-0118-post-durability.sqlite3` is owner-only, `ROOK`, migration `0018`, integrity `ok`, and foreign-key clean.
+- Final recovery verification passes at 488/11 on Windows and 493/6 on Ubuntu/WSL with 88%/87% branch coverage; the VCS-aware distribution passes at 86 sdist entries, 62 wheel entries, and 30 non-code runtime assets. Current Windows archive SHA-256 values are `370E2B27976D44F5CB58C302254CFBCF0F7A3E1AEF5FCA4C0A5CFE8A3CB577E0` and `C8FD9EE8B1C1D9B395C0CC15726FD16912A44682B4C728E547665A12FBBFDD44`.
 
 ## Risks / watch list
 
@@ -481,4 +490,4 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Local browser/debug data is present under `.local/` and must remain untracked.
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
 - The fresh critical-review ledger has no remaining open finding; live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
-- A new first-look review of operator recovery and long-lived local state is active; it is rebuilding claims from current docs and implementation rather than reusing the closed security/storage report outline.
+- The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.

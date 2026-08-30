@@ -154,7 +154,11 @@ def _run_once_cycle_limit(value: str) -> int:
     return cycles
 
 
-async def _run_once(runtime: ApplicationRuntime, *, max_cycles: int) -> bool:
+async def _run_once(
+    runtime: ApplicationRuntime,
+    *,
+    max_cycles: int = DEFAULT_RUN_ONCE_CYCLES,
+) -> bool:
     """Process a bounded batch and report whether the eligible queue became idle."""
 
     await runtime.worker.startup()

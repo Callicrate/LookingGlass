@@ -77,7 +77,7 @@ class RegularFileGuard:
         kernel32.CreateFileW.restype = wintypes.HANDLE
         handle = kernel32.CreateFileW(
             str(self.path),
-            0x80000000,
+            0xC0000000,
             0x00000001 | 0x00000002,
             None,
             3,
@@ -120,6 +120,24 @@ class RegularFileGuard:
         else:
             _harden_windows_path_acl(self.path, inherit_to_children=False)
         self.verify()
+
+    def sync(self) -> None:
+        """Synchronize the guarded file's data and metadata before success."""
+
+        if self._descriptor is not None:
+            os.fsync(self._descriptor)
+            return
+        if self._windows_handle is None:  # pragma: no cover - closed guard misuse
+            raise OSError("Rookery state file guard is closed")
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.FlushFileBuffers.argtypes = (wintypes.HANDLE,)
+        kernel32.FlushFileBuffers.restype = wintypes.BOOL
+        if not kernel32.FlushFileBuffers(self._windows_handle):
+            code = ctypes.get_last_error()
+            raise OSError(code, f"could not synchronize Rookery state: {ctypes.FormatError(code)}")
 
     def close(self) -> None:
         if self._descriptor is not None:
@@ -184,7 +202,7 @@ class PrivateDirectoryGuard:
         kernel32.CreateFileW.restype = wintypes.HANDLE
         handle = kernel32.CreateFileW(
             str(self.path),
-            0x80000000,
+            0xC0000000,
             0x00000001 | 0x00000002,
             None,
             3,
@@ -212,6 +230,27 @@ class PrivateDirectoryGuard:
         details = self.path.lstat()
         if not stat.S_ISDIR(details.st_mode) or (details.st_dev, details.st_ino) != self.identity:
             raise OSError("Rookery state directory identity changed while guarded")
+
+    def sync(self) -> None:
+        """Synchronize publication metadata for the guarded directory."""
+
+        if self._descriptor is not None:
+            os.fsync(self._descriptor)
+            return
+        if self._windows_handle is None:  # pragma: no cover - closed guard misuse
+            raise OSError("Rookery state directory guard is closed")
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.FlushFileBuffers.argtypes = (wintypes.HANDLE,)
+        kernel32.FlushFileBuffers.restype = wintypes.BOOL
+        if not kernel32.FlushFileBuffers(self._windows_handle):
+            code = ctypes.get_last_error()
+            raise OSError(
+                code,
+                f"could not synchronize Rookery directory metadata: {ctypes.FormatError(code)}",
+            )
 
     def close(self) -> None:
         if self._descriptor is not None:

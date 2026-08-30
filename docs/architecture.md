@@ -1326,6 +1326,7 @@ SSH authentication, host-key, timeout, connection, and remote-command failures u
 | Empty complete listing | Reconcile only the relationship, object-presence, or facet-field absence authorized for the exact declared scope. |
 | Invalid observation item | Quarantine the item; ingest unrelated safe items; disable affected absence reconciliation. |
 | Store unavailable before durable action start | Do not perform the remote call. |
+| Backup file or publication synchronization fails | Preserve the primary database, report failure, and remove only the matching unpublished snapshot. |
 | Crash after remote read before ingestion | The read may repeat; ingestion remains idempotent. |
 | Orderly process shutdown during a remote read | Cancel the local worker task and subprocess promptly; leave durable action recovery to the ordinary lease path. |
 | Expired queue lease | Reclaim and revalidate before work. |
@@ -1408,6 +1409,7 @@ Rookery MUST reject redirects and multiply hard-linked state files, establish cu
 Before any write-capable open, WAL transition, sidecar creation, migration, repair, or backup publication for an existing database, Rookery MUST validate its application identity and minimum schema through an immutable read-only connection that does not open WAL shared state.
 New and markerless stores MUST migrate and persist the `ROOK` application ID in rollback-journal mode before enabling WAL; an unmarked store with WAL/SHM sidecars MUST fail closed until its owning version cleanly checkpoints it.
 If that preflight identifies foreign SQLite state, startup and backup MUST leave its bytes, journal mode, and sidecar set unchanged.
+A successful backup MUST synchronize the validated snapshot file and final publication metadata before returning; a failed or unsupported durability barrier MUST publish no claimed recovery copy.
 
 There is no force-refresh permission in version 1.
 Refresh and retention policy changes are ordinary attributable local configuration changes.
@@ -1514,6 +1516,7 @@ Automated `uv` and GitHub Actions update proposals MUST run the complete cross-p
 
 - Core request, action, observation, type, facet, and capability contracts MUST have explicit versions.
 - Schema changes SHOULD be additive when possible.
+- Before an upgrade's first stateful invocation, preserve a verified pre-migration backup. In-place database downgrade is unsupported until a validated restore or down-migration path exists.
 - A reader encountering an unsupported facet MUST preserve it as unsupported rather than delete it.
 - An action pins the exact adapter and capability version admitted.
 - Adapter upgrades SHOULD support side-by-side contract validation before activation.

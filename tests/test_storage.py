@@ -686,6 +686,43 @@ def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path)
         check.close()
 
 
+def test_backup_preserves_pre_migration_schema_for_upgrade_rollback(tmp_path: Path) -> None:
+    source = tmp_path / "state" / "rookery.sqlite3"
+    destination = tmp_path / "backups" / "rookery.sqlite3"
+    source.parent.mkdir()
+    legacy = sqlite3.connect(source)
+    try:
+        legacy.execute(
+            "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        legacy.executescript(
+            Path("src/async_api_view/storage/migrations/0001_initial.sql").read_text(
+                encoding="utf-8"
+            )
+        )
+        legacy.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            ("0001_initial", "2026-08-24T12:00:00Z"),
+        )
+        legacy.commit()
+    finally:
+        legacy.close()
+
+    backup_sqlite_database(source, destination)
+    with SQLiteStore(source):
+        pass
+
+    checkpoint = sqlite3.connect(destination)
+    try:
+        assert [
+            row[0]
+            for row in checkpoint.execute("SELECT version FROM schema_migrations ORDER BY version")
+        ] == ["0001_initial"]
+        assert checkpoint.execute("PRAGMA application_id").fetchone()[0] == 0
+    finally:
+        checkpoint.close()
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX ownership and mode regression")
 def test_state_database_sidecars_and_backups_are_posix_private(tmp_path: Path) -> None:
     state_directory = tmp_path / "state"
@@ -1018,6 +1055,112 @@ def test_backup_guarded_hardening_rejects_and_preserves_post_link_competitor(
         original_harden(guard)
 
     monkeypatch.setattr(sqlite_storage.RegularFileGuard, "harden", replace_before_harden)
+
+    with pytest.raises(OSError, match="identity changed"):
+        backup_sqlite_database(source, destination)
+
+    assert destination.read_bytes() == b"competing backup"
+    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+
+
+def test_backup_flushes_snapshot_and_publication_metadata_before_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "state" / "rookery.sqlite3"
+    destination = tmp_path / "backups" / "rookery.sqlite3"
+    with SQLiteStore(source):
+        pass
+    events: list[tuple[str, str]] = []
+    original_file_sync = sqlite_storage.RegularFileGuard.sync
+    original_directory_sync = sqlite_storage.PrivateDirectoryGuard.sync
+    original_link = sqlite_storage.os.link
+
+    def record_file_sync(guard: sqlite_storage.RegularFileGuard) -> None:
+        events.append(("file-sync", guard.path.name))
+        original_file_sync(guard)
+
+    def record_directory_sync(guard: sqlite_storage.PrivateDirectoryGuard) -> None:
+        events.append(("directory-sync", guard.path.name))
+        original_directory_sync(guard)
+
+    def record_link(temporary: Path, published: Path) -> None:
+        events.append(("link", published.name))
+        original_link(temporary, published)
+
+    monkeypatch.setattr(sqlite_storage.RegularFileGuard, "sync", record_file_sync)
+    monkeypatch.setattr(sqlite_storage.PrivateDirectoryGuard, "sync", record_directory_sync)
+    monkeypatch.setattr(sqlite_storage.os, "link", record_link)
+
+    backup_sqlite_database(source, destination)
+
+    link_index = events.index(("link", destination.name))
+    assert events[link_index - 1][0] == "file-sync"
+    assert events[link_index + 1] == ("directory-sync", destination.parent.name)
+    assert events.count(("directory-sync", destination.parent.name)) == 3
+    assert events[-2:] == [
+        ("file-sync", destination.name),
+        ("directory-sync", destination.parent.name),
+    ]
+
+
+@pytest.mark.parametrize("failure", ["file", "directory"])
+def test_backup_durability_failure_publishes_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    source = tmp_path / "state" / "rookery.sqlite3"
+    destination = tmp_path / "backups" / "rookery.sqlite3"
+    with SQLiteStore(source):
+        pass
+
+    if failure == "file":
+
+        def fail_file_sync(guard: sqlite_storage.RegularFileGuard) -> None:
+            if guard.path.name.startswith(".rookery-backup-"):
+                raise OSError("injected file synchronization failure")
+
+        monkeypatch.setattr(sqlite_storage.RegularFileGuard, "sync", fail_file_sync)
+    else:
+
+        def fail_directory_sync(_guard: sqlite_storage.PrivateDirectoryGuard) -> None:
+            raise OSError("injected directory synchronization failure")
+
+        monkeypatch.setattr(sqlite_storage.PrivateDirectoryGuard, "sync", fail_directory_sync)
+
+    with pytest.raises(OSError, match="synchronization failure"):
+        backup_sqlite_database(source, destination)
+
+    assert not destination.exists()
+    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX final-directory-sync race regression")
+def test_backup_final_directory_sync_rejects_and_preserves_competitor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "state" / "rookery.sqlite3"
+    destination = tmp_path / "backups" / "rookery.sqlite3"
+    with SQLiteStore(source):
+        pass
+    original_sync = sqlite_storage.PrivateDirectoryGuard.sync
+    sync_calls = 0
+
+    def replace_during_final_sync(guard: sqlite_storage.PrivateDirectoryGuard) -> None:
+        nonlocal sync_calls
+        sync_calls += 1
+        original_sync(guard)
+        if sync_calls == 3:
+            destination.unlink()
+            destination.write_bytes(b"competing backup")
+
+    monkeypatch.setattr(
+        sqlite_storage.PrivateDirectoryGuard,
+        "sync",
+        replace_during_final_sync,
+    )
 
     with pytest.raises(OSError, match="identity changed"):
         backup_sqlite_database(source, destination)
