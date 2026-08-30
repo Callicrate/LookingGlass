@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 04:43 ET
+Updated: 2026-08-30 05:16 ET
 
 ## Contents
 
@@ -17,13 +17,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 529 passed / 8 platform skips; Ubuntu/WSL 531 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
-- Coverage: Windows 90.72% statements / 76.77% branch-only / 87.35% combined; Ubuntu/WSL 89.15% / 76.23% / 86.03%.
-- Runtime surface: 8 CLI commands and 11 HTTP routes, verified from source.
+- Latest checks: Windows 536 passed / 8 platform skips; Ubuntu/WSL 538 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
+- Coverage: Windows 90.77% statements / 76.84% branch-only / 87.41% combined; Ubuntu/WSL 89.23% / 76.31% / 86.12%.
+- Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: the 03:02 report is closed; fresh operator-authority report `critical-reviews/20260830-044240.md` records one high and five medium findings now queued for remediation.
-- Latest checkpoint: `progress/20260830-041706.md`.
+- Active review round: all findings in `critical-reviews/20260830-044240.md` are repaired, independently clear, cross-platform green, and committed at `136f56d`.
+- Latest checkpoint: `progress/20260830-051546.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the latest verified-authority/boundedness evidence is verified at topic 40, post 4 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -56,12 +56,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
 - [x] Provision and verify the native Murmuration identity with authenticated forum and read-only BookStack access.
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
-- [ ] Attribute every visible fact/action/alert/refresh to one unique authority.
-- [ ] Distinguish historical/paused cache from unsupported capability.
-- [ ] Reject placeholder authority before durable state creation.
-- [ ] Extend database ownership lock to `init` and `run-once`.
-- [ ] Terminalize pre-removal work so exact change-back cannot revive it.
-- [ ] Add durable authority inventory plus explicit retire/unretire controls.
+- [x] Attribute every visible fact/action/alert/refresh to one unique authority.
+- [x] Distinguish historical/paused cache from unsupported capability.
+- [x] Reject placeholder authority before durable state creation.
+- [x] Extend database ownership lock to `init` and `run-once`.
+- [x] Terminalize pre-removal work so exact change-back cannot revive it.
+- [x] Add durable authority inventory plus explicit retire/unretire controls.
 - [x] Bind remote authority to a verified workspace-host fingerprint and fail closed on retargeting.
 - [x] Reserve serve ownership before any durable configuration reconciliation.
 - [x] Limit one queue claim to one priority-aware due-promotion batch.
@@ -531,6 +531,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The 04:31 Murmuration Tend pass published the committed closure idempotently as topic 40, post 4 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
 - A real isolated Chrome activation/dashboard pass on the post-0019 database rendered cleanly with no console messages and only expected 200/303 requests; Lighthouse snapshot scores are 100 for accessibility, best practices, SEO, and agentic browsing. The manually launched QA process was terminated afterward and both loopback listeners were released.
 - Fresh operator-authority review `critical-reviews/20260830-044240.md` retains one high and five medium findings grounded in the rendered three-authority dashboard and read-only real database state.
+- Commit `136f56d` closes visible authority attribution, historical-cache diagnosis, placeholder rejection, all stateful lock ownership, stale-work cancellation, and durable authority retirement; both original reviewers cleared their findings.
+- The real store is now migration `0020_retired_authorities`; pre-0020 backup and live database are `ROOK`, integrity `ok`, and foreign-key clean. Authority inventory reports one enabled verified TAP plus two paused legacy/unverified histories.
+- Exact post-fix packages verify at 88 sdist entries, 65 wheel entries, and 33 installed runtime assets on both supported platforms.
 
 ## Risks / watch list
 
@@ -539,6 +542,6 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
 - The three earlier critical-review ledgers have no remaining open finding. Live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
 - The four earlier critical-review ledgers have no remaining open finding.
-- The new 04:42 operator-authority ledger is open; all four earlier ledgers remain closed.
+- All five critical-review ledgers have no remaining open finding.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
