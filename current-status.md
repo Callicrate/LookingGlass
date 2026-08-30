@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 00:51 ET
+Updated: 2026-08-30 00:59 ET
 
 ## Contents
 
@@ -22,7 +22,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Active review round: all four findings from `critical-reviews/20260829-221329.md` are repaired, verified on both supported CI platforms, and independently cleared.
-- Latest checkpoint: `progress/20260830-000018.md`.
+- Latest checkpoint: `progress/20260830-005857.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum, notifications, and all six BookStack books are available.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -299,6 +299,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - CR-04 is closed locally: wheel smoke exports the hash-pinned runtime graph from `uv.lock`, installs it before the wheel, installs the wheel without dependency resolution, checks compatibility, and audits the exact installed versions through a marker-aware audit lock.
 - Windows and Ubuntu/WSL end-to-end installed-wheel verification pass at 85 sdist entries, 62 wheel entries, and 30 non-code runtime assets; four focused audit-contract tests pass on each platform, and independent review found no medium-or-higher residual issue. Current Windows archive SHA-256 values are `B05FB8D45124C61A857B7B4BA1FD58E3D45117FA6683A717F02C110CC231B206` and `50B79E6D449E66D6DCB4293EB65A91D2541F0D60EA332F5FFD3B4C21A7C629F8`.
 - Dependabot now proposes weekly `uv` and GitHub Actions updates using current officially supported ecosystem keys; every update remains gated by locked audit, cross-platform tests, and installed-wheel verification.
+- Native Murmuration topic 40 records the complete critical-review remediation with exact commits, cross-platform evidence, and explicit limits; the topic was reread to verify project authorship and content.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
@@ -480,3 +481,4 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Local browser/debug data is present under `.local/` and must remain untracked.
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
 - The fresh critical-review ledger has no remaining open finding; live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
+- A new first-look review of operator recovery and long-lived local state is active; it is rebuilding claims from current docs and implementation rather than reusing the closed security/storage report outline.
