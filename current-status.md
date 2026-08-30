@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 14:21 ET
+Updated: 2026-08-30 15:23 ET
 
 ## Contents
 
@@ -17,14 +17,14 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 633 passed / 8 platform skips; Ubuntu/WSL 635 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained builds, exact distribution verification, and installed-wheel smoke pass on both.
-- Coverage: Windows 90.36% statements / 76.81% branch-only / 87.06% combined; Ubuntu/WSL 87.70% / 75.54% / 84.75%.
+- Latest checks: Windows 652 passed / 8 platform skips; Ubuntu/WSL 654 passed / 6 platform skips. Format, standard/security/performance lint and lock/audit pass; clean package verification is pending for migration `0024`.
+- Coverage: Windows 90.35% statements / 76.88% branch-only / 87.08% combined; Ubuntu/WSL 87.75% / 75.64% / 84.81%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` includes implementation commit `e668818`, which hardens process ownership, profile parsing, durable timestamp/key contracts, deadline partitioning, and receipt output after independent clearance.
+- Version control: local `main` includes `d313b53`, the independently cleared corruption-containment implementation and regression set.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-141800.md` is testing stored-row corruption containment across browser reads, projections, history, and worker recovery while preserving fail-closed identity/authority boundaries.
+- Active review round: `critical-reviews/20260830-141800.md` has closed three high availability/queue failures and four medium detail/link/state/authority failures across exact Windows/WSL behavior and independent-review gates; clean package verification remains.
 - Latest checkpoint: `progress/20260830-142109.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 12 record earlier committed closures, and post 13 records the concurrent-receipt, v1 compatibility, and browser-recovery closures with exact author/model provenance reverified.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 14:49 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and forum readiness. Topic 40 remains at post 13 because the current candidate is not yet committed.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
