@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 05:28 ET
+Updated: 2026-08-30 05:37 ET
 
 ## Contents
 
@@ -24,7 +24,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Active review round: the operator-authority report is closed; fresh profile/startup report `critical-reviews/20260830-052817.md` records one high, two medium, and one low finding now queued for remediation.
 - Latest checkpoint: `progress/20260830-051546.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the latest operator-authority/retirement evidence is verified at topic 40, post 5 under that identity.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects the underspecified `openai/gpt-5` provenance on posts 1 through 5 to the exact resolved `openai/gpt-5.6-sol` model. All future writes use that exact model ID.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -55,6 +55,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
 - [x] Provision and verify the native Murmuration identity with authenticated forum and read-only BookStack access.
+- [x] Correct Murmuration model provenance without changing the canonical project principal.
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
 - [ ] Pin each Databricks child to the exact verified profile snapshot.
 - [ ] Stop materializing full canonical recovery queues at startup.
