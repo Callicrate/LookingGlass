@@ -1,4 +1,8 @@
 import json
+import os
+import subprocess
+import sys
+import time
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +24,9 @@ _DISTRIBUTION = _load_script("rookery_verify_distribution_unit", "verify_distrib
 validate_coverage_totals = _COVERAGE.validate_coverage_totals
 locked_installed_requirements = _DISTRIBUTION.locked_installed_requirements
 publish_release_evidence = _DISTRIBUTION.publish_release_evidence
+untracked_release_sources = _DISTRIBUTION.untracked_release_sources
 validate_installed_audit = _DISTRIBUTION.validate_installed_audit
+run_owned = _DISTRIBUTION._run_owned
 
 
 def test_locked_installed_requirements_excludes_local_wheel_and_requires_exact_versions() -> None:
@@ -62,8 +68,8 @@ def test_dirty_release_verification_preserves_existing_evidence(
     monkeypatch.delenv("GITHUB_SHA", raising=False)
     monkeypatch.setattr(_DISTRIBUTION.shutil, "which", lambda _name: "C:/git.exe")
     monkeypatch.setattr(
-        _DISTRIBUTION.subprocess,
-        "run",
+        _DISTRIBUTION,
+        "_run_owned",
         lambda *_args, **_kwargs: SimpleNamespace(stdout=b" M current-status.md\n"),
     )
 
@@ -71,6 +77,181 @@ def test_dirty_release_verification_preserves_existing_evidence(
 
     after = {path.name: path.read_bytes() for path in distribution.iterdir()}
     assert after == before
+
+
+def test_untracked_package_source_is_never_release_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    generated = tmp_path / "src" / "async_api_view" / "generated.py"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("GENERATED = True\n", encoding="utf-8")
+    progress = tmp_path / "progress" / "checkpoint.md"
+    progress.parent.mkdir()
+    progress.write_text("workspace only\n", encoding="utf-8")
+    monkeypatch.setattr(
+        _DISTRIBUTION,
+        "_git_file_names",
+        lambda *_arguments: (
+            "src/async_api_view/generated.py",
+            "progress/checkpoint.md",
+        ),
+    )
+
+    assert untracked_release_sources() == ("src/async_api_view/generated.py",)
+
+
+def test_release_publication_rejects_archive_replacement_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    distribution = tmp_path / "dist"
+    distribution.mkdir()
+    source = distribution / "async_api_view-0.1.0.tar.gz"
+    wheel = distribution / "async_api_view-0.1.0-py3-none-any.whl"
+    constraints = tmp_path / "runtime-constraints.txt"
+    stale_manifest = distribution / "rookery-0.1.0-stale-SHA256SUMS.txt"
+    for path, content in (
+        (source, b"verified source"),
+        (wheel, b"verified wheel"),
+        (constraints, b"verified constraints"),
+        (stale_manifest, b"stale evidence"),
+    ):
+        path.write_bytes(content)
+    snapshots = {
+        source: source.read_bytes(),
+        wheel: wheel.read_bytes(),
+        constraints: constraints.read_bytes(),
+    }
+    before = {path.name: path.read_bytes() for path in distribution.iterdir()}
+    calls = 0
+
+    def mutate_during_git_check(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(stdout=b"")
+        wheel.write_bytes(b"unverified replacement")
+        return SimpleNamespace(stdout="f" * 40)
+
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.setattr(_DISTRIBUTION.shutil, "which", lambda _name: "C:/git.exe")
+    monkeypatch.setattr(_DISTRIBUTION, "_run_owned", mutate_during_git_check)
+
+    with pytest.raises(RuntimeError, match="changed before publication"):
+        publish_release_evidence(
+            source,
+            wheel,
+            constraints,
+            verified_bytes=snapshots,
+        )
+
+    assert {path.name: path.read_bytes() for path in distribution.iterdir()} == (
+        before | {wheel.name: b"unverified replacement"}
+    )
+
+
+def test_release_publication_creates_one_commit_qualified_verified_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    distribution = tmp_path / "dist"
+    distribution.mkdir()
+    source = distribution / "async_api_view-0.1.0.tar.gz"
+    wheel = distribution / "async_api_view-0.1.0-py3-none-any.whl"
+    constraints = tmp_path / "runtime-constraints.txt"
+    for path, content in (
+        (source, b"verified source"),
+        (wheel, b"verified wheel"),
+        (constraints, b"verified constraints"),
+    ):
+        path.write_bytes(content)
+    snapshots = {
+        source: source.read_bytes(),
+        wheel: wheel.read_bytes(),
+        constraints: constraints.read_bytes(),
+    }
+    calls = 0
+
+    def clean_git_state(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(stdout=b"" if calls == 1 else "a" * 40)
+
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.setattr(_DISTRIBUTION.shutil, "which", lambda _name: "C:/git.exe")
+    monkeypatch.setattr(_DISTRIBUTION, "_run_owned", clean_git_state)
+
+    manifest = publish_release_evidence(
+        source,
+        wheel,
+        constraints,
+        verified_bytes=snapshots,
+    )
+
+    assert manifest is not None
+    assert manifest.name == "SHA256SUMS.txt"
+    assert manifest.parent.name == f"rookery-0.1.0-{'a' * 40}-verified"
+    assert {path.name for path in manifest.parent.iterdir()} == {
+        source.name,
+        wheel.name,
+        constraints.name,
+        manifest.name,
+    }
+    assert (manifest.parent / source.name).read_bytes() == snapshots[source]
+    assert (manifest.parent / wheel.name).read_bytes() == snapshots[wheel]
+    assert (manifest.parent / constraints.name).read_bytes() == snapshots[constraints]
+
+
+def test_owned_verifier_timeout_reaps_delayed_descendant(tmp_path: Path) -> None:
+    marker = tmp_path / "orphaned-descendant.txt"
+    child = (
+        "import time; from pathlib import Path; "
+        f"time.sleep(1); Path({str(marker)!r}).write_text('orphan', encoding='utf-8')"
+    )
+    parent = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(30)"
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_owned(
+            [sys.executable, "-c", parent],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=0.2,
+        )
+    time.sleep(1.2)
+
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows suspended-process ownership regression")
+def test_windows_job_setup_failure_reaps_suspended_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "suspended-parent-ran.txt"
+
+    def fail_job_setup(_process_id: int) -> int:
+        raise OSError("injected verifier Job setup failure")
+
+    monkeypatch.setattr(_DISTRIBUTION, "_create_windows_job", fail_job_setup)
+    with pytest.raises(OSError, match="Job setup failure"):
+        run_owned(
+            [
+                sys.executable,
+                "-c",
+                f"from pathlib import Path; Path({str(marker)!r}).write_text('ran')",
+            ],
+            check=True,
+            timeout=5,
+        )
+    time.sleep(0.2)
+
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize(

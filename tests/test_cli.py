@@ -17,6 +17,19 @@ from async_api_view.local_files import ExclusiveFileLock
 from async_api_view.web import LocalCallerAuthorizer
 
 
+def isolated_serve_port(monkeypatch: pytest.MonkeyPatch) -> int:
+    listeners = cli._reserve_loopback_sockets(0, backlog=1)
+    port = int(listeners[0].getsockname()[1])
+
+    def use_reserved_listeners(requested_port: int, *, backlog: int) -> list[socket.socket]:
+        assert requested_port == port
+        assert backlog > 0
+        return listeners
+
+    monkeypatch.setattr(cli, "_reserve_loopback_sockets", use_reserved_listeners)
+    return port
+
+
 def test_init_creates_database_from_local_config(tmp_path: Path) -> None:
     config = tmp_path / "config.toml"
     config.write_text(
@@ -252,14 +265,17 @@ workspace_root = "/"
 @pytest.mark.parametrize("corruption", ["bytes", "schema"])
 def test_database_commands_fail_cleanly_on_incompatible_sqlite_state(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     command: str,
     corruption: str,
 ) -> None:
     database = tmp_path / f"{command}-{corruption}.sqlite3"
     config = tmp_path / f"{command}-{corruption}.toml"
+    port = isolated_serve_port(monkeypatch) if command == "serve" else None
     config.write_text(
-        f'[app]\ndatabase_path = "{database.as_posix()}"\n',
+        f'[app]\ndatabase_path = "{database.as_posix()}"\n'
+        + (f"port = {port}\n" if port is not None else ""),
         encoding="utf-8",
     )
     if corruption == "bytes":
@@ -287,6 +303,7 @@ def test_database_commands_fail_cleanly_on_incompatible_sqlite_state(
 @pytest.mark.parametrize("command", ["init", "run-once", "serve"])
 def test_database_commands_reject_foreign_sqlite_without_mutation_or_sidecars(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     command: str,
 ) -> None:
@@ -301,8 +318,10 @@ def test_database_commands_reject_foreign_sqlite_without_mutation_or_sidecars(
     finally:
         foreign.close()
     original = database.read_bytes()
+    port = isolated_serve_port(monkeypatch) if command == "serve" else None
     config.write_text(
-        f'[app]\ndatabase_path = "{database.as_posix()}"\n',
+        f'[app]\ndatabase_path = "{database.as_posix()}"\n'
+        + (f"port = {port}\n" if port is not None else ""),
         encoding="utf-8",
     )
     argv = ["--config", str(config), command]

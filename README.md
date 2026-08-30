@@ -66,11 +66,12 @@ Before running `--version`, doctor requires the executable bytes to match Databr
 
 This path needs the wheel, its matching `runtime-constraints.txt`, Python 3.12, `uv`, the Databricks CLI, and access to a Python package index for the constrained runtime dependencies, but no source checkout or `config.example.toml`.
 The Rookery wheel plus constraints file is not a self-contained offline bundle. In a restricted environment, pre-populate uv's cache with the complete constrained runtime graph or provide an internally reviewed wheelhouse before installing or upgrading; this repository does not currently publish an offline wheelhouse.
-Download the wheel, constraints file, and commit-qualified `rookery-*-SHA256SUMS.txt` from the same `rookery-distributions-<commit>-<os>` workflow artifact. Verify both install inputs before use:
+Open the commit-qualified `rookery-0.1.0-<commit>-verified` directory from the `rookery-distributions-<commit>-<os>` workflow artifact. Its wheel, constraints, sdist, and `SHA256SUMS.txt` are published as one atomic verified bundle. Verify both install inputs before use:
 
 ```powershell
-$manifest = '.\rookery-0.1.0-<commit>-SHA256SUMS.txt'
-foreach ($artifact in @('.\async_api_view-0.1.0-py3-none-any.whl', '.\runtime-constraints.txt')) {
+$bundle = '.\rookery-0.1.0-<commit>-verified'
+$manifest = Join-Path $bundle 'SHA256SUMS.txt'
+foreach ($artifact in @((Join-Path $bundle 'async_api_view-0.1.0-py3-none-any.whl'), (Join-Path $bundle 'runtime-constraints.txt'))) {
   $name = Split-Path -Leaf $artifact
   $line = @(Get-Content -LiteralPath $manifest | Where-Object { $_ -match "  $([regex]::Escape($name))$" })
   if ($line.Count -ne 1) { throw "Missing or duplicate checksum for $name" }
@@ -264,6 +265,8 @@ uv export --locked --no-dev --no-emit-project --no-header --format requirements.
 uv build --build-constraint build-constraints.txt --require-hashes
 uv run --no-sync python scripts/verify_distribution.py
 ```
+
+Do not run the complete Windows and WSL gates concurrently in one worktree: coverage JSON, `runtime-constraints.txt`, caches, and `dist/` are shared mutable outputs. Serialize the complete gates, or use separate native worktrees for true concurrency. When only disjoint test portions share a checkout, keep Windows on `.venv`; in WSL set `UV_PROJECT_ENVIRONMENT` to a native Linux path such as `/home/<user>/.cache/rookery-uv-env`, use separate coverage data/report names, and do not build or verify distributions concurrently. CI jobs already run on separate machines.
 
 The default test suite uses fake CLI results and does not contact Databricks.
 A live smoke test requires an explicit named profile and Workspace root.

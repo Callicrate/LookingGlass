@@ -10,11 +10,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tomllib
-from contextlib import closing
+from contextlib import closing, suppress
 from email.parser import Parser
 from email.policy import default
 from pathlib import Path, PurePosixPath
@@ -52,6 +53,218 @@ EXTERNAL_PACKAGE_FILES = {
 }
 
 
+def _create_windows_job(process_id: int) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = tuple(
+            (name, ctypes.c_ulonglong)
+            for name in (
+                "read_operations",
+                "write_operations",
+                "other_operations",
+                "read_bytes",
+                "write_bytes",
+                "other_bytes",
+            )
+        )
+
+    class BasicLimitInformation(ctypes.Structure):
+        _fields_ = (
+            ("per_process_user_time", ctypes.c_longlong),
+            ("per_job_user_time", ctypes.c_longlong),
+            ("limit_flags", wintypes.DWORD),
+            ("minimum_working_set", ctypes.c_size_t),
+            ("maximum_working_set", ctypes.c_size_t),
+            ("active_process_limit", wintypes.DWORD),
+            ("affinity", ctypes.c_size_t),
+            ("priority_class", wintypes.DWORD),
+            ("scheduling_class", wintypes.DWORD),
+        )
+
+    class ExtendedLimitInformation(ctypes.Structure):
+        _fields_ = (
+            ("basic_limit_information", BasicLimitInformation),
+            ("io_info", IoCounters),
+            ("process_memory_limit", ctypes.c_size_t),
+            ("job_memory_limit", ctypes.c_size_t),
+            ("peak_process_memory_used", ctypes.c_size_t),
+            ("peak_job_memory_used", ctypes.c_size_t),
+        )
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = (wintypes.LPVOID, wintypes.LPCWSTR)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    )
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise OSError(ctypes.get_last_error(), "could not create verifier process job")
+    try:
+        limits = ExtendedLimitInformation()
+        limits.basic_limit_information.limit_flags = 0x00002000
+        if not kernel32.SetInformationJobObject(
+            job, 9, ctypes.byref(limits), ctypes.sizeof(limits)
+        ):
+            raise OSError(ctypes.get_last_error(), "could not configure verifier process job")
+        process = kernel32.OpenProcess(0x00000101, False, process_id)
+        if not process:
+            raise OSError(ctypes.get_last_error(), "could not open verifier process")
+        try:
+            if not kernel32.AssignProcessToJobObject(job, process):
+                raise OSError(ctypes.get_last_error(), "could not own verifier process tree")
+        finally:
+            kernel32.CloseHandle(process)
+    except BaseException:
+        kernel32.CloseHandle(job)
+        raise
+    return int(job)
+
+
+def _resume_windows_process(process_id: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    class ThreadEntry32(ctypes.Structure):
+        _fields_ = (
+            ("size", wintypes.DWORD),
+            ("usage_count", wintypes.DWORD),
+            ("thread_id", wintypes.DWORD),
+            ("owner_process_id", wintypes.DWORD),
+            ("base_priority", wintypes.LONG),
+            ("priority_delta", wintypes.LONG),
+            ("flags", wintypes.DWORD),
+        )
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Thread32First.argtypes = (wintypes.HANDLE, ctypes.POINTER(ThreadEntry32))
+    kernel32.Thread32First.restype = wintypes.BOOL
+    kernel32.Thread32Next.argtypes = (wintypes.HANDLE, ctypes.POINTER(ThreadEntry32))
+    kernel32.Thread32Next.restype = wintypes.BOOL
+    kernel32.OpenThread.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenThread.restype = wintypes.HANDLE
+    kernel32.ResumeThread.argtypes = (wintypes.HANDLE,)
+    kernel32.ResumeThread.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000004, 0)
+    if snapshot == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), "could not enumerate verifier process threads")
+    resumed = 0
+    try:
+        entry = ThreadEntry32()
+        entry.size = ctypes.sizeof(entry)
+        available = kernel32.Thread32First(snapshot, ctypes.byref(entry))
+        while available:
+            if entry.owner_process_id == process_id:
+                thread = kernel32.OpenThread(0x0002, False, entry.thread_id)
+                if not thread:
+                    raise OSError(ctypes.get_last_error(), "could not open verifier process thread")
+                try:
+                    if kernel32.ResumeThread(thread) == 0xFFFFFFFF:
+                        raise OSError(ctypes.get_last_error(), "could not resume verifier process")
+                    resumed += 1
+                finally:
+                    kernel32.CloseHandle(thread)
+            available = kernel32.Thread32Next(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    if resumed == 0:
+        raise OSError("suspended verifier process had no resumable thread")
+
+
+def _terminate_owned_process(process: subprocess.Popen, windows_job: int | None) -> None:
+    if windows_job is not None:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        try:
+            if not kernel32.TerminateJobObject(windows_job, 1):
+                raise OSError(ctypes.get_last_error(), "could not terminate verifier process job")
+            if kernel32.WaitForSingleObject(windows_job, 5000) != 0:
+                raise OSError("verifier process job did not terminate within five seconds")
+        finally:
+            kernel32.CloseHandle(windows_job)
+    else:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+    if process.poll() is None:
+        process.kill()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired as exc:
+        raise OSError("verifier parent process did not terminate within five seconds") from exc
+
+
+def _run_owned(
+    arguments: list[str],
+    *,
+    check: bool = False,
+    capture_output: bool = False,
+    cwd: str | Path | None = None,
+    env: dict[str, str] | None = None,
+    text: bool = False,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess:
+    options = {"creationflags": 0x00000004} if os.name == "nt" else {"start_new_session": True}
+    process = subprocess.Popen(  # noqa: S603 - fixed structured arguments from callers
+        arguments,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        cwd=cwd,
+        env=env,
+        text=text,
+        **options,
+    )
+    windows_job: int | None = None
+    try:
+        if os.name == "nt":
+            windows_job = _create_windows_job(process.pid)
+            _resume_windows_process(process.pid)
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException:
+            _terminate_owned_process(process, windows_job)
+            windows_job = None
+            raise
+        _terminate_owned_process(process, windows_job)
+        windows_job = None
+    except BaseException:
+        if windows_job is None:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+        raise
+    finally:
+        if windows_job is not None:
+            _terminate_owned_process(process, windows_job)
+    result = subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
+    if check:
+        result.check_returncode()
+    return result
+
+
 def _unsafe_archive_path(name: str) -> bool:
     parsed = PurePosixPath(name)
     return (
@@ -63,6 +276,39 @@ def _unsafe_archive_path(name: str) -> bool:
     )
 
 
+def _git_file_names(*arguments: str) -> tuple[str, ...]:
+    executable = shutil.which("git")
+    if executable is None:
+        raise RuntimeError("git is required for exact source-distribution verification")
+    result = _run_owned(
+        [str(Path(executable).absolute()), "ls-files", "-z", *arguments],
+        check=True,
+        capture_output=True,
+        cwd=Path.cwd().resolve(),
+        timeout=30,
+    )
+    names = tuple(
+        os.fsdecode(raw_name).replace("\\", "/")
+        for raw_name in result.stdout.split(b"\0")
+        if raw_name
+    )
+    if any(_unsafe_archive_path(name) for name in names):
+        raise RuntimeError("repository contains an unsafe source path")
+    return names
+
+
+def untracked_release_sources() -> tuple[str, ...]:
+    """Reject untracked files that Hatch could otherwise promote into package authority."""
+
+    return tuple(
+        name
+        for name in _git_file_names("--others", "--exclude-standard")
+        if name not in SDIST_EXCLUDED_FILES
+        and not name.startswith(SDIST_EXCLUDED_PREFIXES)
+        and Path(*PurePosixPath(name).parts).is_file()
+    )
+
+
 def expected_runtime_assets(source_root: Path = Path("src")) -> frozenset[str]:
     package_root = source_root / "async_api_view"
     assets: set[str] = set()
@@ -70,11 +316,19 @@ def expected_runtime_assets(source_root: Path = Path("src")) -> frozenset[str]:
         source_directory = source_root / relative_directory
         if not source_directory.is_dir():
             raise RuntimeError(f"runtime asset directory is missing: {relative_directory}")
-        directory_assets = {
-            path.relative_to(source_root).as_posix()
-            for path in source_directory.rglob("*")
-            if path.is_file() and "__pycache__" not in path.parts
-        }
+        if source_root == Path("src"):
+            prefix = f"src/{relative_directory.as_posix()}/"
+            directory_assets = {
+                name.removeprefix("src/")
+                for name in _git_file_names("--cached")
+                if name.startswith(prefix) and Path(name).is_file()
+            }
+        else:
+            directory_assets = {
+                path.relative_to(source_root).as_posix()
+                for path in source_directory.rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts
+            }
         if not directory_assets:
             raise RuntimeError(f"runtime asset directory is empty: {relative_directory}")
         assets.update(directory_assets)
@@ -93,11 +347,18 @@ def expected_package_sources(source_root: Path = Path("src")) -> dict[str, Path]
     package_root = source_root / "async_api_view"
     if not package_root.is_dir():
         raise RuntimeError("runtime package source directory is unavailable")
-    sources = {
-        path.relative_to(source_root).as_posix(): path
-        for path in package_root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts
-    }
+    if source_root == Path("src"):
+        sources = {
+            name.removeprefix("src/"): Path(name)
+            for name in _git_file_names("--cached")
+            if name.startswith("src/async_api_view/") and Path(name).is_file()
+        }
+    else:
+        sources = {
+            path.relative_to(source_root).as_posix(): path
+            for path in package_root.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        }
     for archive_name, source_path in EXTERNAL_PACKAGE_FILES.items():
         if not source_path.is_file():
             raise RuntimeError(f"external package source is missing: {source_path}")
@@ -262,30 +523,8 @@ def _verify_archive_versions(source_archive: Path, wheel_archive: Path) -> None:
 def expected_sdist_files() -> frozenset[str]:
     """Return the intended tracked/unignored source manifest after explicit exclusions."""
 
-    executable = shutil.which("git")
-    if executable is None:
-        raise RuntimeError("git is required for exact source-distribution verification")
-    result = subprocess.run(  # noqa: S603 - absolute git and fixed read-only arguments
-        [
-            str(Path(executable).absolute()),
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ],
-        check=True,
-        capture_output=True,
-        cwd=Path.cwd().resolve(),
-        timeout=30,
-    )
     files: set[str] = set()
-    for raw_name in result.stdout.split(b"\0"):
-        if not raw_name:
-            continue
-        name = os.fsdecode(raw_name).replace("\\", "/")
-        if _unsafe_archive_path(name):
-            raise RuntimeError(f"repository contains an unsafe source path: {name}")
+    for name in _git_file_names("--cached"):
         if name in SDIST_EXCLUDED_FILES or name.startswith(SDIST_EXCLUDED_PREFIXES):
             continue
         if Path(*PurePosixPath(name).parts).is_file():
@@ -422,7 +661,7 @@ def smoke_pinned_cli_environment(
     """Exercise documented hash-verified private-environment install and upgrade."""
 
     def create_environment(environment: Path) -> Path:
-        subprocess.run(  # noqa: S603 - absolute uv and fixed private environment
+        _run_owned(
             [
                 str(uv),
                 "venv",
@@ -440,7 +679,7 @@ def smoke_pinned_cli_environment(
             timeout=30,
         )
         python = _venv_python(environment)
-        subprocess.run(  # noqa: S603 - absolute uv, exact hashes, and private interpreter
+        _run_owned(
             [
                 str(uv),
                 "pip",
@@ -459,7 +698,7 @@ def smoke_pinned_cli_environment(
             text=True,
             timeout=180,
         )
-        subprocess.run(  # noqa: S603 - absolute uv and verified local wheel
+        _run_owned(
             [
                 str(uv),
                 "pip",
@@ -480,7 +719,7 @@ def smoke_pinned_cli_environment(
 
     def verify_environment(environment: Path) -> None:
         python = _venv_python(environment)
-        version = subprocess.run(  # noqa: S603 - interpreter in disposable tool environment
+        version = _run_owned(
             [
                 str(python),
                 "-c",
@@ -495,7 +734,7 @@ def smoke_pinned_cli_environment(
         ).stdout.strip()
         if version != "3.12":
             raise RuntimeError(f"documented private environment used Python {version}")
-        freeze_result = subprocess.run(  # noqa: S603 - verified disposable tool interpreter
+        freeze_result = _run_owned(
             [str(uv), "pip", "freeze", "--python", str(python)],
             check=True,
             capture_output=True,
@@ -510,7 +749,7 @@ def smoke_pinned_cli_environment(
                 "documented private install diverged from the locked runtime graph: "
                 f"expected={expected_requirements}, installed={installed_requirements}"
             )
-        subprocess.run(  # noqa: S603 - disposable documented tool entry point
+        _run_owned(
             [str(_venv_cli(environment)), "--help"],
             check=True,
             capture_output=True,
@@ -539,7 +778,7 @@ def smoke_pinned_cli_environment(
         newline="\n",
     )
     corrupt_environment = Path(temporary) / "corrupt-venv"
-    subprocess.run(  # noqa: S603 - absolute uv and fixed private environment
+    _run_owned(
         [str(uv), "venv", "--quiet", "--python", "3.12", str(corrupt_environment)],
         check=True,
         capture_output=True,
@@ -548,7 +787,7 @@ def smoke_pinned_cli_environment(
         text=True,
         timeout=30,
     )
-    rejected = subprocess.run(  # noqa: S603 - deliberate hash-failure probe
+    rejected = _run_owned(
         [
             str(uv),
             "pip",
@@ -593,7 +832,7 @@ def smoke_pinned_cli_environment(
             "Root-Is-Purelib: true\nTag: py3-none-any\n",
         )
         wheel.writestr(f"{metadata_root}/RECORD", records)
-    subprocess.run(  # noqa: S603 - synthetic local wheel in disposable environment
+    _run_owned(
         [
             str(uv),
             "pip",
@@ -610,7 +849,7 @@ def smoke_pinned_cli_environment(
         text=True,
         timeout=30,
     )
-    subprocess.run(  # noqa: S603 - disposable interpreter and startup-hook probe
+    _run_owned(
         [str(_venv_python(environment)), "-c", "pass"],
         check=True,
         cwd=temporary,
@@ -628,7 +867,7 @@ def smoke_pinned_cli_environment(
     environment.rename(previous_environment)
     next_environment.rename(environment)
     verify_environment(environment)
-    subprocess.run(  # noqa: S603 - relocated disposable interpreter
+    _run_owned(
         [str(_venv_python(environment)), "-c", "pass"],
         check=True,
         cwd=temporary,
@@ -657,7 +896,7 @@ def smoke_installed_wheel(
         }
         process_environment["PYTHONNOUSERSITE"] = "1"
         uv = _uv_executable()
-        subprocess.run(  # noqa: S603 - absolute uv from the verified build environment
+        _run_owned(
             [
                 str(uv),
                 "export",
@@ -683,7 +922,7 @@ def smoke_installed_wheel(
         tracked_constraints = project_root / "runtime-constraints.txt"
         if runtime_constraints.read_bytes() != tracked_constraints.read_bytes():
             raise RuntimeError("tracked runtime constraints do not match uv.lock")
-        subprocess.run(  # noqa: S603 - absolute uv from the verified build environment
+        _run_owned(
             [
                 str(uv),
                 "venv",
@@ -698,7 +937,7 @@ def smoke_installed_wheel(
             timeout=30,
         )
         python = _venv_python(environment)
-        subprocess.run(  # noqa: S603 - verified absolute uv and private venv interpreter
+        _run_owned(
             [
                 str(uv),
                 "pip",
@@ -715,7 +954,7 @@ def smoke_installed_wheel(
             env=process_environment,
             timeout=180,
         )
-        subprocess.run(  # noqa: S603 - verified absolute uv and private venv interpreter
+        _run_owned(
             [
                 str(uv),
                 "pip",
@@ -731,7 +970,7 @@ def smoke_installed_wheel(
             env=process_environment,
             timeout=180,
         )
-        subprocess.run(  # noqa: S603 - verified absolute uv and private venv interpreter
+        _run_owned(
             [str(uv), "pip", "check", "--python", str(python)],
             check=True,
             capture_output=True,
@@ -740,7 +979,7 @@ def smoke_installed_wheel(
             text=True,
             timeout=30,
         )
-        freeze_result = subprocess.run(  # noqa: S603 - verified absolute uv and interpreter
+        freeze_result = _run_owned(
             [str(uv), "pip", "freeze", "--python", str(python)],
             check=True,
             capture_output=True,
@@ -768,7 +1007,7 @@ def smoke_installed_wheel(
             f"dependencies = {json.dumps(installed_requirements)}\n",
             encoding="utf-8",
         )
-        audit_result = subprocess.run(  # noqa: S603 - absolute uv from verified environment
+        audit_result = _run_owned(
             [
                 str(uv),
                 "audit",
@@ -826,7 +1065,7 @@ def smoke_installed_wheel(
             "if not root.joinpath(*asset.split('/')).is_file()]; "
             "assert not missing, missing"
         )
-        subprocess.run(  # noqa: S603 - absolute interpreter in the private test venv
+        _run_owned(
             [str(python), "-c", smoke],
             check=True,
             cwd=temporary,
@@ -834,7 +1073,7 @@ def smoke_installed_wheel(
             timeout=30,
         )
         cli = _venv_cli(environment)
-        help_result = subprocess.run(  # noqa: S603 - local wheel's absolute entry point
+        help_result = _run_owned(
             [str(cli), "--help"],
             check=True,
             capture_output=True,
@@ -868,7 +1107,7 @@ def smoke_installed_wheel(
             (str(cli), "init-config", "--output", str(config)),
             (str(cli), "export-docs", "--output", str(architecture)),
         ):
-            subprocess.run(  # noqa: S603 - local wheel's absolute entry point
+            _run_owned(
                 command,
                 check=True,
                 capture_output=True,
@@ -877,7 +1116,7 @@ def smoke_installed_wheel(
                 text=True,
                 timeout=30,
             )
-        rejected = subprocess.run(  # noqa: S603 - installed wheel entry point, fixed command
+        rejected = _run_owned(
             [str(cli), "--config", str(config), "init"],
             check=False,
             capture_output=True,
@@ -898,7 +1137,7 @@ def smoke_installed_wheel(
             encoding="utf-8",
             newline="\n",
         )
-        subprocess.run(  # noqa: S603 - installed wheel entry point, fixed command
+        _run_owned(
             [str(cli), "--config", str(config), "init"],
             check=True,
             capture_output=True,
@@ -984,7 +1223,7 @@ def verify_sdist_rebuild(source_archive: Path, wheel_archive: Path) -> None:
     process_environment["PYTHONNOUSERSITE"] = "1"
     with TemporaryDirectory(prefix="rookery-sdist-rebuild-") as temporary:
         output = Path(temporary) / "dist"
-        subprocess.run(  # noqa: S603 - absolute uv and fixed build arguments
+        _run_owned(
             [
                 str(_uv_executable()),
                 "build",
@@ -1013,6 +1252,8 @@ def publish_release_evidence(
     source_archive: Path,
     wheel_archive: Path,
     runtime_constraints: Path,
+    *,
+    verified_bytes: dict[Path, bytes] | None = None,
 ) -> Path | None:
     """Publish exact constraints and a commit-bound checksum manifest for a clean checkout."""
 
@@ -1020,7 +1261,7 @@ def publish_release_evidence(
     if executable is None:
         raise RuntimeError("git is required for release provenance verification")
     git = str(Path(executable).absolute())
-    status = subprocess.run(  # noqa: S603 - absolute git and fixed read-only arguments
+    status = _run_owned(
         [git, "status", "--porcelain", "--untracked-files=all"],
         check=True,
         capture_output=True,
@@ -1031,7 +1272,7 @@ def publish_release_evidence(
         if os.environ.get("GITHUB_SHA"):
             raise RuntimeError("CI release verification requires a clean tracked checkout")
         return None
-    commit = subprocess.run(  # noqa: S603 - absolute git and fixed read-only arguments
+    commit = _run_owned(
         [git, "rev-parse", "HEAD"],
         check=True,
         capture_output=True,
@@ -1046,52 +1287,106 @@ def publish_release_evidence(
         )
     distribution_dir = source_archive.parent
     published_constraints = distribution_dir / "runtime-constraints.txt"
-    published_constraints.write_bytes(runtime_constraints.read_bytes())
+    snapshots = verified_bytes or {
+        source_archive: source_archive.read_bytes(),
+        wheel_archive: wheel_archive.read_bytes(),
+        runtime_constraints: runtime_constraints.read_bytes(),
+    }
+    for artifact in (source_archive, wheel_archive, runtime_constraints):
+        if artifact.read_bytes() != snapshots[artifact]:
+            raise RuntimeError("verified release artifact changed before publication")
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
-    manifest = distribution_dir / f"rookery-{project['version']}-{commit}-SHA256SUMS.txt"
-    artifacts = (source_archive, wheel_archive, published_constraints)
+    bundle = distribution_dir / f"rookery-{project['version']}-{commit}-verified"
+    manifest_name = "SHA256SUMS.txt"
+    artifact_names = (source_archive.name, wheel_archive.name, published_constraints.name)
+    artifact_bytes = (
+        snapshots[source_archive],
+        snapshots[wheel_archive],
+        snapshots[runtime_constraints],
+    )
     lines = [
         f"# project={project['name']}",
         f"# version={project['version']}",
         f"# commit={commit}",
     ]
     lines.extend(
-        f"{hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact.name}"
-        for artifact in artifacts
+        f"{hashlib.sha256(content).hexdigest()}  {name}"
+        for name, content in zip(artifact_names, artifact_bytes, strict=True)
     )
-    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    with TemporaryDirectory(prefix=".rookery-evidence-", dir=distribution_dir) as temporary:
+        temporary_bundle = Path(temporary) / "bundle"
+        temporary_bundle.mkdir()
+        temporary_source = temporary_bundle / source_archive.name
+        temporary_wheel = temporary_bundle / wheel_archive.name
+        temporary_constraints = temporary_bundle / published_constraints.name
+        temporary_manifest = temporary_bundle / manifest_name
+        temporary_source.write_bytes(artifact_bytes[0])
+        temporary_wheel.write_bytes(artifact_bytes[1])
+        temporary_constraints.write_bytes(artifact_bytes[2])
+        temporary_manifest.write_text(
+            "\n".join(lines) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        if bundle.exists():
+            expected = {
+                path.name: path.read_bytes()
+                for path in temporary_bundle.iterdir()
+                if path.is_file()
+            }
+            actual = {path.name: path.read_bytes() for path in bundle.iterdir() if path.is_file()}
+            if actual != expected:
+                raise RuntimeError("existing verified release bundle does not match current bytes")
+        else:
+            temporary_bundle.replace(bundle)
+    published_constraints.write_bytes(artifact_bytes[2])
     for stale in distribution_dir.glob("rookery-*-SHA256SUMS.txt"):
-        if stale != manifest:
-            stale.unlink()
-    return manifest
+        stale.unlink()
+    return bundle / manifest_name
 
 
 def main() -> None:
+    untracked = untracked_release_sources()
+    if untracked:
+        raise RuntimeError(f"untracked release source is not allowed: {list(untracked)}")
     distribution_dir = Path("dist")
     source_archive = _single_archive(distribution_dir, "*.tar.gz", "source")
     wheel_archive = _single_archive(distribution_dir, "*.whl", "wheel")
-    _verify_archive_versions(source_archive, wheel_archive)
-    with open_tar(source_archive) as archive:
-        source_names = archive.getnames()
-    leaked = forbidden_source_entries(source_names)
-    if leaked:
-        raise RuntimeError(f"source distribution contains workspace-only files: {leaked}")
-    verify_sdist_source_files(source_archive, wheel_archive)
-    expected_assets = expected_runtime_assets()
-    expected_sources = expected_package_sources()
-    wheel_entry_count = verify_wheel_runtime_assets(wheel_archive, expected_assets)
-    verify_wheel_package_files(wheel_archive, expected_sources)
-    verify_wheel_metadata(wheel_archive)
-    verify_wheel_record(wheel_archive)
-    verify_sdist_rebuild(source_archive, wheel_archive)
-    smoke_installed_wheel(wheel_archive, expected_assets)
-    manifest = publish_release_evidence(
-        source_archive,
-        wheel_archive,
-        Path("runtime-constraints.txt"),
-    )
+    runtime_constraints = Path("runtime-constraints.txt")
+    verified_bytes = {
+        source_archive: source_archive.read_bytes(),
+        wheel_archive: wheel_archive.read_bytes(),
+        runtime_constraints: runtime_constraints.read_bytes(),
+    }
+    with TemporaryDirectory(prefix="rookery-verify-snapshot-") as temporary:
+        snapshot_root = Path(temporary)
+        snapshot_source = snapshot_root / source_archive.name
+        snapshot_wheel = snapshot_root / wheel_archive.name
+        snapshot_source.write_bytes(verified_bytes[source_archive])
+        snapshot_wheel.write_bytes(verified_bytes[wheel_archive])
+        _verify_archive_versions(snapshot_source, snapshot_wheel)
+        with open_tar(snapshot_source) as archive:
+            source_names = archive.getnames()
+        leaked = forbidden_source_entries(source_names)
+        if leaked:
+            raise RuntimeError(f"source distribution contains workspace-only files: {leaked}")
+        verify_sdist_source_files(snapshot_source, snapshot_wheel)
+        expected_assets = expected_runtime_assets()
+        expected_sources = expected_package_sources()
+        wheel_entry_count = verify_wheel_runtime_assets(snapshot_wheel, expected_assets)
+        verify_wheel_package_files(snapshot_wheel, expected_sources)
+        verify_wheel_metadata(snapshot_wheel)
+        verify_wheel_record(snapshot_wheel)
+        verify_sdist_rebuild(snapshot_source, snapshot_wheel)
+        smoke_installed_wheel(snapshot_wheel, expected_assets)
+        manifest = publish_release_evidence(
+            source_archive,
+            wheel_archive,
+            runtime_constraints,
+            verified_bytes=verified_bytes,
+        )
     manifest_summary = (
-        f"; manifest {manifest.name}"
+        f"; manifest {manifest.relative_to(Path.cwd())}"
         if manifest is not None
         else "; manifest deferred until clean commit"
     )
