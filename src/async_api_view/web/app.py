@@ -382,7 +382,7 @@ def create_app(
         cookie_token = request.cookies.get(SESSION_COOKIE)
         session = app.state.local_authorizer.authenticate(cookie_token)
         if session is None:
-            if request.method in {"GET", "HEAD"}:
+            if not request.url.path.startswith("/api/"):
                 content = templates.get_template("bootstrap.html").render(
                     error=(
                         "Browser access is no longer valid. Restart Rookery to issue a new link."

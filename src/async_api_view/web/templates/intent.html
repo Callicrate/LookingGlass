@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
 </head>
-<body data-intent-page data-poll-url="/api/intents/{{ view.intent_id|display }}">
+<body data-intent-page data-intent-terminal="{{ 'true' if view.terminal else 'false' }}" data-poll-url="/api/intents/{{ view.intent_id|display }}">
   <a class="skip-link" href="#main">Skip to intent status</a>
   <header class="topbar">
     <div><p class="eyebrow">Refresh receipt</p><h1>Intent <code data-intent-id>{{ view.intent_id|display }}</code></h1></div>
@@ -18,7 +18,7 @@
   <main id="main">
     <section class="intent-summary" aria-labelledby="summary-heading">
       <div><p class="eyebrow">Requested</p><h2 id="summary-heading" data-requested-at>{{ view.requested_at|timestamp }}</h2></div>
-    <div class="poll-state" role="status" aria-live="polite"><span class="pulse" aria-hidden="true"></span><span data-poll-state>{% if view.terminal %}Final state{% else %}Loading latest status · cached receipt shown{% endif %}</span></div>
+    <div class="poll-state" role="status" aria-live="polite"><span class="pulse{% if view.terminal %} pulse--final{% endif %}" aria-hidden="true"></span><span data-poll-state>{% if view.terminal %}Final state{% else %}Loading latest status · cached receipt shown{% endif %}</span></div>
     </section>
     <div class="notice notice--error{% if not view.error %} is-hidden{% endif %}" role="alert" data-intent-error>{{ view.error|display }}</div>
     <section aria-labelledby="scope-heading">

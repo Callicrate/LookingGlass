@@ -248,6 +248,9 @@ def test_local_access_denies_every_protected_surface_before_backend_work() -> No
 
     assert all(response.status_code == 403 for response in responses)
     assert "Unlock this browser" in responses[0].text
+    assert responses[6].headers["content-type"].startswith("application/json")
+    assert responses[7].headers["content-type"].startswith("text/html")
+    assert "Unlock this browser" in responses[7].text
     assert "Data workspace" not in responses[0].text
     assert 'name="csrf_token"' not in responses[0].text
     assert backend.dashboard_queries == []
@@ -425,6 +428,32 @@ def test_expired_browser_session_is_denied_and_cookie_is_cleared() -> None:
     assert "Max-Age=0" in denied.headers["set-cookie"]
     assert denied_mutation.status_code == 403
     assert backend.dashboard_queries == []
+    assert backend.submitted == []
+
+
+def test_expired_browser_post_renders_recovery_shell() -> None:
+    now = [0.0]
+    authorizer = LocalCallerAuthorizer(
+        clock=lambda: now[0],
+        session_idle_ttl_seconds=1,
+        session_absolute_ttl_seconds=10,
+    )
+    backend = FakeBackend(dashboard_view=ready_dashboard())
+    app = create_app(
+        backend,
+        allowed_hosts=("testserver",),
+        authorizer=authorizer,
+    )
+    client = authenticated_client(app)
+    now[0] = 2.0
+
+    denied = client.post("/refresh")
+
+    assert denied.status_code == 403
+    assert denied.headers["content-type"].startswith("text/html")
+    assert "Unlock this browser" in denied.text
+    assert "Restart Rookery" in denied.text
+    assert "Max-Age=0" in denied.headers["set-cookie"]
     assert backend.submitted == []
 
 
@@ -1646,10 +1675,35 @@ def test_first_party_script_avoids_dangerous_dom_sinks() -> None:
     assert "textContent" in script
     assert "element.textContent !== resolved" in script
     assert "response.status === 403" in script
+    assert "response.status === 404" in script
+    assert "response.status >= 500" in script
     assert "window.location.reload()" in script
     assert 'setPollState("Final state", "final")' in script
+    assert 'page.dataset.intentTerminal === "true"' in script
     assert '"disconnected",' in script
+    assert '"unavailable",' in script
+    assert "Status unavailable · retrying" in script
     style = script_path.with_name("style.css").read_text(encoding="utf-8")
-    assert ".pulse:not(.pulse--disconnected):not(.pulse--final)" in style
+    assert ".pulse--unavailable" in style
+    assert ".pulse:not(.pulse--disconnected):not(.pulse--unavailable):not(.pulse--final)" in style
     for sink in ("innerHTML", "outerHTML", "document.write", "eval(", "new Function"):
         assert sink not in script
+
+
+def test_terminal_intent_page_is_final_before_javascript_runs() -> None:
+    terminal = IntentView(
+        intent_id="terminal-intent",
+        requested_at=NOW,
+        updated_at=NOW,
+        terminal=True,
+        scopes=(IntentScopeView(label="Done", state="succeeded"),),
+    )
+
+    response = client_for(FakeBackend(intent_view=terminal, intent_id="terminal-intent")).get(
+        "/intents/terminal-intent"
+    )
+
+    assert response.status_code == 200
+    assert 'data-intent-terminal="true"' in response.text
+    assert 'class="pulse pulse--final"' in response.text
+    assert "Final state" in response.text

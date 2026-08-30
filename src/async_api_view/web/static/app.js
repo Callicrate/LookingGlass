@@ -31,7 +31,15 @@
     setText(pollState, text);
     if (!pulse) return;
     pulse.classList.toggle("pulse--disconnected", state === "disconnected");
+    pulse.classList.toggle("pulse--unavailable", state === "unavailable");
     pulse.classList.toggle("pulse--final", state === "final");
+  };
+
+  const scheduleRetry = (text, state) => {
+    failures += 1;
+    setPollState(text, state);
+    const delay = Math.min(15000, 3000 * (2 ** Math.min(failures, 2)));
+    timer = window.setTimeout(poll, delay);
   };
 
   const updateScope = (scope, index) => {
@@ -59,8 +67,15 @@
         cache: "no-store",
         credentials: "same-origin",
       });
-      if (response.status === 403) {
+      if (response.status === 403 || response.status === 404) {
         window.location.reload();
+        return;
+      }
+      if (response.status >= 500) {
+        scheduleRetry(
+          "Status unavailable · retrying while cached status stays visible",
+          "unavailable",
+        );
         return;
       }
       if (!response.ok) throw new Error("status unavailable");
@@ -77,18 +92,19 @@
       setPollState("Status current · checking every 3 seconds");
       timer = window.setTimeout(poll, 3000);
     } catch (_error) {
-      failures += 1;
-      setPollState(
+      scheduleRetry(
         "Disconnected · retrying while cached status stays visible",
         "disconnected",
       );
-      const delay = Math.min(15000, 3000 * (2 ** Math.min(failures, 2)));
-      timer = window.setTimeout(poll, delay);
     }
   };
 
   window.addEventListener("pagehide", () => {
     if (timer !== null) window.clearTimeout(timer);
   });
+  if (page.dataset.intentTerminal === "true") {
+    setPollState("Final state", "final");
+    return;
+  }
   timer = window.setTimeout(poll, 1000);
 })();
