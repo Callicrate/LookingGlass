@@ -72,7 +72,7 @@ Set-Location -LiteralPath '.\rookery'
 async-api-view init-config --output '.\rookery.toml'
 ```
 
-Edit `rookery.toml`: replace `YOUR_PROFILE`, choose a stable workspace `id` and display `name`, and narrow `workspace_root` if `/` is broader than intended. Then initialize and verify compatibility:
+Edit `rookery.toml`: replace `YOUR_PROFILE`, run `async-api-view fingerprint-profile --profile 'YOUR_PROFILE'`, replace the all-zero `authority_fingerprint` with its output, choose a stable workspace `id` and display `name`, and narrow `workspace_root` if `/` is broader than intended. The zero sentinel is rejected before database creation. Then initialize and verify compatibility:
 
 ```powershell
 async-api-view --config '.\rookery.toml' init
@@ -98,6 +98,7 @@ The file stores only the profile name, SHA-256 authority fingerprint, and config
 Keep each `databricks.id` and `authority_fingerprint` stable when renaming a display name or changing to another profile for the same verified workspace. Rotate credentials inside the same named profile normally.
 Legacy entries without `id` remain supported, but adding an explicit ID/fingerprint creates a new verified authority rather than silently blessing legacy cache whose remote host was never recorded.
 Removing an entry disables its refresh authority but preserves cached facts; changing `authority_fingerprint` or `workspace_root` creates a new authority boundary and pauses the predecessor. Returning to the prior fingerprint/root re-enables that authority's original cache.
+Removal also terminalizes pre-running work so change-back cannot revive old requests. Use `authority-retire` when an authority must remain readable but must not reactivate automatically; `authority-unretire` is explicit and does not itself enable the authority.
 
 ```powershell
 uv sync --locked --group dev
@@ -119,7 +120,7 @@ Open that complete link, including its `#` fragment, within ten minutes.
 The browser removes the fragment before exchanging it, so the capability does not enter HTTP request targets, redirects, or access logs.
 The link uses a process-unique, high-entropy `rookery-….localhost` hostname.
 Before printing that link, Rookery reserves and listens on both `127.0.0.1` and `::1` at the configured port; startup fails without disclosing the capability if either loopback address is unavailable.
-It also acquires one private database-scoped serve lock before applying desired configuration. A second `serve`, including one configured on another port, fails without rotating profiles or disabling resources used by the running instance.
+It also acquires one private database-scoped runtime lock before applying desired configuration. `init`, `run-once`, and `serve` share that ownership boundary, so no second stateful runner can rotate profiles, disable resources, or compete for leases while another owns the database. Online `backup` remains available.
 The configured bind host remains restricted to `127.0.0.1` or `localhost` for compatibility, but it cannot weaken this dual-stack reservation.
 The resulting session cookie is scoped to that unique host, process-local, `HttpOnly`, and `SameSite=Strict`, so ordinary `127.0.0.1` and `localhost` services do not receive it.
 If the link expires, was already used by another browser profile, or the browser session is lost, restart `serve` to rotate it.
@@ -151,6 +152,9 @@ List results record positive child evidence and an explicit `unknown` collection
 | `async-api-view init-config --output <path>` | Create a no-overwrite starter TOML without loading configuration or opening SQLite. |
 | `async-api-view export-docs --output <path>` | Export the packaged architecture and safety contract without loading configuration or opening SQLite. |
 | `async-api-view fingerprint-profile --profile <name>` | Print the non-secret SHA-256 workspace-host authority fingerprint for a standard CLI profile. |
+| `async-api-view authority-list` | List enabled, historical, and retired local authority identities without credentials. |
+| `async-api-view authority-retire --system-id <uuid>` | Retire one authority, cancel its pending work, and preserve its cache. |
+| `async-api-view authority-unretire --system-id <uuid>` | Remove retirement; run `init` afterward to re-enable if still configured. |
 | `async-api-view init` | Apply SQLite migrations and idempotently register configured systems/scopes. |
 | `async-api-view doctor` | Verify the existing Databricks CLI compatibility surface. |
 | `async-api-view run-once [--max-cycles N]` | Process up to `N` eligible coordinator/worker cycles; exit 3 means work may remain and the command should be rerun. |

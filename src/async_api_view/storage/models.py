@@ -33,6 +33,18 @@ class SystemRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthorityRecord:
+    system_id: str
+    display_name: str
+    enabled: bool
+    retired: bool
+    config_id: str | None
+    workspace_root: str | None
+    authority_fingerprint: str | None
+    last_activity_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class ConfiguredScopeRecord:
     scope_id: str
     system_id: str

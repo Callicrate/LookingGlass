@@ -22,6 +22,7 @@
       </div>
       <dl class="facts facts--wide">
         <div><dt>Action</dt><dd><code>{{ view.action.action_id|display }}</code></dd></div>
+        <div><dt>Local system ID</dt><dd><code>{{ view.action.system_id|display }}</code></dd></div>
         <div><dt>Target</dt><dd>{{ view.action.target_kind|display|replace('_', ' ') }} · <code>{{ view.action.target_id|display }}</code></dd></div>
         <div><dt>Created</dt><dd><time>{{ view.action.created_at|timestamp }}</time></dd></div>
         <div><dt>Started</dt><dd><time>{{ view.action.started_at|timestamp }}</time></dd></div>

@@ -594,6 +594,9 @@ def smoke_installed_wheel(
                 "init-config",
                 "export-docs",
                 "fingerprint-profile",
+                "authority-list",
+                "authority-retire",
+                "authority-unretire",
                 "doctor",
                 "backup",
                 "serve",
@@ -605,7 +608,6 @@ def smoke_installed_wheel(
         for command in (
             (str(cli), "init-config", "--output", str(config)),
             (str(cli), "export-docs", "--output", str(architecture)),
-            (str(cli), "--config", str(config), "init"),
         ):
             subprocess.run(  # noqa: S603 - local wheel's absolute entry point
                 command,
@@ -616,10 +618,40 @@ def smoke_installed_wheel(
                 text=True,
                 timeout=30,
             )
+        rejected = subprocess.run(  # noqa: S603 - installed wheel entry point, fixed command
+            [str(cli), "--config", str(config), "init"],
+            check=False,
+            capture_output=True,
+            cwd=temporary,
+            env=process_environment,
+            text=True,
+            timeout=30,
+        )
+        database = Path(temporary) / ".local" / "rookery.sqlite3"
+        if (
+            rejected.returncode != 2
+            or database.exists()
+            or "fingerprint-profile" not in (rejected.stdout + rejected.stderr)
+        ):
+            raise RuntimeError("installed CLI accepted the placeholder authority fingerprint")
+        config.write_text(
+            config.read_text(encoding="utf-8").replace("0" * 64, "1" * 64),
+            encoding="utf-8",
+            newline="\n",
+        )
+        subprocess.run(  # noqa: S603 - installed wheel entry point, fixed command
+            [str(cli), "--config", str(config), "init"],
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=process_environment,
+            text=True,
+            timeout=30,
+        )
         if (
             not config.is_file()
             or architecture.read_bytes() != (project_root / "docs" / "architecture.md").read_bytes()
-            or not (Path(temporary) / ".local" / "rookery.sqlite3").is_file()
+            or not database.is_file()
         ):
             raise RuntimeError("installed CLI could not complete checkout-free initialization")
 

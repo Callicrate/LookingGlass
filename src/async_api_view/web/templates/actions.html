@@ -48,7 +48,7 @@
         {% for action in view.actions %}
         <article class="activity-row" id="action-{{ action.action_id|display }}">
           <div class="scope-title">
-            <div><strong><a href="/actions/{{ action.action_id|display }}?return={{ return_param }}">{{ action.capability_key|display }}</a></strong><span class="subtle">{{ action.system_name|display }}</span></div>
+            <div><strong><a href="/actions/{{ action.action_id|display }}?return={{ return_param }}">{{ action.capability_key|display }}</a></strong><span class="subtle">{{ action.system_name|display }}</span><code class="subtle">System {{ action.system_id|display }}</code></div>
             <span class="badge badge--{{ action.state|display }}">{{ action.state|display|replace('_', ' ') }}</span>
           </div>
           <dl class="facts facts--wide">

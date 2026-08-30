@@ -34,7 +34,7 @@
           <span class="badge badge--{{ alert.severity|display }}">{{ alert.severity|display }}</span>
           <div>
             <strong>{{ alert.event_type|display }}</strong>
-            <span class="subtle">{{ alert.system_name|display }} · <time>{{ alert.occurred_at|timestamp }}</time>{% if alert.error_class %} · {{ alert.error_class|display }}{% endif %}</span>
+            <span class="subtle">{{ alert.system_name|display }}{% if alert.system_id %} · system <code>{{ alert.system_id|display }}</code>{% endif %} · <time>{{ alert.occurred_at|timestamp }}</time>{% if alert.error_class %} · {{ alert.error_class|display }}{% endif %}</span>
             <span>{{ alert.summary|display }}</span>
             {% if alert.action_id %}<a href="/actions/{{ alert.action_id|display }}">View action →</a>{% endif %}
           </div>

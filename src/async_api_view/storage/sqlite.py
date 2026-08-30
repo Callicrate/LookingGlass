@@ -91,6 +91,7 @@ from async_api_view.local_files import (
 from .models import (
     ActionActivityRecord,
     ActionAttemptRecord,
+    AuthorityRecord,
     ConfiguredScopeRecord,
     FacetActionStatusRecord,
     FacetEvidenceRecord,
@@ -874,7 +875,20 @@ class SQLiteStore:
                 self._migrate()
                 self._repair_required_runtime_indexes()
                 self._validate_current_schema()
-                self._quarantine_invalid_queue_timing(connection, now=_now())
+                recovery_now = _now()
+                self._quarantine_invalid_queue_timing(connection, now=recovery_now)
+                disabled_systems = tuple(
+                    row["system_id"]
+                    for row in connection.execute(
+                        "SELECT system_id FROM systems WHERE enabled = 0"
+                    ).fetchall()
+                )
+                self._cancel_authority_work(
+                    connection,
+                    system_ids=disabled_systems,
+                    now_text=_utc_text(recovery_now),
+                    reason="authority_legacy_disabled",
+                )
                 connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
                 self._harden_storage_files()
             self._enable_wal_mode()
@@ -1324,6 +1338,196 @@ class SQLiteStore:
             ).fetchone()
         return row["system_id"] if row is not None else None
 
+    def get_configured_identity_for_system(self, system_id: str) -> tuple[str, str] | None:
+        """Return the non-secret config ID and authority key for one local system."""
+
+        system_id = require_uuid(system_id, "system_id")
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT config_id, authority_key FROM configured_system_identities
+                WHERE system_id = ?
+                """,
+                (system_id,),
+            ).fetchone()
+        return (row["config_id"], row["authority_key"]) if row is not None else None
+
+    def is_system_authority_retired(self, system_id: str) -> bool:
+        system_id = require_uuid(system_id, "system_id")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM retired_system_authorities WHERE system_id = ?",
+                (system_id,),
+            ).fetchone()
+        return row is not None
+
+    def list_authorities(self) -> tuple[AuthorityRecord, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT system.system_id, system.display_name, system.enabled,
+                       retired.system_id IS NOT NULL AS retired,
+                       identity.config_id,
+                       json_extract(binding.non_secret_settings_json, '$.workspace_root')
+                           AS workspace_root,
+                       json_extract(binding.non_secret_settings_json, '$.authority_fingerprint')
+                           AS authority_fingerprint,
+                       (
+                           SELECT MAX(
+                               COALESCE(action.completed_at, action.started_at,
+                                        action.record_created_at)
+                           )
+                           FROM adapter_actions AS action
+                           WHERE action.system_id = system.system_id
+                       ) AS last_activity_at
+                FROM systems AS system
+                LEFT JOIN retired_system_authorities AS retired
+                    ON retired.system_id = system.system_id
+                LEFT JOIN configured_system_identities AS identity
+                    ON identity.system_id = system.system_id
+                LEFT JOIN connection_bindings AS binding
+                    ON binding.system_id = system.system_id
+                WHERE system.system_kind = 'databricks.workspace'
+                ORDER BY system.enabled DESC, system.display_name, system.system_id
+                """
+            ).fetchall()
+        return tuple(
+            AuthorityRecord(
+                system_id=row["system_id"],
+                display_name=row["display_name"],
+                enabled=bool(row["enabled"]),
+                retired=bool(row["retired"]),
+                config_id=row["config_id"],
+                workspace_root=row["workspace_root"],
+                authority_fingerprint=row["authority_fingerprint"],
+                last_activity_at=_dt(row["last_activity_at"]),
+            )
+            for row in rows
+        )
+
+    def _cancel_authority_work(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        system_ids: tuple[str, ...],
+        now_text: str,
+        reason: str,
+    ) -> None:
+        if not system_ids:
+            return
+        encoded_system_ids = _json_text(list(system_ids), field_name="authority system IDs")
+        action_rows = connection.execute(
+            """
+            SELECT action_id FROM adapter_actions
+            WHERE system_id IN (SELECT value FROM json_each(?))
+              AND state IN ('ready', 'leased', 'running', 'retry_wait')
+            """,
+            (encoded_system_ids,),
+        ).fetchall()
+        action_ids = tuple(row["action_id"] for row in action_rows)
+        for action_id in action_ids:
+            connection.execute(
+                """
+                UPDATE refresh_intent_scopes
+                SET state = 'cancelled', disposition_reason = ?, eligible_at = NULL,
+                    lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
+                WHERE intent_scope_id IN (
+                    SELECT intent_scope_id FROM action_intent_scopes WHERE action_id = ?
+                ) AND state IN ('admitted', 'coalesced')
+                """,
+                (reason, action_id),
+            )
+            connection.execute(
+                """
+                UPDATE adapter_actions
+                SET state = 'cancelled', completed_at = ?, lease_id = NULL,
+                    lease_worker_id = NULL, leased_until = NULL, retry_at = NULL,
+                    error_class = ?, redacted_diagnostic = ?
+                WHERE action_id = ?
+                """,
+                (now_text, ErrorClass.LOCAL_CANCELLATION.value, reason, action_id),
+            )
+            self._refresh_action_parent_aggregates(connection, action_id=action_id)
+        scope_rows = connection.execute(
+            """
+            SELECT intent_scope_id FROM refresh_intent_scopes
+            WHERE system_id IN (SELECT value FROM json_each(?))
+              AND state IN ('queued', 'leased', 'deferred')
+            """,
+            (encoded_system_ids,),
+        ).fetchall()
+        for row in scope_rows:
+            connection.execute(
+                """
+                UPDATE refresh_intent_scopes
+                SET state = 'cancelled', disposition_reason = ?, eligible_at = NULL,
+                    lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
+                WHERE intent_scope_id = ?
+                """,
+                (reason, row["intent_scope_id"]),
+            )
+            self._refresh_intent_aggregate(
+                connection,
+                intent_scope_id=row["intent_scope_id"],
+            )
+
+    def set_authority_retired(
+        self,
+        system_id: str,
+        *,
+        retired: bool,
+        now: datetime | None = None,
+    ) -> None:
+        system_id = require_uuid(system_id, "system_id")
+        timestamp = _utc_text(now or _now())
+        with self._immediate_transaction() as connection:
+            system = connection.execute(
+                "SELECT system_kind FROM systems WHERE system_id = ?",
+                (system_id,),
+            ).fetchone()
+            if system is None or system["system_kind"] != "databricks.workspace":
+                raise ValueError("unknown Databricks authority")
+            if retired:
+                connection.execute(
+                    """
+                    INSERT INTO retired_system_authorities (system_id, retired_at)
+                    VALUES (?, ?)
+                    ON CONFLICT(system_id) DO NOTHING
+                    """,
+                    (system_id, timestamp),
+                )
+                self._cancel_authority_work(
+                    connection,
+                    system_ids=(system_id,),
+                    now_text=timestamp,
+                    reason="authority_retired",
+                )
+                connection.execute(
+                    "UPDATE systems SET enabled = 0, record_updated_at = ? WHERE system_id = ?",
+                    (timestamp, system_id),
+                )
+                connection.execute(
+                    "UPDATE connection_bindings SET enabled = 0, record_updated_at = ? "
+                    "WHERE system_id = ?",
+                    (timestamp, system_id),
+                )
+                connection.execute(
+                    "UPDATE capability_bindings SET enabled = 0, record_updated_at = ? "
+                    "WHERE connection_binding_id IN ("
+                    "SELECT binding_id FROM connection_bindings WHERE system_id = ?)",
+                    (timestamp, system_id),
+                )
+                connection.execute(
+                    "UPDATE configured_scopes SET enabled = 0, record_updated_at = ? "
+                    "WHERE system_id = ?",
+                    (timestamp, system_id),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM retired_system_authorities WHERE system_id = ?",
+                    (system_id,),
+                )
+
     def upsert_configured_system_identity(
         self,
         *,
@@ -1397,6 +1601,30 @@ class SQLiteStore:
         desired_scopes = tuple(require_uuid(value, "scope_id") for value in scope_ids)
         timestamp = _utc_text(now or _now())
         with self._immediate_transaction() as connection:
+            active_systems = tuple(
+                row["system_id"]
+                for row in connection.execute(
+                    "SELECT system_id FROM systems WHERE system_kind = ? AND enabled = 1",
+                    (system_kind,),
+                ).fetchall()
+            )
+            retired_systems = {
+                row["system_id"]
+                for row in connection.execute(
+                    "SELECT system_id FROM retired_system_authorities"
+                ).fetchall()
+            }
+            revoked_systems = tuple(
+                system_id
+                for system_id in active_systems
+                if system_id not in desired_systems or system_id in retired_systems
+            )
+            self._cancel_authority_work(
+                connection,
+                system_ids=revoked_systems,
+                now_text=timestamp,
+                reason="authority_removed",
+            )
             connection.execute(
                 "UPDATE capability_bindings SET enabled = 0, record_updated_at = ? "
                 "WHERE connection_binding_id IN ("
@@ -1422,26 +1650,28 @@ class SQLiteStore:
             )
             connection.executemany(
                 "UPDATE systems SET enabled = 1, record_updated_at = ? "
-                "WHERE system_id = ? AND system_kind = ?",
+                "WHERE system_id = ? AND system_kind = ? AND NOT EXISTS ("
+                "SELECT 1 FROM retired_system_authorities AS retired "
+                "WHERE retired.system_id = systems.system_id)",
                 ((timestamp, value, system_kind) for value in desired_systems),
             )
             connection.executemany(
                 "UPDATE connection_bindings SET enabled = 1, record_updated_at = ? "
                 "WHERE binding_id = ? AND system_id IN ("
-                "SELECT system_id FROM systems WHERE system_kind = ?)",
+                "SELECT system_id FROM systems WHERE system_kind = ? AND enabled = 1)",
                 ((timestamp, value, system_kind) for value in desired_bindings),
             )
             connection.executemany(
                 "UPDATE capability_bindings SET enabled = 1, record_updated_at = ? "
                 "WHERE capability_binding_id = ? AND connection_binding_id IN ("
                 "SELECT binding_id FROM connection_bindings WHERE system_id IN ("
-                "SELECT system_id FROM systems WHERE system_kind = ?))",
+                "SELECT system_id FROM systems WHERE system_kind = ? AND enabled = 1))",
                 ((timestamp, value, system_kind) for value in desired_capabilities),
             )
             connection.executemany(
                 "UPDATE configured_scopes SET enabled = 1, record_updated_at = ? "
                 "WHERE scope_id = ? AND system_id IN ("
-                "SELECT system_id FROM systems WHERE system_kind = ?)",
+                "SELECT system_id FROM systems WHERE system_kind = ? AND enabled = 1)",
                 ((timestamp, value, system_kind) for value in desired_scopes),
             )
 

@@ -20,7 +20,7 @@ from async_api_view.adapters.databricks import databricks_profile_authority_fing
 from async_api_view.composition import ApplicationRuntime, build_runtime
 from async_api_view.config import ConfigError, ProjectSettings, load_settings
 from async_api_view.local_files import ExclusiveFileLock, absolute_local_path
-from async_api_view.storage import backup_sqlite_database
+from async_api_view.storage import SQLiteStore, backup_sqlite_database
 
 logger = logging.getLogger(__name__)
 DEFAULT_RUN_ONCE_CYCLES = 10_000
@@ -98,6 +98,16 @@ def _parser() -> argparse.ArgumentParser:
         "doctor",
         help="Check the existing Databricks CLI without querying inventory.",
     )
+    subparsers.add_parser(
+        "authority-list",
+        help="List local verified, historical, and retired authority identities.",
+    )
+    for command, help_text in (
+        ("authority-retire", "Retire one authority without deleting its cached facts."),
+        ("authority-unretire", "Remove a retirement tombstone; init is still required."),
+    ):
+        authority = subparsers.add_parser(command, help=help_text)
+        authority.add_argument("--system-id", required=True, help="Local system UUID.")
     run_once = subparsers.add_parser(
         "run-once",
         help="Process one bounded batch of eligible local work, then stop.",
@@ -184,6 +194,48 @@ async def _doctor(settings: ProjectSettings) -> None:
         "Databricks CLI is compatible; %s profile reference(s) declared "
         "(authentication not probed)",
         len(settings.databricks_systems),
+    )
+
+
+def _authority_list(settings: ProjectSettings) -> None:
+    if not os.path.lexists(settings.app.database_path):
+        raise RuntimeError("authority inventory requires an initialized Rookery database")
+    with SQLiteStore(settings.app.database_path) as store:
+        for authority in store.list_authorities():
+            fingerprint = (
+                authority.authority_fingerprint[:12]
+                if authority.authority_fingerprint
+                else "legacy-unverified"
+            )
+            status = (
+                "retired" if authority.retired else "enabled" if authority.enabled else "paused"
+            )
+            logger.info(
+                "Authority %s | %s | %s | config=%s | root=%s | fingerprint=%s | last=%s",
+                authority.system_id,
+                authority.display_name,
+                status,
+                authority.config_id or "legacy",
+                authority.workspace_root or "unknown",
+                fingerprint,
+                authority.last_activity_at.isoformat() if authority.last_activity_at else "none",
+            )
+
+
+def _set_authority_retired(
+    settings: ProjectSettings,
+    *,
+    system_id: str,
+    retired: bool,
+) -> None:
+    if not os.path.lexists(settings.app.database_path):
+        raise RuntimeError("authority retirement requires an initialized Rookery database")
+    with SQLiteStore(settings.app.database_path) as store:
+        store.set_authority_retired(system_id, retired=retired)
+    logger.info(
+        "Authority %s %s; cached facts were preserved",
+        system_id,
+        "retired" if retired else "unretired (run init to re-enable if configured)",
     )
 
 
@@ -341,15 +393,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             _require_browser_activation_output(allow_redirected=args.allow_redirected_activation)
         settings = _load(args.config)
         if args.command == "init":
-            _initialize(settings)
+            with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
+                _initialize(settings)
         elif args.command == "doctor":
             asyncio.run(_doctor(settings))
+        elif args.command == "authority-list":
+            with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
+                _authority_list(settings)
+        elif args.command in {"authority-retire", "authority-unretire"}:
+            with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
+                _set_authority_retired(
+                    settings,
+                    system_id=args.system_id,
+                    retired=args.command == "authority-retire",
+                )
         elif args.command == "run-once":
-            runtime = build_runtime(settings)
-            try:
-                drained = asyncio.run(_run_once(runtime, max_cycles=args.max_cycles))
-            finally:
-                runtime.store.close()
+            with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
+                runtime = build_runtime(settings)
+                try:
+                    drained = asyncio.run(_run_once(runtime, max_cycles=args.max_cycles))
+                finally:
+                    runtime.store.close()
             if not drained:
                 logger.warning(
                     "run-once reached --max-cycles=%s; eligible work may remain; rerun "

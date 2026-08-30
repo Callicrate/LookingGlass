@@ -579,6 +579,7 @@ def ready_alert_history() -> AlertHistoryView:
                 system_name="Local runtime",
                 error_class="unknown_adapter_failure",
                 action_id=ACTION_ID,
+                system_id=SYSTEM_ID,
             ),
         ),
         total=51,
@@ -596,6 +597,7 @@ def ready_action_history() -> ActionHistoryView:
         actions=(
             ActionActivityView(
                 action_id=ACTION_ID,
+                system_id=SYSTEM_ID,
                 system_name="Data workspace",
                 capability_key="databricks.workspace.metadata.read",
                 target_kind="object",
@@ -644,7 +646,7 @@ def test_empty_dashboard_explains_unknown_state() -> None:
     assert response.status_code == 200
     assert "No systems configured" in response.text
     assert "No cached objects" in response.text
-    assert "Refresh unsupported" in response.text
+    assert "Refresh unavailable" in response.text
     assert "View history" in response.text
     assert "View activity" in response.text
     assert "Refresh options" in response.text
@@ -666,6 +668,38 @@ def test_ready_dashboard_keeps_stale_cached_facts_and_activity_visible() -> None
     assert NOW.isoformat() in response.text
     assert "stale" in response.text
     assert "timeout" in response.text
+
+
+def test_duplicate_system_names_render_unique_authority_attribution() -> None:
+    dashboard = ready_dashboard()
+    enabled = replace(
+        dashboard.systems[0],
+        system_id=SYSTEM_ID,
+        name="TAP",
+        enabled=True,
+        config_id="tap",
+        workspace_root="/",
+        authority_label="Verified abcdef123456",
+    )
+    historical_id = "55555555-5555-4555-8555-555555555555"
+    historical = replace(
+        enabled,
+        system_id=historical_id,
+        enabled=False,
+        config_id="Legacy / unconfigured",
+        authority_label="Legacy / unverified",
+    )
+    view = replace(dashboard, systems=(enabled, historical))
+
+    response = client_for(FakeBackend(dashboard_view=view)).get("/")
+
+    assert response.status_code == 200
+    assert SYSTEM_ID in response.text
+    assert historical_id in response.text
+    assert "Verified abcdef123456" in response.text
+    assert "Legacy / unverified" in response.text
+    assert f"System {dashboard.objects[0].system_id}" in response.text
+    assert f"System {dashboard.refresh_options[0].system_id}" in response.text
 
 
 def test_object_containment_is_labeled_as_last_observed_incomplete_evidence() -> None:
@@ -772,6 +806,7 @@ def test_object_page_shows_facets_containment_and_refresh_controls() -> None:
     assert "Data workspace" in response.text
     assert "databricks.workspace.folder" in response.text
     assert "Object refreshes" in response.text
+    assert f"System {OBJECT_OPTION.system_id}" in response.text
     assert 'value="file"' in response.text
     assert "Raw content is not displayed" in response.text
     assert csrf_from(response.text)
@@ -873,6 +908,7 @@ def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
                 system_name="Data workspace",
                 error_class="connection_timeout",
                 action_id=ACTION_ID,
+                system_id=SYSTEM_ID,
             ),
         ),
     )
@@ -885,6 +921,7 @@ def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
     assert "refresh.action.failed" in response.text
     assert "connection_timeout" in response.text
     assert f"/actions/{ACTION_ID}" in response.text
+    assert f"system <code>{SYSTEM_ID}</code>" in response.text
     assert '<script>alert("x")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
 
@@ -900,6 +937,7 @@ def test_alert_history_shows_filters_paging_and_escaped_summaries() -> None:
     assert "unknown_adapter_failure" in response.text
     assert "/alerts?after=cursor" in response.text
     assert f"/actions/{ACTION_ID}" in response.text
+    assert f"system <code>{SYSTEM_ID}</code>" in response.text
     assert '<script>alert("x")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
     assert backend.alert_queries == [
@@ -1064,6 +1102,7 @@ def test_action_history_shows_filters_paging_and_escaped_diagnostics() -> None:
     assert "databricks.workspace.metadata.read" in response.text
     assert "downstream_rate_limit" in response.text
     assert "/actions?after=cursor" in response.text
+    assert f"System {SYSTEM_ID}" in response.text
     assert (
         f"/actions/{ACTION_ID}?return=%2Factions%3Fstate%3Dretry_wait%26system%3D{SYSTEM_ID}"
         in response.text

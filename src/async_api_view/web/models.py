@@ -284,6 +284,7 @@ class ObjectDetailView:
     loaded_at: datetime | str | None = None
     disconnected: bool = False
     error: str | None = None
+    refresh_empty_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +305,7 @@ class OperationalEventView:
     system_name: str = "Local runtime"
     error_class: str | None = None
     action_id: str | None = None
+    system_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,6 +332,7 @@ class ActionSystemOption:
 @dataclass(frozen=True, slots=True)
 class ActionActivityView:
     action_id: str
+    system_id: str
     system_name: str
     capability_key: str
     target_kind: str
@@ -390,6 +393,10 @@ class SystemView:
     configured_scopes: tuple[str, ...] = ()
     worker_available: bool = True
     last_activity: ActivityView | None = None
+    config_id: str = "Legacy / unconfigured"
+    workspace_root: str = "Unknown"
+    authority_label: str = "Legacy / unverified"
+    retired: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,6 +418,7 @@ class DashboardView:
     previous_page_url: str | None = None
     next_page_url: str | None = None
     alerts: tuple[OperationalEventView, ...] = ()
+    refresh_empty_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)

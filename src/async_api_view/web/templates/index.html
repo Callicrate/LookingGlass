@@ -62,7 +62,7 @@
           <span class="badge badge--{{ alert.severity|display }}">{{ alert.severity|display }}</span>
           <div>
             <strong>{{ alert.event_type|display }}</strong>
-            <span class="subtle">{{ alert.system_name|display }} · <time>{{ alert.occurred_at|timestamp }}</time>{% if alert.error_class %} · {{ alert.error_class|display }}{% endif %}</span>
+            <span class="subtle">{{ alert.system_name|display }}{% if alert.system_id %} · system <code>{{ alert.system_id|display }}</code>{% endif %} · <time>{{ alert.occurred_at|timestamp }}</time>{% if alert.error_class %} · {{ alert.error_class|display }}{% endif %}</span>
             <span>{{ alert.summary|display }}</span>
             {% if alert.action_id %}<a href="/actions/{{ alert.action_id|display }}">View action →</a>{% endif %}
           </div>
@@ -89,10 +89,14 @@
               <code>{{ system.kind|display }}</code>
             </div>
             <span class="badge badge--{{ 'current' if system.enabled and system.worker_available else 'unsupported' }}">
-              {% if not system.enabled %}Paused{% elif not system.worker_available %}Worker unavailable{% else %}Enabled{% endif %}
+              {% if system.retired %}Retired{% elif not system.enabled %}Paused{% elif not system.worker_available %}Worker unavailable{% else %}Enabled{% endif %}
             </span>
           </div>
           <dl class="facts">
+            <div><dt>Local system ID</dt><dd><code>{{ system.system_id|display }}</code></dd></div>
+            <div><dt>Config ID</dt><dd><code>{{ system.config_id|display }}</code></dd></div>
+            <div><dt>Authority</dt><dd>{{ system.authority_label|display }}</dd></div>
+            <div><dt>Workspace root</dt><dd><code>{{ system.workspace_root|display }}</code></dd></div>
             <div><dt>Connection knowledge</dt><dd>{{ system.connection_state|display }}</dd></div>
             <div><dt>Configured scopes</dt><dd>{{ system.configured_scopes|join(', ')|display if system.configured_scopes else 'None' }}</dd></div>
             {% if system.last_activity %}
@@ -141,6 +145,7 @@
                 <td data-label="Object">
                   <strong><a href="/objects/{{ object.object_id|display }}">{{ object.name|display }}</a></strong>
                   <span class="subtle">{{ object.object_type|display }}{% if object.path %} · {{ object.path|display }}{% endif %}</span>
+                  <code class="subtle">System {{ object.system_id|display }}</code>
                 </td>
                 <td data-label="Facet"><code>{{ facet.name|display }}</code></td>
                 <td data-label="Knowledge">{{ facet.knowledge|display }}</td>
@@ -156,7 +161,7 @@
               </tr>
               {% endfor %}
             {% else %}
-              <tr><td data-label="Object"><strong><a href="/objects/{{ object.object_id|display }}">{{ object.name|display }}</a></strong><span class="subtle">{{ object.object_type|display }}</span></td><td colspan="6" class="unknown">No facet knowledge recorded</td></tr>
+              <tr><td data-label="Object"><strong><a href="/objects/{{ object.object_id|display }}">{{ object.name|display }}</a></strong><span class="subtle">{{ object.object_type|display }}</span><code class="subtle">System {{ object.system_id|display }}</code></td><td colspan="6" class="unknown">No facet knowledge recorded</td></tr>
             {% endif %}
           {% endfor %}
           </tbody>
@@ -197,6 +202,7 @@
           <div>
             <strong>{{ option.label|display }}</strong>
             <span class="subtle"><code>{{ option.capability_key|display }}</code> · facet {{ option.facet|display }}</span>
+            <code class="subtle">System {{ option.system_id|display }}</code>
             <span class="subtle">Scope: {{ option.target_kind|display|replace('_', ' ')|capitalize }}</span>
             <span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span>
           </div>
@@ -206,7 +212,7 @@
         {% endfor %}
       </div>
       {% else %}
-      <div class="empty-state"><strong>Refresh unsupported</strong><p>No observation capability is registered for the configured scopes.</p></div>
+      <div class="empty-state"><strong>Refresh unavailable</strong><p>{{ view.refresh_empty_reason|display }}</p></div>
       {% endif %}
     </section>
   </main>

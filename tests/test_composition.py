@@ -1261,6 +1261,9 @@ async def test_configuration_reconciliation_uses_verified_authority_and_disables
     assert [system.system_id for system in restored_systems if not system.enabled] == [
         changed_enabled.system_id
     ]
+    cancelled_before_restore = restored.store.get_stored_action(admitted.action_id)
+    assert cancelled_before_restore is not None
+    assert cancelled_before_restore.state.value == "cancelled"
     restored.store.close()
 
     removed_runner = FakeCliRunner(b"[]")
@@ -1278,6 +1281,7 @@ async def test_configuration_reconciliation_uses_verified_authority_and_disables
     assert len(removed_dashboard.systems) == 2
     assert all(not system.enabled for system in removed_dashboard.systems)
     assert removed_dashboard.refresh_options == ()
+    assert removed_dashboard.refresh_empty_reason.startswith("Historical cache only")
     with pytest.raises(ValueError, match="not registered"):
         await removed.backend.submit_refresh(
             RefreshRequest(
@@ -1289,7 +1293,7 @@ async def test_configuration_reconciliation_uses_verified_authority_and_disables
             )
         )
     assert removed_runner.calls == []
-    assert await removed.worker.run_once()
+    assert not await removed.worker.run_once()
     assert removed_runner.calls == []
     stored = removed.store.get_stored_action(admitted.action_id)
     assert stored is not None and stored.state.value == "cancelled"
@@ -1351,7 +1355,7 @@ def test_explicit_config_id_adopts_legacy_system_identity(tmp_path: Path) -> Non
     renamed.store.close()
 
 
-def test_no_id_legacy_cache_is_not_blessed_by_a_new_authority_fingerprint(
+def test_no_id_authority_change_does_not_reuse_prior_cache(
     tmp_path: Path,
 ) -> None:
     legacy = build_runtime(
@@ -1361,7 +1365,7 @@ def test_no_id_legacy_cache_is_not_blessed_by_a_new_authority_fingerprint(
             name="Legacy",
             profile="PROFILE",
             workspace_root="/Shared",
-            authority_fingerprint="0" * 64,
+            authority_fingerprint="1" * 64,
         ),
         runner=FakeCliRunner(b"[]"),
     )
@@ -1384,6 +1388,122 @@ def test_no_id_legacy_cache_is_not_blessed_by_a_new_authority_fingerprint(
     assert [system.system_id for system in systems if not system.enabled] == [legacy_id]
     assert next(system.system_id for system in systems if system.enabled) != legacy_id
     verified.store.close()
+
+
+@pytest.mark.anyio
+async def test_retired_authority_preserves_cache_blocks_reenable_and_cancels_work(
+    tmp_path: Path,
+) -> None:
+    retirement_time = datetime(2026, 8, 30, tzinfo=UTC)
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.workspace.children.read"
+        and item.target_kind == "configured_scope"
+    )
+    intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=option.system_id,
+            target_kind=option.target_kind,
+            target_id=option.target_id,
+            capability_key=option.capability_key,
+            facet=option.facet,
+        )
+    )
+    admitted = await runtime.coordinator.run_once()
+    assert admitted is not None and admitted.action_id is not None
+    object_ids = {item.object_id for item in runtime.store.list_objects()}
+
+    runtime.store.set_authority_retired(
+        option.system_id,
+        retired=True,
+        now=retirement_time,
+    )
+
+    assert runtime.store.get_stored_action(admitted.action_id).state.value == "cancelled"  # type: ignore[union-attr]
+    assert runtime.store.list_intent_scopes(intent_id)[0].state.value == "cancelled"
+    authority = next(
+        item for item in runtime.store.list_authorities() if item.system_id == option.system_id
+    )
+    assert authority.retired and not authority.enabled
+    assert {item.object_id for item in runtime.store.list_objects()} == object_ids
+    runtime.store.close()
+
+    blocked = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    assert not next(
+        item for item in blocked.store.list_systems() if item.system_id == option.system_id
+    ).enabled
+    assert blocked.store.is_system_authority_retired(option.system_id)
+    assert (await blocked.backend.dashboard()).refresh_options == ()
+    blocked.store.set_authority_retired(
+        option.system_id,
+        retired=False,
+        now=retirement_time,
+    )
+    blocked.store.close()
+
+    restored = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    assert next(
+        item for item in restored.store.list_systems() if item.system_id == option.system_id
+    ).enabled
+    assert not restored.store.is_system_authority_retired(option.system_id)
+    restored.store.close()
+
+
+@pytest.mark.anyio
+async def test_legacy_disabled_authority_work_cannot_revive_on_change_back(
+    tmp_path: Path,
+) -> None:
+    initial = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    initial.worker_available = True
+    dashboard = await initial.backend.dashboard()
+    option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.workspace.children.read"
+        and item.target_kind == "configured_scope"
+    )
+    await initial.backend.submit_refresh(
+        RefreshRequest(
+            system_id=option.system_id,
+            target_kind=option.target_kind,
+            target_id=option.target_id,
+            capability_key=option.capability_key,
+            facet=option.facet,
+        )
+    )
+    admitted = await initial.coordinator.run_once()
+    assert admitted is not None and admitted.action_id is not None
+    initial.store._connection.execute(
+        "UPDATE capability_bindings SET enabled = 0 WHERE connection_binding_id IN ("
+        "SELECT binding_id FROM connection_bindings WHERE system_id = ?)",
+        (option.system_id,),
+    )
+    initial.store._connection.execute(
+        "UPDATE configured_scopes SET enabled = 0 WHERE system_id = ?",
+        (option.system_id,),
+    )
+    initial.store._connection.execute(
+        "UPDATE connection_bindings SET enabled = 0 WHERE system_id = ?",
+        (option.system_id,),
+    )
+    initial.store._connection.execute(
+        "UPDATE systems SET enabled = 0 WHERE system_id = ?",
+        (option.system_id,),
+    )
+    initial.store.close()
+
+    runner = FakeCliRunner(b"[]")
+    restored = build_runtime(settings(tmp_path), runner=runner)
+
+    stored = restored.store.get_stored_action(admitted.action_id)
+    assert stored is not None and stored.state.value == "cancelled"
+    assert not await restored.worker.run_once()
+    assert runner.calls == []
+    restored.store.close()
 
 
 def test_case_only_config_id_change_preserves_identity_and_cache(tmp_path: Path) -> None:
@@ -1504,8 +1624,8 @@ def test_configuration_application_rolls_back_all_systems_on_late_failure(
             databricks_systems=systems,
         )
 
-    first = DatabricksSystemSettings("A", "OLD_PROFILE", "/A", "a")
-    retained = DatabricksSystemSettings("B", "B_PROFILE", "/B", "b")
+    first = DatabricksSystemSettings("A", "OLD_PROFILE", "/A", "a", "1" * 64)
+    retained = DatabricksSystemSettings("B", "B_PROFILE", "/B", "b", "2" * 64)
     initial = build_runtime(project(first, retained), runner=FakeCliRunner(b"[]"))
     initial.store.close()
 
@@ -1524,8 +1644,8 @@ def test_configuration_application_rolls_back_all_systems_on_late_failure(
         "configure_databricks_workspace",
         fail_late,
     )
-    rotated = DatabricksSystemSettings("A", "NEW_PROFILE", "/A", "a")
-    failing = DatabricksSystemSettings("C", "C_PROFILE", "/C", "c")
+    rotated = DatabricksSystemSettings("A", "NEW_PROFILE", "/A", "a", "1" * 64)
+    failing = DatabricksSystemSettings("C", "C_PROFILE", "/C", "c", "3" * 64)
 
     with pytest.raises(RuntimeError, match="injected late configuration failure"):
         build_runtime(project(rotated, failing), runner=FakeCliRunner(b"[]"))

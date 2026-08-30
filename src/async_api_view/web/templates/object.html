@@ -34,6 +34,7 @@
       </div>
       <dl class="facts facts--wide">
         <div><dt>System</dt><dd>{{ view.system_name|display }}</dd></div>
+        <div><dt>Local system ID</dt><dd><code>{{ view.object.system_id|display }}</code></dd></div>
         <div><dt>Presence</dt><dd><span class="badge badge--{{ view.object.presence|display }}">{{ view.object.presence|display }}</span></dd></div>
         <div><dt>Schema</dt><dd><code>{{ view.object.object_type|display }}@{{ view.object.object_type_version|display }}</code></dd></div>
         <div><dt>Source kind</dt><dd><code>{{ view.object.source_kind|display }}</code></dd></div>
@@ -115,14 +116,14 @@
           <input type="hidden" name="target_id" value="{{ option.target_id|display }}">
           <input type="hidden" name="capability_key" value="{{ option.capability_key|display }}">
           <input type="hidden" name="facet" value="{{ option.facet|display }}">
-          <div><strong>{{ option.label|display }}</strong><span class="subtle"><code>{{ option.capability_key|display }}</code> · facet {{ option.facet|display }}</span><span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span></div>
+          <div><strong>{{ option.label|display }}</strong><span class="subtle"><code>{{ option.capability_key|display }}</code> · facet {{ option.facet|display }}</span><code class="subtle">System {{ option.system_id|display }}</code><span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span></div>
           <button type="submit" {% if not option.enabled %}disabled aria-describedby="object-reason-{{ loop.index }}"{% endif %}>Request refresh</button>
           {% if option.disabled_reason %}<span id="object-reason-{{ loop.index }}" class="failure">{{ option.disabled_reason|display }}</span>{% endif %}
         </form>
         {% endfor %}
       </div>
       {% else %}
-      <div class="empty-state"><strong>No object refresh available</strong><p>The object remains readable from cache.</p></div>
+      <div class="empty-state"><strong>No object refresh available</strong><p>{{ view.refresh_empty_reason|display }}</p></div>
       {% endif %}
     </section>
   </main>

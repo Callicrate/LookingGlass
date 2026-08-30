@@ -9,6 +9,7 @@ shared action-lifecycle and observation-ingestion ports.
 from .models import (
     ActionActivityRecord,
     ActionAttemptRecord,
+    AuthorityRecord,
     ConfiguredScopeRecord,
     FacetActionStatusRecord,
     FacetEvidenceRecord,
@@ -24,6 +25,7 @@ from .sqlite import SQLiteStore, backup_sqlite_database
 __all__ = [
     "ActionActivityRecord",
     "ActionAttemptRecord",
+    "AuthorityRecord",
     "ConfiguredScopeRecord",
     "FacetActionStatusRecord",
     "FacetEvidenceRecord",

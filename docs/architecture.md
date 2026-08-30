@@ -1400,7 +1400,7 @@ Contracts MUST still record the local actor and UI session so actions, policy ch
 The service MUST bind only to local inter-process or loopback interfaces.
 For the browser UI, each runtime creates a high-entropy `*.localhost` browser hostname and trusts only that Host.
 Before disclosing an activation capability, startup MUST exclusively reserve and listen on both `127.0.0.1` and `::1` at the configured port; failure to own either address family MUST close any partial reservation and stop without disclosure.
-Before applying desired configuration, `serve` MUST also acquire one private database-scoped operating-system lock. A second serve attempt, including one using another port, MUST fail before it can rotate or disable the running instance's durable authority.
+Before applying desired configuration, every `init`, `run-once`, or `serve` process MUST acquire one private database-scoped operating-system lock for its complete stateful lifetime. A second stateful runner, including a serve using another port, MUST fail before it can reconcile authority or compete for leases. Online backup remains exempt.
 The launching terminal discloses one short-lived, single-use activation capability in a URL fragment on that unique host.
 The browser removes the fragment before exchanging the capability in a same-origin request body for a host-only, process-local session cookie.
 The capability and session MUST remain memory-only, rotate on restart, stay out of request targets and application/access logs, and gate every cached-data or mutation route by default.
@@ -1492,6 +1492,7 @@ Legacy entries without an ID remain compatible, but adding an explicit ID/finger
 Display-name and profile-reference changes under the same ID, authority fingerprint, and Workspace root update one local system. Credential rotation inside the same named profile preserves identity; retargeting the profile fails before dispatch because the actual host fingerprint changes.
 Removing an entry disables its system, binding, capabilities, and configured scopes without deleting cached facts.
 Changing the authority fingerprint or Workspace root creates a new local system authority boundary and disables the predecessor. Returning to a prior fingerprint/root re-enables its original cached authority.
+When an authority leaves desired state, all of its queued, deferred, leased, running, and retry-wait actions plus non-terminal intent scopes are terminalized as local cancellations before commit; later change-back cannot revive them. A durable retired tombstone blocks automatic re-enable while preserving cached facts, and only an explicit unretire followed by configuration reconciliation can restore it.
 
 Session runtime state includes:
 

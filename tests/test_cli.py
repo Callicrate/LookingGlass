@@ -26,6 +26,7 @@ database_path = "{(tmp_path / "state.sqlite3").as_posix()}"
 id = "test"
 name = "test"
 profile = "TEST_PROFILE"
+authority_fingerprint = "1111111111111111111111111111111111111111111111111111111111111111"
 workspace_root = "/"
 """,
         encoding="utf-8",
@@ -62,6 +63,26 @@ def test_init_config_creates_loadable_template_without_overwrite(tmp_path: Path)
     settings = load_settings(output)
     assert settings.app.database_path == output.parent / ".local" / "rookery.sqlite3"
     assert settings.databricks_systems[0].profile == "YOUR_PROFILE"
+
+
+def test_placeholder_authority_fails_before_database_creation(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = tmp_path / "rookery.toml"
+    assert cli.main(["init-config", "--output", str(config)]) == 0
+
+    result = cli.main(["--config", str(config), "init"])
+
+    assert result == 2
+    assert "fingerprint-profile" in caplog.text
+    assert not (tmp_path / ".local" / "rookery.sqlite3").exists()
+    for command in ("authority-list", "authority-retire", "authority-unretire"):
+        argv = ["--config", str(config), command]
+        if command != "authority-list":
+            argv.extend(("--system-id", "11111111-1111-4111-8111-111111111111"))
+        assert cli.main(argv) == 2
+        assert not (tmp_path / ".local" / "rookery.sqlite3").exists()
 
 
 def test_racing_init_config_writers_publish_one_complete_template(tmp_path: Path) -> None:
@@ -478,6 +499,7 @@ port = 8766
 id = "workspace"
 name = "workspace"
 profile = "{profile}"
+authority_fingerprint = "1111111111111111111111111111111111111111111111111111111111111111"
 workspace_root = "/"
 """,
             encoding="utf-8",
@@ -532,6 +554,114 @@ workspace_root = "/"
     assert after == before
 
 
+@pytest.mark.parametrize("command", ["init", "run-once"])
+def test_live_owner_blocks_other_stateful_commands_before_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    database = tmp_path / "private" / "state.sqlite3"
+    config = tmp_path / "config.toml"
+
+    def write_config(fingerprint: str) -> None:
+        config.write_text(
+            f"""
+[app]
+database_path = "{database.as_posix()}"
+
+[[databricks]]
+id = "workspace"
+name = "workspace"
+profile = "PROFILE"
+authority_fingerprint = "{fingerprint}"
+workspace_root = "/"
+""",
+            encoding="utf-8",
+        )
+
+    write_config("1" * 64)
+    assert cli.main(["--config", str(config), "init"]) == 0
+    with sqlite3.connect(database) as connection:
+        before = tuple(connection.execute("SELECT system_id, enabled FROM systems").fetchall())
+    write_config("2" * 64)
+    monkeypatch.setattr(
+        cli,
+        "build_runtime",
+        lambda _settings: pytest.fail(f"locked {command} built the runtime"),
+    )
+    argv = ["--config", str(config), command]
+    if command == "run-once":
+        argv.extend(("--max-cycles", "1"))
+
+    with ExclusiveFileLock(cli._serve_lock_path(database)):
+        result = cli.main(argv)
+
+    assert result == 2
+    with sqlite3.connect(database) as connection:
+        after = tuple(connection.execute("SELECT system_id, enabled FROM systems").fetchall())
+    assert after == before
+
+
+def test_authority_retire_and_unretire_preserve_cache_and_require_reinit(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database = tmp_path / "private" / "state.sqlite3"
+    config = tmp_path / "config.toml"
+    fingerprint = "1" * 64
+    config.write_text(
+        f"""
+[app]
+database_path = "{database.as_posix()}"
+
+[[databricks]]
+id = "workspace"
+name = "workspace"
+profile = "PROFILE"
+authority_fingerprint = "{fingerprint}"
+workspace_root = "/"
+""",
+        encoding="utf-8",
+    )
+    assert cli.main(["--config", str(config), "init"]) == 0
+    with sqlite3.connect(database) as connection:
+        system_id = connection.execute("SELECT system_id FROM systems").fetchone()[0]
+        object_count = connection.execute("SELECT COUNT(*) FROM remote_objects").fetchone()[0]
+
+    caplog.set_level("INFO")
+    assert cli.main(["--config", str(config), "authority-list"]) == 0
+    assert system_id in caplog.text
+    assert cli.main(["--config", str(config), "authority-retire", "--system-id", system_id]) == 0
+    assert cli.main(["--config", str(config), "init"]) == 0
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "SELECT enabled FROM systems WHERE system_id = ?", (system_id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert connection.execute("SELECT COUNT(*) FROM remote_objects").fetchone()[0] == (
+            object_count
+        )
+
+    assert cli.main(["--config", str(config), "authority-unretire", "--system-id", system_id]) == 0
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "SELECT enabled FROM systems WHERE system_id = ?", (system_id,)
+            ).fetchone()[0]
+            == 0
+        )
+    assert cli.main(["--config", str(config), "init"]) == 0
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "SELECT enabled FROM systems WHERE system_id = ?", (system_id,)
+            ).fetchone()[0]
+            == 1
+        )
+
+
 def test_serve_refuses_to_disclose_activation_to_redirected_stdout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -576,6 +706,7 @@ database_path = "{database.as_posix()}"
 id = "workspace"
 name = "workspace"
 profile = "TEST_PROFILE"
+authority_fingerprint = "1111111111111111111111111111111111111111111111111111111111111111"
 workspace_root = "{root}"
 """,
             encoding="utf-8",

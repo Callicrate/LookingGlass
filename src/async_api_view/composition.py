@@ -26,7 +26,12 @@ from async_api_view.adapters.databricks import (
     ResolvedTarget,
 )
 from async_api_view.application import DurableCoordinator, SystemBootstrapService
-from async_api_view.config import ConfigError, ProjectSettings, canonical_config_id
+from async_api_view.config import (
+    PLACEHOLDER_AUTHORITY_FINGERPRINT,
+    ConfigError,
+    ProjectSettings,
+    canonical_config_id,
+)
 from async_api_view.contracts import (
     ActionState,
     AdapterAction,
@@ -362,6 +367,7 @@ class SQLiteWebBackend:
             system_name=system_names.get(event.system_id or "", "Local runtime"),
             error_class=event.error_class,
             action_id=event.action_id,
+            system_id=event.system_id,
         )
 
     @staticmethod
@@ -370,6 +376,7 @@ class SQLiteWebBackend:
     ) -> ActionActivityView:
         return ActionActivityView(
             action_id=action.action_id,
+            system_id=action.system_id,
             system_name=system_names.get(action.system_id, "Unknown system"),
             capability_key=action.capability_key,
             target_kind=action.target_kind,
@@ -653,18 +660,34 @@ class SQLiteWebBackend:
                 else None
             )
             scopes = self._store.list_configured_scopes(system_id=system.system_id)
+            bindings = self._store.list_connection_bindings(system_id=system.system_id)
+            binding_settings = bindings[0].non_secret_settings if len(bindings) == 1 else {}
+            fingerprint = binding_settings.get("authority_fingerprint")
+            authority_label = (
+                f"Verified {fingerprint[:12]}"
+                if isinstance(fingerprint, str) and fingerprint != "0" * 64
+                else "Placeholder authority"
+                if fingerprint == "0" * 64
+                else "Legacy / unverified"
+            )
+            identity = self._store.get_configured_identity_for_system(system.system_id)
+            retired = self._store.is_system_authority_retired(system.system_id)
             system_views.append(
                 SystemView(
                     system_id=system.system_id,
                     name=system.display_name,
                     kind=system.system_kind,
                     enabled=system.enabled,
-                    connection_state="configured"
-                    if self._store.list_connection_bindings(system_id=system.system_id)
-                    else "unknown",
+                    connection_state="configured" if bindings else "unknown",
                     configured_scopes=tuple(scope.display_name for scope in scopes),
                     worker_available=worker_available,
                     last_activity=activity,
+                    config_id=identity[0] if identity is not None else "Legacy / unconfigured",
+                    workspace_root=str(binding_settings.get("workspace_root", "Unknown")),
+                    authority_label=(
+                        f"{authority_label} · Retired" if retired else authority_label
+                    ),
+                    retired=retired,
                 )
             )
 
@@ -675,10 +698,25 @@ class SQLiteWebBackend:
             )
             for remote_object in objects
         ]
+        system_views.sort(key=lambda item: (not item.enabled, item.name.casefold(), item.system_id))
+        refresh_options = self._refresh_options(systems=systems, objects=objects)
+        refresh_empty_reason = ""
+        if not refresh_options:
+            if systems and not any(system.enabled for system in systems):
+                refresh_empty_reason = (
+                    "Historical cache only; no enabled authority. Restore or configure an "
+                    "authority to request refreshes."
+                )
+            elif not systems:
+                refresh_empty_reason = "No system authority is configured."
+            else:
+                refresh_empty_reason = (
+                    "No observation capability is registered for the enabled authority."
+                )
         return DashboardView(
             systems=tuple(system_views),
             objects=tuple(object_views),
-            refresh_options=self._refresh_options(systems=systems, objects=objects),
+            refresh_options=refresh_options,
             loaded_at=datetime.now(UTC),
             disconnected=False,
             error=None,
@@ -704,6 +742,7 @@ class SQLiteWebBackend:
                 else None
             ),
             alerts=alerts,
+            refresh_empty_reason=refresh_empty_reason,
         )
 
     @staticmethod
@@ -759,7 +798,10 @@ class SQLiteWebBackend:
         return ActionHistoryView(
             actions=actions,
             systems=tuple(
-                ActionSystemOption(system_id=system.system_id, name=system.display_name)
+                ActionSystemOption(
+                    system_id=system.system_id,
+                    name=f"{system.display_name} · {system.system_id[:8]}",
+                )
                 for system in systems
             ),
             total=len(actions),
@@ -901,6 +943,18 @@ class SQLiteWebBackend:
             if option.target_kind == TargetKind.OBJECT.value and option.target_id == object_id
         )
         worker_available, worker_error = self._worker_status()
+        owning_system = next(
+            (system for system in systems if system.system_id == str(remote_object.system_id)),
+            None,
+        )
+        refresh_empty_reason = ""
+        if not refresh_options:
+            refresh_empty_reason = (
+                "Historical cache only; this authority is paused. Restore or configure it to "
+                "request a refresh."
+                if owning_system is not None and not owning_system.enabled
+                else "No compatible observation capability is registered for this object."
+            )
         system_name = next(
             (
                 system.display_name
@@ -935,6 +989,7 @@ class SQLiteWebBackend:
             loaded_at=datetime.now(UTC),
             disconnected=not worker_available,
             error=worker_error,
+            refresh_empty_reason=refresh_empty_reason,
         )
 
     async def is_refresh_registered(self, request: RefreshRequest) -> bool:
@@ -1243,6 +1298,14 @@ def build_runtime(
     runner: CliRunner | None = None,
 ) -> ApplicationRuntime:
     """Initialize durable configuration and compose the one-process application."""
+    if any(
+        system.authority_fingerprint == PLACEHOLDER_AUTHORITY_FINGERPRINT
+        for system in settings.databricks_systems
+    ):
+        raise ConfigError(
+            "Databricks authority fingerprint is still the placeholder; run "
+            "async-api-view fingerprint-profile and update authority_fingerprint"
+        )
     config_ids = tuple(
         canonical_config_id(system.config_id)
         for system in settings.databricks_systems

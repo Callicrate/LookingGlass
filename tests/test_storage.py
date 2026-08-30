@@ -82,6 +82,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0017_queue_claim_order",
             "0018_action_state_projections",
             "0019_web_cursor_indexes",
+            "0020_retired_authorities",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -147,7 +148,7 @@ def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_
     with SQLiteStore(path) as store:
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
         )
 
 
@@ -162,7 +163,7 @@ def test_new_database_is_migrated_and_marked_before_wal_activation(
         assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
         )
         original(store)
 
@@ -457,7 +458,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -495,7 +496,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -530,7 +531,7 @@ def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_pa
 
     check = sqlite3.connect(path)
     try:
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -719,7 +720,7 @@ def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path)
     check = sqlite3.connect(destination)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 20
     finally:
         check.close()
 
@@ -1576,6 +1577,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0017_queue_claim_order",
         "0018_action_state_projections",
         "0019_web_cursor_indexes",
+        "0020_retired_authorities",
     )
     assert versions == (expected,) * workers
 
@@ -1718,6 +1720,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0017_queue_claim_order",
             "0018_action_state_projections",
             "0019_web_cursor_indexes",
+            "0020_retired_authorities",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
