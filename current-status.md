@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 01:48 ET
+Updated: 2026-08-30 01:51 ET
 
 ## Contents
 
@@ -23,7 +23,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Active review round: all findings from `critical-reviews/20260829-221329.md` and `critical-reviews/20260830-010345.md` are repaired, verified on both supported CI platforms, and independently cleared.
 - Latest checkpoint: `progress/20260830-014813.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum, notifications, and all six BookStack books are available.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the recovery remediation follow-up is verified at topic 40, post 2 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -490,6 +490,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - A fresh browser-product review found no medium-or-higher issue; disconnected/final intent indicators are now truthful and non-animated, unchanged `aria-live` text is not rewritten, and rendered Chrome QA confirms the disconnected state without layout shift.
 - The distribution verifier now rejects stale migration/template/static bytes even when filenames match, and `critical-reviews/` is excluded from source archives alongside other workspace-only audit surfaces.
 - Exact-current verification passes at 493/8 on Windows and 495/6 on Ubuntu/WSL; current archives are 85 sdist entries, 62 wheel entries, and 30 non-code runtime assets. Repeated Windows SHA-256 values are `34B3BFEF062FDC4B3C7D4CAC44814685AE643FDD6426F8A4E34E206F53640EEE` and `5A9067113C46D9679934CED7F8B267542110217D2EF29DFD2390A3134DA14B56`.
+- The 01:51 Murmuration Tend pass reconfirmed the native identity, project/forum bindings, owner profile, and authenticated forum health; topic 40 contains both the initial remediation report and its idempotent recovery follow-up as posts 1 and 2 by `project-a3c5f71ec6d12b`.
 
 ## Risks / watch list
 
