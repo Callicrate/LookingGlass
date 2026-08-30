@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import socket
 import sqlite3
 import sys
 from collections.abc import Sequence
@@ -170,6 +171,82 @@ def _require_browser_activation_output(*, allow_redirected: bool) -> None:
         )
 
 
+def _reserve_loopback_sockets(port: int, *, backlog: int) -> list[socket.socket]:
+    """Own both loopback address families before an activation token is disclosed."""
+
+    listeners: list[socket.socket] = []
+    selected_port = port
+    endpoints = ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1"))
+    try:
+        for family, host in endpoints:
+            listener = socket.socket(family, socket.SOCK_STREAM)
+            try:
+                if family == socket.AF_INET6:
+                    listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                if sys.platform == "win32":
+                    exclusive_address_use = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+                    if exclusive_address_use is None:  # pragma: no cover - platform invariant
+                        raise RuntimeError("exclusive Windows socket binding is unavailable")
+                    listener.setsockopt(socket.SOL_SOCKET, exclusive_address_use, 1)
+                else:
+                    # POSIX needs this for immediate restart after accepted sockets
+                    # enter TIME_WAIT. Active listeners remain exclusive without
+                    # SO_REUSEPORT, which Rookery never enables.
+                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind((host, selected_port))
+                if selected_port == 0:
+                    selected_port = int(listener.getsockname()[1])
+                # Listen before disclosure so another local process cannot win a
+                # bind-to-listen race on either address family.
+                listener.listen(backlog)
+            except BaseException:
+                listener.close()
+                raise
+            listeners.append(listener)
+    except OSError as exc:
+        for listener in listeners:
+            listener.close()
+        raise RuntimeError(
+            f"could not reserve IPv4 and IPv6 loopback listeners on port {port}"
+        ) from exc
+    except BaseException:
+        for listener in listeners:
+            listener.close()
+        raise
+    return listeners
+
+
+def _serve_loopback(
+    runtime: ApplicationRuntime,
+    settings: ProjectSettings,
+    *,
+    log_level: str,
+    allow_redirected: bool,
+) -> None:
+    config = uvicorn.Config(
+        runtime.app,
+        host=settings.app.host,
+        port=settings.app.port,
+        log_level=log_level.lower(),
+    )
+    listeners = _reserve_loopback_sockets(settings.app.port, backlog=config.backlog)
+    try:
+        logger.info(
+            "Reserved dashboard listeners on 127.0.0.1:%s and [::1]:%s",
+            settings.app.port,
+            settings.app.port,
+        )
+        _show_browser_activation(
+            runtime,
+            settings,
+            allow_redirected=allow_redirected,
+        )
+        uvicorn.Server(config).run(sockets=listeners)
+    finally:
+        for listener in listeners:
+            listener.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one local command and return a process exit code."""
     args = _parser().parse_args(argv)
@@ -200,16 +277,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "serve":
             runtime = build_runtime(settings)
             try:
-                _show_browser_activation(
+                _serve_loopback(
                     runtime,
                     settings,
+                    log_level=args.log_level,
                     allow_redirected=args.allow_redirected_activation,
-                )
-                uvicorn.run(
-                    runtime.app,
-                    host=settings.app.host,
-                    port=settings.app.port,
-                    log_level=args.log_level.lower(),
                 )
             finally:
                 runtime.store.close()

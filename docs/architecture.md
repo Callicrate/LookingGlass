@@ -1394,7 +1394,8 @@ Version 1 is local and single-user.
 Contracts MUST still record the local actor and UI session so actions, policy changes, content access, and failures remain attributable.
 
 The service MUST bind only to local inter-process or loopback interfaces.
-For the browser UI, each runtime creates a high-entropy `*.localhost` browser hostname and trusts only that Host while keeping the listener on the configured loopback address.
+For the browser UI, each runtime creates a high-entropy `*.localhost` browser hostname and trusts only that Host.
+Before disclosing an activation capability, startup MUST exclusively reserve and listen on both `127.0.0.1` and `::1` at the configured port; failure to own either address family MUST close any partial reservation and stop without disclosure.
 The launching terminal discloses one short-lived, single-use activation capability in a URL fragment on that unique host.
 The browser removes the fragment before exchanging the capability in a same-origin request body for a host-only, process-local session cookie.
 The capability and session MUST remain memory-only, rotate on restart, stay out of request targets and application/access logs, and gate every cached-data or mutation route by default.

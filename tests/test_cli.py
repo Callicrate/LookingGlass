@@ -1,5 +1,8 @@
 import secrets
+import select
+import socket
 import sqlite3
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -183,10 +186,23 @@ def test_serve_closes_runtime_store_when_server_start_fails(
     monkeypatch.setattr(cli, "_load", lambda _path: settings)
     monkeypatch.setattr(cli, "build_runtime", lambda _settings: runtime)
 
+    class FakeListener:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    listeners = [FakeListener(), FakeListener()]
+    monkeypatch.setattr(
+        cli,
+        "_reserve_loopback_sockets",
+        lambda _port, *, backlog: listeners,
+    )
+
     def fail_server(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("port unavailable")
 
-    monkeypatch.setattr(cli.uvicorn, "run", fail_server)
+    monkeypatch.setattr(cli.uvicorn.Server, "run", fail_server)
 
     result = cli.main(["serve", "--allow-redirected-activation"])
 
@@ -200,6 +216,159 @@ def test_serve_closes_runtime_store_when_server_start_fails(
     assert expected_url in captured.out
     assert "valid once for 10 minutes" in captured.out
     assert bootstrap_token not in captured.err
+    assert all(listener.closed for listener in listeners)
+
+
+def test_loopback_reservation_owns_both_address_families() -> None:
+    listeners = cli._reserve_loopback_sockets(0, backlog=1)
+    try:
+        port = int(listeners[0].getsockname()[1])
+        assert {listener.family for listener in listeners} == {
+            socket.AF_INET,
+            socket.AF_INET6,
+        }
+        assert {int(listener.getsockname()[1]) for listener in listeners} == {port}
+        for listener in listeners:
+            if sys.platform == "win32":
+                assert listener.getsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE) == 1
+                assert listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 0
+            else:
+                assert listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 1
+            if listener.family == socket.AF_INET6:
+                assert listener.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY) == 1
+
+        endpoints = (
+            (socket.AF_INET, "127.0.0.1"),
+            (socket.AF_INET6, "::1"),
+        )
+        option_sets = [(), ((socket.SOL_SOCKET, socket.SO_REUSEADDR, 1),)]
+        reuse_port = getattr(socket, "SO_REUSEPORT", None)
+        if reuse_port is not None:
+            option_sets.append(((socket.SOL_SOCKET, reuse_port, 1),))
+        for family, host in endpoints:
+            for options in option_sets:
+                competitor = socket.socket(family, socket.SOCK_STREAM)
+                try:
+                    if family == socket.AF_INET6:
+                        competitor.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                    for level, option, value in options:
+                        competitor.setsockopt(level, option, value)
+                    with pytest.raises(OSError):
+                        competitor.bind((host, port))
+                finally:
+                    competitor.close()
+    finally:
+        for listener in listeners:
+            listener.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows wildcard precedence contract")
+def test_windows_wildcard_listener_cannot_intercept_owned_loopback() -> None:
+    listeners = cli._reserve_loopback_sockets(0, backlog=1)
+    port = int(listeners[0].getsockname()[1])
+    wildcards: list[socket.socket] = []
+    try:
+        for family, host in ((socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")):
+            wildcard = socket.socket(family, socket.SOCK_STREAM)
+            if family == socket.AF_INET6:
+                wildcard.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            wildcard.bind((host, port))
+            wildcard.listen(1)
+            wildcards.append(wildcard)
+
+        for exact, wildcard, host in zip(
+            listeners,
+            wildcards,
+            ("127.0.0.1", "::1"),
+            strict=True,
+        ):
+            client = socket.create_connection((host, port), timeout=2)
+            try:
+                readable, _writable, _errors = select.select([exact, wildcard], [], [], 2)
+                assert readable == [exact]
+                accepted, _address = exact.accept()
+                accepted.close()
+            finally:
+                client.close()
+    finally:
+        for listener in listeners + wildcards:
+            listener.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX restart contract")
+def test_posix_loopback_reservation_restarts_after_server_side_close() -> None:
+    listeners = cli._reserve_loopback_sockets(0, backlog=1)
+    port = int(listeners[0].getsockname()[1])
+    client = socket.create_connection(("127.0.0.1", port), timeout=2)
+    accepted, _address = listeners[0].accept()
+    try:
+        accepted.close()
+        assert client.recv(1) == b""
+    finally:
+        client.close()
+        for listener in listeners:
+            listener.close()
+
+    restarted = cli._reserve_loopback_sockets(port, backlog=1)
+    for listener in restarted:
+        listener.close()
+
+
+def test_serve_fails_before_activation_disclosure_when_ipv6_port_is_occupied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    blocker = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    try:
+        blocker.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        try:
+            blocker.bind(("::1", 0))
+        except OSError:
+            pytest.skip("IPv6 loopback is unavailable")
+        blocker.listen(1)
+        port = int(blocker.getsockname()[1])
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            pytest.skip("selected IPv6 port is unavailable on IPv4")
+        finally:
+            probe.close()
+
+        class FakeStore:
+            closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        store = FakeStore()
+        bootstrap_token = secrets.token_urlsafe(32)
+        authorizer = LocalCallerAuthorizer(bootstrap_token=bootstrap_token)
+        runtime = SimpleNamespace(app=object(), store=store, local_authorizer=authorizer)
+        settings = ProjectSettings(
+            app=AppSettings(database_path=tmp_path / "state.sqlite3", port=port),
+            databricks_systems=(),
+        )
+        monkeypatch.setattr(cli, "_load", lambda _path: settings)
+        monkeypatch.setattr(cli, "build_runtime", lambda _settings: runtime)
+
+        result = cli.main(["serve", "--allow-redirected-activation"])
+
+        assert result == 2
+        assert store.closed
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "/bootstrap#" not in captured.err
+        assert authorizer.take_bootstrap_token() == bootstrap_token
+
+        released_ipv4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            released_ipv4.bind(("127.0.0.1", port))
+        finally:
+            released_ipv4.close()
+    finally:
+        blocker.close()
 
 
 def test_serve_refuses_to_disclose_activation_to_redirected_stdout(

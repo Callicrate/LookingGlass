@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 23:15 ET
+Updated: 2026-08-29 23:43 ET
 
 ## Contents
 
@@ -21,7 +21,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260829-221329.md` records one high, two medium, and one low finding; remediation is the next implementation queue.
+- Active review round: the high finding from `critical-reviews/20260829-221329.md` is repaired and independently cleared; two medium storage findings and one low release-engineering finding remain.
 - Latest checkpoint: `progress/20260829-231525.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum, notifications, and all six BookStack books are available.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -55,7 +55,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
 - [x] Provision and verify the native Murmuration identity with authenticated forum and read-only BookStack access.
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
-- [ ] Remediate the high IPv6 loopback activation-takeover finding.
+- [x] Remediate the high IPv6 loopback activation-takeover finding.
 - [ ] Remediate foreign-database mutation ordering and owner-only database permissions.
 - [ ] Strengthen isolated-wheel verification against the locked runtime graph.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
@@ -287,6 +287,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The native profile reports `write_ready=true`; both surface doctors pass, notifications authenticate, all six intended BookStack books are visible, and an empty create canary is denied with HTTP 403 by the read-only role.
 - Point-in-time BookStack and supported Discourse backups were completed before provisioning; temporary remote credential staging was removed after local verification.
 - The native Rookery account posted the verified activation report to Murmuration topic 36 as post 2 with deterministic idempotency metadata, then reread the topic to verify exact authorship and content.
+- CR-01 is closed locally: `serve` exclusively owns exact IPv4 and IPv6 loopback listeners before activation disclosure, fails closed on partial reservation, uses Windows-exclusive and POSIX restart-safe socket options, and passes process-level bind/interception regressions.
+- Real Windows Chrome and Ubuntu/WSL Chromium smokes each reached the random Rookery origin through both families, denied competing exact binds, and verified native bootstrap 303 plus authenticated dashboard 200.
+- The final CR-01 Windows gate passes 456 tests with two intentional platform skips at 89% branch coverage; independent security re-review found no medium-or-higher residual defect.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
@@ -467,4 +470,4 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The architecture document describes deferred capabilities beyond the implemented slice; documentation must keep current behavior distinct from roadmap behavior.
 - Local browser/debug data is present under `.local/` and must remain untracked.
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
-- The fresh critical review remains actionable: IPv6 loopback bootstrap isolation is high severity, while foreign-database startup ordering and database-file ACL enforcement are medium severity.
+- The fresh critical review remains actionable: foreign-database startup ordering and database-file ACL enforcement are the two remaining medium-severity findings.

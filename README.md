@@ -102,8 +102,9 @@ uv run async-api-view --config config.local.toml serve
 It does not hold the local UI behind Databricks CLI readiness; refresh controls stay disabled with a worker-unavailable explanation while compatibility is checked and retried.
 Open that complete link, including its `#` fragment, within ten minutes.
 The browser removes the fragment before exchanging it, so the capability does not enter HTTP request targets, redirects, or access logs.
-The link uses a process-unique, high-entropy `rookery-….localhost` hostname while the server still binds only to the configured loopback address.
-The configured bind host must be `127.0.0.1` or `localhost` so that generated `.localhost` names reach the listener consistently.
+The link uses a process-unique, high-entropy `rookery-….localhost` hostname.
+Before printing that link, Rookery reserves and listens on both `127.0.0.1` and `::1` at the configured port; startup fails without disclosing the capability if either loopback address is unavailable.
+The configured bind host remains restricted to `127.0.0.1` or `localhost` for compatibility, but it cannot weaken this dual-stack reservation.
 The resulting session cookie is scoped to that unique host, process-local, `HttpOnly`, and `SameSite=Strict`, so ordinary `127.0.0.1` and `localhost` services do not receive it.
 If the link expires, was already used by another browser profile, or the browser session is lost, restart `serve` to rotate it.
 Redeemed browser access expires after two idle hours or twelve total hours, whichever comes first; restart `serve` to issue a new activation link.
