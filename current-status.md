@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 04:29 ET
+Updated: 2026-08-30 04:31 ET
 
 ## Contents
 
@@ -24,7 +24,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Active review round: all five findings in `critical-reviews/20260830-030232.md` are implemented, independently clear, cross-platform green, and committed at `b6cf1d1`.
 - Latest checkpoint: `progress/20260830-041706.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the closed release/recovery evidence is verified at topic 40, post 3 under that identity.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the latest verified-authority/boundedness evidence is verified at topic 40, post 4 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -521,6 +521,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Commit `b6cf1d1` closes verified workspace-host authority, pre-reconciliation serve ownership, exact schema allowlisting, priority-aware one-batch promotion, and canonical weakly-consistent forward cursors; every slice received focused independent closure.
 - The real database was backed up to `.local/backups/rookery-20260830-042550-pre-0019.sqlite3`, then migrated to `0019_web_cursor_indexes`; both source and backup are `ROOK`, integrity `ok`, and foreign-key clean. The verified-authority reconciliation leaves three historical systems with exactly one enabled.
 - Exact post-fix distributions contain 87 sdist entries, 64 wheel entries, and 32 installed runtime assets on both platforms.
+- Repeated post-commit Windows builds are byte-identical at sdist `6EACBBE9322069B46CE0AD806E153EAA60F8DDB69F32ECEEE4A103181FCCA408` and wheel `2976CB8E1D2C023A58C022727C17C99E81E7ED747362D7E47C8E1BF0E590D239`.
+- The 04:31 Murmuration Tend pass published the committed closure idempotently as topic 40, post 4 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
 
 ## Risks / watch list
 
