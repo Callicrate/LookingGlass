@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 04:18 ET
+Updated: 2026-08-30 04:29 ET
 
 ## Contents
 
@@ -17,12 +17,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest complete check: 528 tests passed with 8 Windows platform skips; the final cursor residual patches pass focused tests, with exact full coverage/package and Ubuntu/WSL parity reruns pending.
-- Coverage: Windows 91.49% statements / 77.57% branch-only / 88.16% combined; Ubuntu/WSL 89.82% / 76.99% / 86.75%.
+- Latest checks: Windows 529 passed / 8 platform skips; Ubuntu/WSL 531 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
+- Coverage: Windows 90.72% statements / 76.77% branch-only / 87.35% combined; Ubuntu/WSL 89.15% / 76.23% / 86.03%.
 - Runtime surface: 8 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: all five findings in `critical-reviews/20260830-030232.md` are implemented; four are independently clear and final cursor residual re-review is pending.
+- Active review round: all five findings in `critical-reviews/20260830-030232.md` are implemented, independently clear, cross-platform green, and committed at `b6cf1d1`.
 - Latest checkpoint: `progress/20260830-041706.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the closed release/recovery evidence is verified at topic 40, post 3 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -59,7 +59,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Bind remote authority to a verified workspace-host fingerprint and fail closed on retargeting.
 - [x] Reserve serve ownership before any durable configuration reconciliation.
 - [x] Limit one queue claim to one priority-aware due-promotion batch.
-- [ ] Replace exact-count/deep-OFFSET navigation with bounded keyset pagination.
+- [x] Replace exact-count/deep-OFFSET navigation with bounded keyset pagination.
 - [x] Reject unexpected migration-external SQLite schema objects before write-capable open.
 - [x] Quarantine malformed state-dependent lease/retry timestamps without wedging durable work.
 - [x] Bound SQLite event-loop contention and yield between background work batches.
@@ -518,6 +518,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Immutable preflight rejects unexpected executable schema while partial migrations and forced index repair remain valid; queue claims promote one strict-priority bounded batch and both slices are independently clear.
 - Web list paths now use canonical forward keyset cursors, immutable object IDs when unfiltered, indexed name-prefix keys when filtered, and no exact totals/deep offsets; final residual review is pending.
 - The 04:18 Murmuration Tend pass reconfirmed `project-a3c5f71ec6d12b` as write-ready with healthy authenticated forum access and topic 40 intact at three native posts; the pass stayed read-only because the implementation candidate is not yet committed.
+- Commit `b6cf1d1` closes verified workspace-host authority, pre-reconciliation serve ownership, exact schema allowlisting, priority-aware one-batch promotion, and canonical weakly-consistent forward cursors; every slice received focused independent closure.
+- The real database was backed up to `.local/backups/rookery-20260830-042550-pre-0019.sqlite3`, then migrated to `0019_web_cursor_indexes`; both source and backup are `ROOK`, integrity `ok`, and foreign-key clean. The verified-authority reconciliation leaves three historical systems with exactly one enabled.
+- Exact post-fix distributions contain 87 sdist entries, 64 wheel entries, and 32 installed runtime assets on both platforms.
 
 ## Risks / watch list
 
@@ -525,6 +528,6 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Local browser/debug data is present under `.local/` and must remain untracked.
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
 - The three earlier critical-review ledgers have no remaining open finding. Live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
-- The new 03:02 critical-review ledger is open with five findings under active remediation; the three earlier ledgers remain closed.
+- All four critical-review ledgers have no remaining open finding.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
