@@ -1421,6 +1421,10 @@ New and markerless stores MUST migrate and persist the `ROOK` application ID in 
 If that preflight identifies foreign SQLite state, startup and backup MUST leave its bytes, journal mode, and sidecar set unchanged.
 A successful backup MUST synchronize the validated snapshot file and final publication metadata before returning; a failed or unsupported durability barrier MUST publish no claimed recovery copy.
 
+Before a new refresh intent, action admission, or final remote dispatch, the current implementation MUST preserve write headroom for one bounded result plus a recovery floor of at least 64 MiB or twice the configured CLI output cap, whichever is larger. Low or unprovable caller-available capacity disables new refreshes and defers queued/running admission without blocking cached reads, terminalization, failure reporting, or shutdown. This is an application admission fence, not an operating-system reservation; `SQLITE_FULL` handling remains required.
+
+Before creating an online-backup temporary file, Rookery MUST derive snapshot bytes from SQLite page metadata and require that amount plus a 64 MiB caller-available destination reserve. Sparse-file logical length is not backup-size authority, and failed preflight MUST publish no destination.
+
 There is no force-refresh permission in version 1.
 Refresh and retention policy changes are ordinary attributable local configuration changes.
 Single-user operation does not weaken the remote-observation-only boundary, credential isolation, local audit, or collateral-effect requirements.

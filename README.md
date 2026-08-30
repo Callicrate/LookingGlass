@@ -236,11 +236,15 @@ The backup destination parent is also treated as a dedicated private directory a
 
 `backup` creates a consistent, validated snapshot, but Rookery does not yet provide or verify a restore workflow. Treat a snapshot as protected recovery input, not as proof that end-to-end recovery has been tested.
 
+Before creating its temporary copy, `backup` measures the SQLite snapshot as `page_count × page_size` and requires that amount plus 64 MiB available to the current caller on the destination volume. If capacity cannot be confirmed, it publishes nothing. This is an admission guard, not an operating-system reservation; another process, quota change, or thin-provisioned volume can still exhaust space after the check.
+
 Do not replace the configured database while any Rookery process is running, and do not copy or combine `-wal` or `-shm` sidecar files from a different database state. If the primary database is damaged, stop Rookery, preserve the database and sidecars, and work only from copies until a supported restore command can validate and publish a replacement atomically. Restore tooling and regression-tested recovery remain deferred operational work.
 
 For an existing database, startup performs an immutable identity and minimum-schema preflight before opening it for writes or changing journal mode. New and markerless stores migrate and persist the `ROOK` application ID in rollback-journal mode before WAL is enabled. An unmarked database with WAL/SHM sidecars must be cleanly closed and checkpointed by its owning version before adoption.
 A foreign SQLite file is rejected without changing its bytes, permissions, journal mode, or sidecar set and without creating a backup destination.
 Observation, action, attempt, issue, and operational-event history is currently uncompacted, and backup files are never pruned automatically. Monitor the private state and backup directories for disk growth and manage backup retention explicitly. Do not delete or combine the active database's WAL/SHM files.
+
+Rookery also protects write headroom before accepting a new refresh, admitting its action, and authorizing remote dispatch. The required threshold preserves at least 64 MiB or twice the configured CLI output limit, whichever is larger, after one output-sized planned write. Low or unprovable headroom leaves cached state readable, disables refresh controls with an explanation, defers queued work, and rechecks later. Terminalization and failure-reporting writes remain allowed to consume the reserve. The check uses capacity available to the current caller but cannot prove quota or storage availability after the measurement.
 
 ## Verify
 

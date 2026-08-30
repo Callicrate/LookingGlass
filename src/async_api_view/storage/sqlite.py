@@ -83,6 +83,7 @@ from async_api_view.local_files import (
     PrivateDirectoryGuard,
     RegularFileGuard,
     absolute_local_path,
+    available_bytes,
     harden_private_file,
     prepare_private_directory,
     regular_file_identity,
@@ -113,6 +114,8 @@ _MAX_DIAGNOSTIC_LENGTH = 1_024
 _MAX_DUE_PROMOTIONS_PER_CLAIM = 1_000
 _MAX_ACTION_CONTRACT_QUARANTINES_PER_CLAIM = 100
 _SQLITE_MAX_INTEGER = (1 << 63) - 1
+MIN_WRITE_RESERVE_BYTES = 64 * 1024 * 1024
+_HEADROOM_RETRY_DELAY = timedelta(seconds=60)
 _TERMINAL_ACTION_STATES = {
     ActionState.SATISFIED,
     ActionState.SUCCEEDED,
@@ -126,6 +129,12 @@ _TERMINAL_INTENT_STATES = {
     IntentScopeState.EXPIRED,
     IntentScopeState.CANCELLED,
 }
+
+
+class StorageHeadroomUnavailable(RuntimeError):
+    """Raised when a new write would consume the protected local recovery reserve."""
+
+
 _SECRET_SETTING_PART = re.compile(
     r"(?:password|secret|token|private[_-]?key|authorization|access[_-]?key)", re.IGNORECASE
 )
@@ -585,6 +594,22 @@ def backup_sqlite_database(source_path: str | Path, destination_path: str | Path
 
             destination_directory = _prepare_state_directory(destination.parent)
             destination_directory_guard = PrivateDirectoryGuard(destination_directory)
+            page_count_row = source_connection.execute("PRAGMA page_count").fetchone()
+            page_size_row = source_connection.execute("PRAGMA page_size").fetchone()
+            if page_count_row is None or page_size_row is None:
+                raise RuntimeError("backup source size could not be measured")
+            snapshot_bytes = int(page_count_row[0]) * int(page_size_row[0])
+            required_bytes = snapshot_bytes + MIN_WRITE_RESERVE_BYTES
+            try:
+                destination_available = available_bytes(destination.parent)
+            except OSError as exc:
+                raise StorageHeadroomUnavailable(
+                    "Backup capacity could not be confirmed; no snapshot was created"
+                ) from exc
+            if destination_available < required_bytes:
+                raise StorageHeadroomUnavailable(
+                    "Backup requires its SQLite snapshot size plus a 64 MiB safety reserve"
+                )
             with tempfile.NamedTemporaryFile(
                 prefix=".rookery-backup-",
                 suffix=".sqlite3.tmp",
@@ -828,11 +853,27 @@ class SQLiteStore:
         database_path: str | Path,
         *,
         clock: Callable[[], datetime] | None = None,
+        available_bytes_probe: Callable[[], int] | None = None,
+        minimum_write_headroom_bytes: int = MIN_WRITE_RESERVE_BYTES,
     ) -> None:
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
+        if available_bytes_probe is not None and not callable(available_bytes_probe):
+            raise TypeError("available_bytes_probe must be callable")
+        if (
+            isinstance(minimum_write_headroom_bytes, bool)
+            or not isinstance(minimum_write_headroom_bytes, int)
+            or minimum_write_headroom_bytes < MIN_WRITE_RESERVE_BYTES
+        ):
+            raise ValueError(
+                f"minimum_write_headroom_bytes must be at least {MIN_WRITE_RESERVE_BYTES}"
+            )
         self._clock = clock or _now
         self.database_path = absolute_local_path(database_path)
+        self.minimum_write_headroom_bytes = minimum_write_headroom_bytes
+        self._available_bytes_probe = available_bytes_probe or (
+            lambda: available_bytes(self.database_path.parent)
+        )
         self._file_guard, preflight_kind = _create_or_preflight_database(self.database_path)
         self._directory_guard: PrivateDirectoryGuard | None = None
         try:
@@ -927,6 +968,33 @@ class SQLiteStore:
         """Expose one store-owned time sample to the local durable coordinator."""
 
         return self._current_time()
+
+    @property
+    def write_headroom_error(self) -> str:
+        required_mib = (self.minimum_write_headroom_bytes + (1024**2 - 1)) // 1024**2
+        return (
+            f"Local storage cannot confirm the required {required_mib} MiB write headroom. "
+            "Cached state remains available; free local space before requesting refreshes."
+        )
+
+    def write_headroom_available(self) -> bool:
+        """Return whether new work can preserve the configured recovery reserve."""
+
+        try:
+            measured = self._available_bytes_probe()
+        except Exception:
+            return False
+        return (
+            not isinstance(measured, bool)
+            and isinstance(measured, int)
+            and measured >= self.minimum_write_headroom_bytes
+        )
+
+    def require_write_headroom(self) -> None:
+        """Reject new work when available capacity cannot preserve recovery writes."""
+
+        if not self.write_headroom_available():
+            raise StorageHeadroomUnavailable(self.write_headroom_error)
 
     def _enable_wal_mode(self) -> None:
         for attempt in range(8):
@@ -2773,6 +2841,7 @@ class SQLiteStore:
                     accepted_at=_dt(duplicate["accepted_at"]),  # type: ignore[arg-type]
                     scope_ids=tuple(row["intent_scope_id"] for row in rows),
                 )
+            self.require_write_headroom()
             connection.execute(
                 """
                 INSERT INTO refresh_intents (
@@ -3960,6 +4029,7 @@ class SQLiteStore:
                     authority_now=authority_now,
                 )
                 return self._action_from_row(existing), False
+            self.require_write_headroom()
             try:
                 self._insert_action(
                     connection, action=action, dedupe_key=dedupe_key, created_at=now
@@ -4653,6 +4723,30 @@ class SQLiteStore:
         self._refresh_action_parent_aggregates(connection, action_id=action_id)
         return GuardDecision(GuardDisposition.CANCEL, reason)
 
+    def _guard_defer_for_headroom(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        action_id: str,
+        authority_now: datetime,
+    ) -> GuardDecision:
+        connection.execute(
+            """
+            UPDATE adapter_actions
+            SET state = 'retry_wait', retry_at = ?, lease_id = NULL,
+                lease_worker_id = NULL, leased_until = NULL,
+                error_class = NULL, redacted_diagnostic = ?
+            WHERE action_id = ?
+            """,
+            (
+                _utc_text(authority_now + _HEADROOM_RETRY_DELAY),
+                _redact("storage_headroom_low"),
+                action_id,
+            ),
+        )
+        self._refresh_action_parent_aggregates(connection, action_id=action_id)
+        return GuardDecision(GuardDisposition.FAIL, "storage_headroom_low")
+
     def _terminalize_action_contract_failure(
         self,
         connection: sqlite3.Connection,
@@ -5008,6 +5102,12 @@ class SQLiteStore:
                 )
                 if decision.kind.value != "satisfied" or decision.satisfying_observation_id is None:
                     if authorize_start:
+                        if not self.write_headroom_available():
+                            return self._guard_defer_for_headroom(
+                                connection,
+                                action_id=action_id,
+                                authority_now=authority_now,
+                            )
                         result = connection.execute(
                             """
                             UPDATE adapter_actions

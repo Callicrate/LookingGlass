@@ -9,7 +9,9 @@ from uuid import uuid4
 from async_api_view.contracts import IntentScopeState, PresenceState, TargetKind
 from async_api_view.contracts.defaults import V1_TYPE_DEFINITION_BY_KEY
 from async_api_view.core import decide_refresh
-from async_api_view.storage import IntentScopeWork, SQLiteStore
+from async_api_view.storage import IntentScopeWork, SQLiteStore, StorageHeadroomUnavailable
+
+_HEADROOM_RETRY_DELAY = timedelta(seconds=60)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,26 @@ class DurableCoordinator:
             work.intent_scope_id,
             state,
             "request_expired" if state is IntentScopeState.EXPIRED else reason,
+        )
+
+    def _defer_for_headroom(self, work: IntentScopeWork) -> CoordinatorResult:
+        eligible_at = self.store.authority_time() + _HEADROOM_RETRY_DELAY
+        state = self.store.set_intent_scope_disposition(
+            intent_scope_id=work.intent_scope_id,
+            lease_id=work.lease_id,
+            state=IntentScopeState.DEFERRED,
+            reason="storage_headroom_low",
+            eligible_at=eligible_at,
+        )
+        if state is IntentScopeState.EXPIRED:
+            return CoordinatorResult(
+                work.intent_scope_id, IntentScopeState.EXPIRED, "request_expired"
+            )
+        return CoordinatorResult(
+            work.intent_scope_id,
+            IntentScopeState.DEFERRED,
+            "storage_headroom_low",
+            eligible_at=eligible_at,
         )
 
     def _validate_target(self, work: IntentScopeWork) -> str | None:
@@ -137,12 +159,15 @@ class DurableCoordinator:
                 scope=legacy_scope,
             )
         if active is not None:
-            action, _created = self.store.admit_or_coalesce(
-                work=effective_work,
-                binding=binding,
-                capability=capability,
-                now=record_time,
-            )
+            try:
+                action, _created = self.store.admit_or_coalesce(
+                    work=effective_work,
+                    binding=binding,
+                    capability=capability,
+                    now=record_time,
+                )
+            except StorageHeadroomUnavailable:
+                return self._defer_for_headroom(work)
             if action is None:
                 return CoordinatorResult(
                     work.intent_scope_id, IntentScopeState.EXPIRED, "request_expired"
@@ -251,12 +276,15 @@ class DurableCoordinator:
                 "minimum_interval_not_elapsed",
                 eligible_at=decision.eligibility.eligible_at,
             )
-        action, created = self.store.admit_or_coalesce(
-            work=effective_work,
-            binding=binding,
-            capability=capability,
-            now=record_time,
-        )
+        try:
+            action, created = self.store.admit_or_coalesce(
+                work=effective_work,
+                binding=binding,
+                capability=capability,
+                now=record_time,
+            )
+        except StorageHeadroomUnavailable:
+            return self._defer_for_headroom(work)
         if action is None:
             return CoordinatorResult(
                 work.intent_scope_id, IntentScopeState.EXPIRED, "request_expired"

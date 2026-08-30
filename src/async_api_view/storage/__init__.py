@@ -20,9 +20,15 @@ from .models import (
     StoredAction,
     SystemRecord,
 )
-from .sqlite import SQLiteStore, backup_sqlite_database
+from .sqlite import (
+    MIN_WRITE_RESERVE_BYTES,
+    SQLiteStore,
+    StorageHeadroomUnavailable,
+    backup_sqlite_database,
+)
 
 __all__ = [
+    "MIN_WRITE_RESERVE_BYTES",
     "ActionActivityRecord",
     "ActionAttemptRecord",
     "AuthorityRecord",
@@ -34,6 +40,7 @@ __all__ = [
     "OperationalEventRecord",
     "RelatedObjectRecord",
     "SQLiteStore",
+    "StorageHeadroomUnavailable",
     "StoredAction",
     "SystemRecord",
     "backup_sqlite_database",

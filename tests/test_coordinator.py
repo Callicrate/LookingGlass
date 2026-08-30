@@ -971,6 +971,51 @@ def test_intent_expiry_during_coordinator_claim_fences_final_admission(
     assert store.list_actions() == ()
 
 
+def test_headroom_loss_during_action_admission_defers_without_creating_action(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SQLiteStore(tmp_path / "headroom-admission-race.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    receipt = run(store.submit_refresh(_intent(scope, NOW)))
+    monkeypatch.setattr(store, "write_headroom_available", lambda: False)
+
+    result = run(DurableCoordinator(store, worker_id="headroom-race").run_once(now=NOW))
+
+    assert result is not None and result.state is IntentScopeState.DEFERRED
+    assert result.reason == "storage_headroom_low"
+    assert result.eligible_at == NOW + timedelta(seconds=60)
+    persisted = store.list_intent_scopes(receipt.intent_id)[0]
+    assert persisted.state is IntentScopeState.DEFERRED
+    assert persisted.disposition_reason == "storage_headroom_low"
+    assert store.list_actions() == ()
+
+
+def test_low_headroom_does_not_block_invalid_scope_rejection(tmp_path) -> None:
+    available = [1 << 40]
+    store = SQLiteStore(
+        tmp_path / "headroom-rejection.sqlite3",
+        available_bytes_probe=lambda: available[0],
+    )
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    receipt = run(store.submit_refresh(_intent(scope, NOW)))
+    store.set_system_enabled(seeded.system.system_id, enabled=False, now=NOW)
+    available[0] = 0
+
+    result = run(DurableCoordinator(store, worker_id="headroom-rejection").run_once(now=NOW))
+
+    assert result is not None and result.state is IntentScopeState.REJECTED
+    assert result.reason == "system_disabled"
+    persisted = store.list_intent_scopes(receipt.intent_id)[0]
+    assert persisted.state is IntentScopeState.REJECTED
+    assert persisted.disposition_reason == "system_disabled"
+
+
 @pytest.mark.parametrize(
     "state",
     [IntentScopeState.SATISFIED, IntentScopeState.DEFERRED, IntentScopeState.REJECTED],

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 from pathlib import Path
 
@@ -11,6 +12,12 @@ def absolute_local_path(path: str | Path) -> Path:
     """Return an absolute path without following filesystem redirects."""
 
     return Path(os.path.abspath(os.fspath(path)))
+
+
+def available_bytes(path: str | Path) -> int:
+    """Return quota-aware bytes available to the current caller for an existing path."""
+
+    return int(shutil.disk_usage(absolute_local_path(path)).free)
 
 
 def _is_redirect(path: Path) -> bool:

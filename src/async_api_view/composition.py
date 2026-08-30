@@ -50,6 +50,7 @@ from async_api_view.contracts import (
 )
 from async_api_view.ingestion import SQLiteObservationIngestor
 from async_api_view.storage import (
+    MIN_WRITE_RESERVE_BYTES,
     ActionActivityRecord,
     ActionAttemptRecord,
     FacetActionStatusRecord,
@@ -243,6 +244,14 @@ class SQLiteWebBackend:
         self._worker_status = worker_status
         self._wake_worker = wake_worker
 
+    def _refresh_status(self) -> tuple[bool, str | None]:
+        worker_available, worker_error = self._worker_status()
+        if not worker_available:
+            return False, worker_error or "Refresh worker is unavailable."
+        if not self._store.write_headroom_available():
+            return False, self._store.write_headroom_error
+        return True, None
+
     def _facet_view(
         self,
         *,
@@ -408,11 +417,10 @@ class SQLiteWebBackend:
         *,
         systems: Sequence[SystemRecord],
         objects: Sequence[RemoteObject],
+        refresh_status: tuple[bool, str | None] | None = None,
     ) -> tuple[RefreshOption, ...]:
         options: list[RefreshOption] = []
-        worker_available, worker_error = self._worker_status()
-        if not worker_available and not worker_error:
-            worker_error = "Refresh worker is unavailable."
+        refresh_available, refresh_error = refresh_status or self._refresh_status()
         bindings_by_system = {
             system.system_id: tuple(
                 binding
@@ -454,8 +462,8 @@ class SQLiteWebBackend:
                         label=f"Refresh {configured.display_name}",
                         collateral_effects="; ".join(capability.collateral_effects)
                         or "None declared",
-                        enabled=worker_available,
-                        disabled_reason=worker_error if not worker_available else None,
+                        enabled=refresh_available,
+                        disabled_reason=refresh_error if not refresh_available else None,
                     )
                 )
 
@@ -536,8 +544,8 @@ class SQLiteWebBackend:
                         label=label,
                         collateral_effects="; ".join(capability.collateral_effects)
                         or "None declared",
-                        enabled=worker_available,
-                        disabled_reason=worker_error if not worker_available else None,
+                        enabled=refresh_available,
+                        disabled_reason=refresh_error if not refresh_available else None,
                     )
                 )
         return tuple(
@@ -607,7 +615,8 @@ class SQLiteWebBackend:
 
     async def dashboard(self, query: DashboardQuery | None = None) -> DashboardView:
         query = query or DashboardQuery()
-        worker_available, worker_error = self._worker_status()
+        worker_available, _worker_error = self._worker_status()
+        refresh_available, refresh_error = self._refresh_status()
         systems = self._store.list_systems()
         system_names = {system.system_id: system.display_name for system in systems}
         object_cursor = self._cursor_values(
@@ -700,7 +709,11 @@ class SQLiteWebBackend:
             for remote_object in objects
         ]
         system_views.sort(key=lambda item: (not item.enabled, item.name.casefold(), item.system_id))
-        refresh_options = self._refresh_options(systems=systems, objects=objects)
+        refresh_options = self._refresh_options(
+            systems=systems,
+            objects=objects,
+            refresh_status=(refresh_available, refresh_error),
+        )
         refresh_empty_reason = ""
         if not refresh_options:
             if systems and not any(system.enabled for system in systems):
@@ -721,8 +734,8 @@ class SQLiteWebBackend:
             loaded_at=datetime.now(UTC),
             disconnected=False,
             error=None,
-            refresh_unavailable=not worker_available,
-            refresh_error=worker_error,
+            refresh_unavailable=not refresh_available,
+            refresh_error=refresh_error,
             object_total=len(objects),
             object_page=1,
             object_page_count=2 if has_more_objects else 1,
@@ -938,12 +951,17 @@ class SQLiteWebBackend:
             remote_object,
             latest_facet_actions=latest_facet_actions,
         )
+        worker_available, worker_error = self._worker_status()
+        refresh_status = self._refresh_status()
         refresh_options = tuple(
             option
-            for option in self._refresh_options(systems=systems, objects=(remote_object,))
+            for option in self._refresh_options(
+                systems=systems,
+                objects=(remote_object,),
+                refresh_status=refresh_status,
+            )
             if option.target_kind == TargetKind.OBJECT.value and option.target_id == object_id
         )
-        worker_available, worker_error = self._worker_status()
         owning_system = next(
             (system for system in systems if system.system_id == str(remote_object.system_id)),
             None,
@@ -1314,6 +1332,7 @@ def build_runtime(
     *,
     runner: CliRunner | None = None,
     clock: Callable[[], datetime] | None = None,
+    available_bytes_probe: Callable[[], int] | None = None,
 ) -> ApplicationRuntime:
     """Initialize durable configuration and compose the one-process application."""
     if any(
@@ -1331,10 +1350,12 @@ def build_runtime(
     )
     if len(set(config_ids)) != len(config_ids):
         raise ConfigError("Databricks system IDs must be unique")
-    store = (
-        SQLiteStore(settings.app.database_path)
-        if clock is None
-        else SQLiteStore(settings.app.database_path, clock=clock)
+    reserve = max(MIN_WRITE_RESERVE_BYTES, 2 * settings.app.cli_output_limit_bytes)
+    store = SQLiteStore(
+        settings.app.database_path,
+        clock=clock,
+        available_bytes_probe=available_bytes_probe,
+        minimum_write_headroom_bytes=reserve + settings.app.cli_output_limit_bytes,
     )
     try:
         return _compose_runtime(settings, store=store, runner=runner)

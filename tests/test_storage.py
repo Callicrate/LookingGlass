@@ -20,12 +20,14 @@ from async_api_view.contracts import (
     ActionCompletion,
     ActionLeaseLost,
     ActionOutcome,
+    ActionState,
     AdapterAction,
     CapabilityCoveragePolicy,
     CollectionCoverage,
     ErrorClass,
     FacetObservation,
     FieldCoverage,
+    GuardDisposition,
     IntentScopeState,
     ObjectLocator,
     ObservationBatch,
@@ -682,6 +684,34 @@ def test_online_backup_captures_live_wal_and_never_overwrites(tmp_path) -> None:
         backup_sqlite_database(source, destination)
     assert destination.read_bytes() == original
     assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+
+
+def test_backup_requires_snapshot_size_plus_recovery_reserve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "state" / "rookery.sqlite3"
+    destination = tmp_path / "backups" / "rookery.sqlite3"
+    with SQLiteStore(source):
+        pass
+    with sqlite3.connect(source) as connection:
+        snapshot_bytes = (
+            connection.execute("PRAGMA page_count").fetchone()[0]
+            * connection.execute("PRAGMA page_size").fetchone()[0]
+        )
+    required = snapshot_bytes + sqlite_storage.MIN_WRITE_RESERVE_BYTES
+    available = [required - 1]
+    monkeypatch.setattr(sqlite_storage, "available_bytes", lambda _path: available[0])
+
+    with pytest.raises(
+        sqlite_storage.StorageHeadroomUnavailable,
+        match="snapshot size plus a 64 MiB safety reserve",
+    ):
+        backup_sqlite_database(source, destination)
+
+    assert not destination.exists()
+    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+    available[0] = required
+    assert backup_sqlite_database(source, destination) == destination.resolve()
 
 
 def test_backup_rejects_foreign_sqlite_before_destination_creation(tmp_path: Path) -> None:
@@ -2377,6 +2407,133 @@ def test_action_guard_uses_store_clock_for_deadlines_and_origin_expiry(tmp_path)
     assert origin_store.list_intent_scopes(expiring.intent_id)[0].state.value == "expired"
     assert origin_store.list_intent_scopes(live.intent_id)[0].state.value == "admitted"
     origin_store.close()
+
+
+def test_write_headroom_fences_new_intents_admission_and_final_dispatch(tmp_path) -> None:
+    current_time = [NOW]
+    available = [sqlite_storage.MIN_WRITE_RESERVE_BYTES]
+    store = SQLiteStore(
+        tmp_path / "headroom.sqlite3",
+        clock=lambda: current_time[0],
+        available_bytes_probe=lambda: available[0],
+    )
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+    )
+    intent = RefreshIntent(
+        intent_id=uuid4(),
+        idempotency_key=str(uuid4()),
+        origin=RefreshOrigin.MANUAL,
+        actor_id="local-user",
+        scopes=(scope,),
+        requested_at=NOW,
+    )
+    receipt = run(store.submit_refresh(intent))
+    available[0] -= 1
+
+    duplicate = run(store.submit_refresh(intent))
+    assert duplicate == receipt
+    with pytest.raises(sqlite_storage.StorageHeadroomUnavailable, match="write headroom"):
+        run(store.submit_refresh(replace(intent, intent_id=uuid4(), idempotency_key=str(uuid4()))))
+
+    deferred = run(DurableCoordinator(store, worker_id="headroom").run_once(now=NOW))
+    assert deferred is not None and deferred.state is IntentScopeState.DEFERRED
+    assert deferred.reason == "storage_headroom_low"
+    assert deferred.eligible_at is not None
+    assert store.list_actions() == ()
+
+    store.record_runtime_failure(
+        event_type="queue.coordinator.failed",
+        summary="coordinator stopped unexpectedly (StorageHeadroomUnavailable)",
+        occurred_at=NOW,
+    )
+    assert len(store.list_operational_events(alertable_only=True)) == 1
+
+    available[0] += 1
+    current_time[0] = deferred.eligible_at
+    admitted = run(DurableCoordinator(store, worker_id="headroom").run_once(now=current_time[0]))
+    assert admitted is not None and admitted.action_id is not None
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=current_time[0]))
+    binding = store.list_connection_bindings(system_id=seeded.system.system_id)[0]
+    assert lease is not None and binding.revision is not None
+
+    available[0] -= 1
+    decision = run(
+        store.authorize_start(
+            action_id=lease.action.action_id,
+            lease_id=lease.lease_id,
+            binding_revision=binding.revision,
+            now=current_time[0],
+        )
+    )
+    assert decision.disposition is GuardDisposition.FAIL
+    assert decision.reason == "storage_headroom_low"
+    stored = store.get_stored_action(lease.action.action_id)
+    assert stored is not None and stored.state is ActionState.RETRY_WAIT
+    assert stored.retry_at == current_time[0] + timedelta(seconds=60)
+
+
+def test_low_headroom_does_not_block_final_authority_cancellation(tmp_path) -> None:
+    available = [1 << 40]
+    store = SQLiteStore(
+        tmp_path / "headroom-cancellation.sqlite3",
+        clock=lambda: NOW,
+        available_bytes_probe=lambda: available[0],
+    )
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+    )
+    receipt = run(
+        store.submit_refresh(
+            RefreshIntent(
+                intent_id=uuid4(),
+                idempotency_key=str(uuid4()),
+                origin=RefreshOrigin.MANUAL,
+                actor_id="local-user",
+                scopes=(scope,),
+                requested_at=NOW,
+            )
+        )
+    )
+    admitted = run(DurableCoordinator(store, worker_id="headroom").run_once(now=NOW))
+    assert admitted is not None and admitted.action_id is not None
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+    binding = store.list_connection_bindings(system_id=seeded.system.system_id)[0]
+    assert lease is not None and binding.revision is not None
+    store._connection.execute(
+        "UPDATE connection_bindings SET enabled = 0 WHERE binding_id = ?",
+        (binding.binding_id,),
+    )
+    available[0] = 0
+
+    decision = run(
+        store.authorize_start(
+            action_id=lease.action.action_id,
+            lease_id=lease.lease_id,
+            binding_revision=binding.revision,
+            now=NOW,
+        )
+    )
+
+    assert decision.disposition is GuardDisposition.CANCEL
+    assert decision.reason == "binding_disabled"
+    stored = store.get_stored_action(lease.action.action_id)
+    assert stored is not None and stored.state is ActionState.CANCELLED
+    assert store.list_intent_scopes(receipt.intent_id)[0].state is IntentScopeState.ADMITTED
 
 
 def test_intent_scope_leases_use_the_store_clock_for_claims_and_dispositions(tmp_path) -> None:

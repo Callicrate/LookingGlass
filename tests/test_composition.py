@@ -215,6 +215,45 @@ def settings(
 
 
 @pytest.mark.anyio
+async def test_dashboard_disables_refresh_when_write_headroom_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    available: list[int | None] = [1 << 40]
+
+    def capacity_probe() -> int:
+        if available[0] is None:
+            raise OSError("capacity signal unavailable")
+        return available[0]
+
+    runtime = build_runtime(
+        settings(tmp_path),
+        runner=FakeCliRunner(b"[]"),
+        available_bytes_probe=capacity_probe,
+    )
+    runtime.worker_available = True
+    assert runtime.store.minimum_write_headroom_bytes == 72 * 1024 * 1024
+    available[0] = None
+
+    unavailable = await runtime.backend.dashboard()
+
+    assert unavailable.refresh_unavailable
+    assert not unavailable.disconnected
+    assert unavailable.refresh_error == runtime.store.write_headroom_error
+    assert unavailable.refresh_options
+    assert all(not option.enabled for option in unavailable.refresh_options)
+    assert all(
+        option.disabled_reason == runtime.store.write_headroom_error
+        for option in unavailable.refresh_options
+    )
+
+    available[0] = runtime.store.minimum_write_headroom_bytes
+    recovered = await runtime.backend.dashboard()
+    assert not recovered.refresh_unavailable
+    assert all(option.enabled for option in recovered.refresh_options)
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
     tmp_path: Path,
 ) -> None:
