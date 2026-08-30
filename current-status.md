@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 19:56 ET
+Updated: 2026-08-30 20:00 ET
 
 ## Contents
 
@@ -20,11 +20,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: Windows 694 passed / 8 platform skips; Ubuntu/WSL 695 passed / 7 platform skips. Format, standard/security/performance lint, lock/audit, constrained builds, exact distribution verification, and installed-wheel smoke pass on both.
 - Coverage: Windows 89.99% statements / 76.43% branch-only / 86.71% combined; Ubuntu/WSL 87.52% / 75.24% / 84.55%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` includes `5f3e963`, the independently cleared hermetic verification implementation.
+- Version control: local `main` includes `1a8dae3`, the clean atomically bundled hermetic verification head.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Latest review round: `critical-reviews/20260830-191800.md` is closed with no remaining finding after fixed-port, ambient-state, Windows/WSL, interruption, subprocess, and release-evidence hermeticity review.
+- Active review round: `critical-reviews/20260830-200000.md` is classifying and reducing remaining static diagnostic debt without suppressions or weakened validation.
 - Latest checkpoint: `progress/20260830-192214.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 18:43 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and published the clean operator closure as topic 40 post 15.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 19:59 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and published visual/hermetic closure as topic 40 post 16.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -71,6 +71,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close operator failure-recovery and error-surface review.
 - [x] Close visual state-semantics and accessible-scanability review.
 - [x] Close hermetic test and verification-cleanup review.
+- [ ] Close remaining static diagnostic-debt review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
