@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 11:17 ET
+Updated: 2026-08-30 11:22 ET
 
 ## Contents
 
@@ -24,7 +24,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Active review round: `critical-reviews/20260830-102227.md` is closed in commit `b959697` after one low and seven medium browser, temporal, lifecycle, supervision, boundedness, recovery, cooldown, and object-time findings were repaired and independently cleared.
 - Latest checkpoint: `progress/20260830-105105.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 9 record earlier committed closures, and post 10 records the clean-commit standalone/runtime release closure.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 10 record earlier committed closures, and post 11 records the independently cleared runtime, temporal, and recovery closure.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -586,6 +586,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Clean commit `d83e4009f72375f94eaf7e79bfc654384c72d822` emits a commit-qualified checksum manifest covering that sdist, wheel, and constraints artifact; Murmuration topic 40 post 10 records the closure under exact model provenance.
 - Fresh review `critical-reviews/20260830-102227.md` closes exact browser capability edges, final parent-intent expiry, runtime task ownership, canonical-ingestion outage/recovery, bounded malformed-action cleanup, malformed attempt history, store-owned cooldown time, and earlier first-observation ordering.
 - Final isolated gates pass at 614/8 on Windows and 616/6 on Ubuntu/WSL with 90.25%/76.57%/86.93% and 87.59%/75.31%/84.61% statement/branch-only/combined coverage.
+- Murmuration topic 40 post 11 records commits `b959697` and `ff03b47` plus the clean `ff03b47` checksum manifest under exact `openai/gpt-5.6-sol` provenance.
 
 ## Risks / watch list
 
