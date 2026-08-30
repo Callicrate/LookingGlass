@@ -1392,6 +1392,55 @@ async def test_coordinator_failure_is_durable_and_recovers_automatically(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_background_runtime_yields_between_bounded_local_batches(tmp_path: Path) -> None:
+    runtime = build_runtime(
+        settings(tmp_path, worker_poll_seconds=0.05),
+        runner=FakeCliRunner(b"[]"),
+    )
+
+    class BusyCoordinator:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.done = asyncio.Event()
+
+        async def run_once(self) -> object | None:
+            self.calls += 1
+            if self.calls >= 250:
+                self.done.set()
+                return None
+            return object()
+
+    coordinator = BusyCoordinator()
+    runtime.coordinator = coordinator  # type: ignore[assignment]
+    first_observed_call: list[int] = []
+
+    async def observe_progress() -> None:
+        while coordinator.calls == 0:
+            await asyncio.sleep(0)
+        first_observed_call.append(coordinator.calls)
+
+    observer = asyncio.create_task(observe_progress())
+    await runtime.start()
+    await asyncio.wait_for(coordinator.done.wait(), timeout=1)
+    await observer
+
+    assert first_observed_call[0] <= 100
+    await runtime.stop()
+
+
+@pytest.mark.anyio
+async def test_runtime_consumes_a_preexisting_wake_without_losing_it(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    runtime._wake_event = asyncio.Event()
+    runtime.wake()
+
+    await asyncio.wait_for(runtime._wait_for_activity(60), timeout=0.1)
+
+    assert not runtime._wake_event.is_set()
+    runtime.store.close()
+
+
+@pytest.mark.anyio
 async def test_worker_startup_retries_with_one_event_and_clears_dashboard_error(
     tmp_path: Path,
 ) -> None:

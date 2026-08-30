@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -1109,9 +1109,14 @@ class ApplicationRuntime:
     async def _wait_for_activity(self, timeout: float) -> None:
         if self._wake_event is None:
             raise RuntimeError("runtime was not started")
-        self._wake_event.clear()
-        with suppress(TimeoutError):
+        if self._wake_event.is_set():
+            self._wake_event.clear()
+            return
+        try:
             await asyncio.wait_for(self._wake_event.wait(), timeout=timeout)
+        except TimeoutError:
+            return
+        self._wake_event.clear()
 
     async def _run_background(self) -> None:
         if self._stop_event is None or self._wake_event is None:
@@ -1137,6 +1142,7 @@ class ApplicationRuntime:
                 await self._wait_for_activity(self._retry_delay("coordinator"))
                 continue
             self._record_component_recovery("coordinator")
+            await asyncio.sleep(0)
             try:
                 for _ in range(100):
                     if not await self.worker.run_once():
@@ -1148,6 +1154,7 @@ class ApplicationRuntime:
                 await self._wait_for_activity(self._retry_delay("worker"))
                 continue
             self._record_component_recovery("worker")
+            await asyncio.sleep(0)
             if worked:
                 continue
             await self._wait_for_activity(self.settings.app.worker_poll_seconds)
