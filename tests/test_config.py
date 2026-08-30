@@ -7,6 +7,7 @@ from async_api_view.config import (
     ConfigError,
     DatabricksSystemSettings,
     ProjectSettings,
+    load_app_settings,
     load_settings,
 )
 
@@ -42,6 +43,44 @@ workspace_root = "/Shared"
     assert settings.databricks_systems[0].profile == "TEST_PROFILE"
     assert settings.databricks_systems[0].workspace_root == "/Shared"
     assert settings.databricks_systems[0].authority_fingerprint == "0" * 64
+
+
+def test_app_only_loader_ignores_remote_semantics_but_keeps_local_validation(
+    tmp_path: Path,
+) -> None:
+    path = write_config(
+        tmp_path,
+        """
+[app]
+database_path = "data/state.sqlite3"
+
+[[databricks]]
+future_remote_setting = "opaque"
+""",
+    )
+
+    app = load_app_settings(path)
+
+    assert app.database_path == (tmp_path / "data/state.sqlite3").resolve()
+    with pytest.raises(ConfigError, match="unknown databricks"):
+        load_settings(path)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '[app]\nport = "not-an-integer"\n',
+        '[unknown]\ndatabase_path = "state.sqlite3"\n',
+    ],
+)
+def test_app_only_loader_rejects_invalid_local_or_top_level_settings(
+    tmp_path: Path,
+    content: str,
+) -> None:
+    path = write_config(tmp_path, content)
+
+    with pytest.raises(ConfigError):
+        load_app_settings(path)
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "127.0.0.2", "192.168.1.25", "::1", "example.com"])

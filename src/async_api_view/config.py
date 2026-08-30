@@ -226,8 +226,7 @@ def validate_authority_fingerprint(value: object, field_name: str) -> str:
     return fingerprint
 
 
-def load_settings(path: Path) -> ProjectSettings:
-    """Load a bounded TOML file without accepting secrets or remote command data."""
+def _load_config_document(path: Path) -> tuple[Path, dict[str, Any]]:
     config_path = path.resolve(strict=True)
     if config_path.stat().st_size > MAX_CONFIG_BYTES:
         raise ConfigError(f"configuration exceeds {MAX_CONFIG_BYTES} bytes")
@@ -241,6 +240,11 @@ def load_settings(path: Path) -> ProjectSettings:
     unknown_top_level = set(raw) - allowed_top_level
     if unknown_top_level:
         raise ConfigError(f"unknown top-level settings: {sorted(unknown_top_level)}")
+    return config_path, raw
+
+
+def _app_settings_from_document(config_path: Path, raw: dict[str, Any]) -> AppSettings:
+    """Validate the local process and database settings from one parsed document."""
 
     app_raw = _mapping(raw.get("app", {}), "app")
     allowed_app = {
@@ -261,7 +265,7 @@ def load_settings(path: Path) -> ProjectSettings:
     if not database_path.is_absolute():
         database_path = config_path.parent / database_path
 
-    app = AppSettings(
+    return AppSettings(
         database_path=Path(os.path.abspath(database_path)),
         host=_loopback_host(app_raw.get("host", "127.0.0.1")),
         port=_positive_int(app_raw.get("port", 8765), "app.port", maximum=65535),
@@ -282,6 +286,20 @@ def load_settings(path: Path) -> ProjectSettings:
             maximum=64 * 1024 * 1024,
         ),
     )
+
+
+def load_app_settings(path: Path) -> AppSettings:
+    """Load only bounded local settings for recovery and authority operations."""
+
+    config_path, raw = _load_config_document(path)
+    return _app_settings_from_document(config_path, raw)
+
+
+def load_settings(path: Path) -> ProjectSettings:
+    """Load a bounded TOML file without accepting secrets or remote command data."""
+
+    config_path, raw = _load_config_document(path)
+    app = _app_settings_from_document(config_path, raw)
 
     databricks_raw = raw.get("databricks", [])
     if not isinstance(databricks_raw, list):

@@ -18,7 +18,13 @@ import uvicorn
 from async_api_view.adapters import CliRunner
 from async_api_view.adapters.databricks import databricks_profile_authority_fingerprint
 from async_api_view.composition import ApplicationRuntime, build_runtime
-from async_api_view.config import ConfigError, ProjectSettings, load_settings
+from async_api_view.config import (
+    AppSettings,
+    ConfigError,
+    ProjectSettings,
+    load_app_settings,
+    load_settings,
+)
 from async_api_view.local_files import ExclusiveFileLock, absolute_local_path
 from async_api_view.storage import SQLiteStore, backup_sqlite_database
 
@@ -149,6 +155,13 @@ def _load(path: Path) -> ProjectSettings:
         raise ConfigError(f"could not load {path}: {exc}") from exc
 
 
+def _load_app(path: Path) -> AppSettings:
+    try:
+        return load_app_settings(path)
+    except (ConfigError, FileNotFoundError, OSError) as exc:
+        raise ConfigError(f"could not load {path}: {exc}") from exc
+
+
 def _initialize(settings: ProjectSettings) -> None:
     runtime = build_runtime(settings)
     try:
@@ -197,10 +210,10 @@ async def _doctor(settings: ProjectSettings) -> None:
     )
 
 
-def _authority_list(settings: ProjectSettings) -> None:
-    if not os.path.lexists(settings.app.database_path):
+def _authority_list(settings: AppSettings) -> None:
+    if not os.path.lexists(settings.database_path):
         raise RuntimeError("authority inventory requires an initialized Rookery database")
-    with SQLiteStore(settings.app.database_path) as store:
+    with SQLiteStore(settings.database_path) as store:
         for authority in store.list_authorities():
             fingerprint = (
                 authority.authority_fingerprint[:12]
@@ -223,14 +236,14 @@ def _authority_list(settings: ProjectSettings) -> None:
 
 
 def _set_authority_retired(
-    settings: ProjectSettings,
+    settings: AppSettings,
     *,
     system_id: str,
     retired: bool,
 ) -> None:
-    if not os.path.lexists(settings.app.database_path):
+    if not os.path.lexists(settings.database_path):
         raise RuntimeError("authority retirement requires an initialized Rookery database")
-    with SQLiteStore(settings.app.database_path) as store:
+    with SQLiteStore(settings.database_path) as store:
         store.set_authority_retired(system_id, retired=retired)
     logger.info(
         "Authority %s %s; cached facts were preserved",
@@ -391,19 +404,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "serve":
             _require_browser_activation_output(allow_redirected=args.allow_redirected_activation)
-        settings = _load(args.config)
+        local_only_commands = {
+            "authority-list",
+            "authority-retire",
+            "authority-unretire",
+            "backup",
+        }
+        if args.command in local_only_commands:
+            app_settings = _load_app(args.config)
+        else:
+            settings = _load(args.config)
         if args.command == "init":
             with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
                 _initialize(settings)
         elif args.command == "doctor":
             asyncio.run(_doctor(settings))
         elif args.command == "authority-list":
-            with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
-                _authority_list(settings)
+            with ExclusiveFileLock(_serve_lock_path(app_settings.database_path)):
+                _authority_list(app_settings)
         elif args.command in {"authority-retire", "authority-unretire"}:
-            with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
+            with ExclusiveFileLock(_serve_lock_path(app_settings.database_path)):
                 _set_authority_retired(
-                    settings,
+                    app_settings,
                     system_id=args.system_id,
                     retired=args.command == "authority-retire",
                 )
@@ -422,7 +444,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 3
         elif args.command == "backup":
-            destination = backup_sqlite_database(settings.app.database_path, args.output)
+            destination = backup_sqlite_database(app_settings.database_path, args.output)
             logger.info("Created consistent SQLite backup at %s", destination)
         elif args.command == "serve":
             listeners = _reserve_loopback_sockets(

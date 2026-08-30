@@ -662,6 +662,73 @@ workspace_root = "/"
         )
 
 
+def test_local_recovery_commands_survive_invalid_remote_configuration(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database = tmp_path / "private" / "state.sqlite3"
+    config = tmp_path / "config.toml"
+    backup = tmp_path / "backups" / "recovery.sqlite3"
+    config.write_text(
+        f"""
+[app]
+database_path = "{database.as_posix()}"
+
+[[databricks]]
+id = "workspace"
+name = "workspace"
+profile = "PROFILE"
+authority_fingerprint = "{"1" * 64}"
+workspace_root = "/"
+""",
+        encoding="utf-8",
+    )
+    assert cli.main(["--config", str(config), "init"]) == 0
+    with sqlite3.connect(database) as connection:
+        system_id = connection.execute("SELECT system_id FROM systems").fetchone()[0]
+
+    config.write_text(
+        f"""
+[app]
+database_path = "{database.as_posix()}"
+
+[[databricks]]
+name = "semantically-invalid"
+""",
+        encoding="utf-8",
+    )
+    caplog.set_level("INFO")
+
+    assert cli.main(["--config", str(config), "backup", "--output", str(backup)]) == 0
+    assert cli.main(["--config", str(config), "authority-list"]) == 0
+    assert system_id in caplog.text
+    assert cli.main(["--config", str(config), "authority-retire", "--system-id", system_id]) == 0
+    assert cli.main(["--config", str(config), "authority-unretire", "--system-id", system_id]) == 0
+    assert cli.main(["--config", str(config), "init"]) == 2
+
+    with sqlite3.connect(backup) as backup_connection:
+        assert backup_connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert (
+            backup_connection.execute(
+                "SELECT enabled FROM systems WHERE system_id = ?", (system_id,)
+            ).fetchone()[0]
+            == 1
+        )
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "SELECT enabled FROM systems WHERE system_id = ?", (system_id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM retired_system_authorities WHERE system_id = ?", (system_id,)
+            ).fetchone()[0]
+            == 0
+        )
+
+
 def test_serve_refuses_to_disclose_activation_to_redirected_stdout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
