@@ -1224,11 +1224,17 @@ def normalize(
                 UpdateMode.PATCH,
                 FieldCoverage.PARTIAL,
                 {
+                    "collection_completeness": CollectionCoverage.UNKNOWN.value,
                     "namespace": "databricks.workspace",
                     "schema_version": "1",
                     "member_count": len(children),
                 },
-                ("namespace", "schema_version", "member_count"),
+                (
+                    "collection_completeness",
+                    "namespace",
+                    "schema_version",
+                    "member_count",
+                ),
                 _scopes(action, "membership"),
             )
         )

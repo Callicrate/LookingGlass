@@ -770,6 +770,11 @@ def test_fixture_normalization_is_deterministic_and_metadata_only(
         )
         assert first.batch.coverage[0].completeness is expected_coverage
         assert first.batch.coverage[0].absence_authority == ()
+        if capability == "databricks.workspace.children.read":
+            membership = next(
+                item for item in first.batch.facet_observations if item.facet == "membership"
+            )
+            assert membership.payload["collection_completeness"] == "unknown"
     assert "storage_location" not in str(first.batch.to_dict())
 
 

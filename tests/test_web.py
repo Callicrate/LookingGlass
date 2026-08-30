@@ -662,6 +662,17 @@ def test_ready_dashboard_keeps_stale_cached_facts_and_activity_visible() -> None
     assert "timeout" in response.text
 
 
+def test_object_containment_is_labeled_as_last_observed_incomplete_evidence() -> None:
+    response = client_for(FakeBackend(object_view=ready_object_detail())).get(
+        f"/objects/{DETAIL_ID}"
+    )
+
+    assert response.status_code == 200
+    assert "Last-observed children" in response.text
+    assert "last-positive cached evidence" in response.text
+    assert "not a complete or live remote listing" in response.text
+
+
 def test_dashboard_exposes_readable_linked_fact_provenance() -> None:
     response = client_for(FakeBackend(dashboard_view=ready_dashboard())).get("/")
 
