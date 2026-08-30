@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 05:18 ET
+Updated: 2026-08-30 05:28 ET
 
 ## Contents
 
@@ -22,7 +22,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: all findings in `critical-reviews/20260830-044240.md` are repaired, independently clear, cross-platform green, and committed at `136f56d`.
+- Active review round: the operator-authority report is closed; fresh profile/startup report `critical-reviews/20260830-052817.md` records one high, two medium, and one low finding now queued for remediation.
 - Latest checkpoint: `progress/20260830-051546.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the latest operator-authority/retirement evidence is verified at topic 40, post 5 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -56,6 +56,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
 - [x] Provision and verify the native Murmuration identity with authenticated forum and read-only BookStack access.
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
+- [ ] Pin each Databricks child to the exact verified profile snapshot.
+- [ ] Stop materializing full canonical recovery queues at startup.
+- [ ] Align web query validation with canonical storage grammar.
+- [ ] Correct name-prefix empty-state guidance.
+- [ ] Benchmark/document migration-0018 offline upgrade resource envelopes.
 - [x] Attribute every visible fact/action/alert/refresh to one unique authority.
 - [x] Distinguish historical/paused cache from unsupported capability.
 - [x] Reject placeholder authority before durable state creation.
@@ -535,6 +540,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The real store is now migration `0020_retired_authorities`; pre-0020 backup and live database are `ROOK`, integrity `ok`, and foreign-key clean. Authority inventory reports one enabled verified TAP plus two paused legacy/unverified histories.
 - Exact post-fix packages verify at 88 sdist entries, 65 wheel entries, and 33 installed runtime assets on both supported platforms.
 - The 05:18 Murmuration Tend pass published the committed operator-authority closure idempotently as topic 40, post 5 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
+- Fresh review `critical-reviews/20260830-052817.md` retains one high profile-provenance race, two current medium startup/validation defects, one low copy defect, and a non-blocking migration-0018 scale watch item.
 
 ## Risks / watch list
 
@@ -543,6 +549,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
 - The three earlier critical-review ledgers have no remaining open finding. Live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
 - The four earlier critical-review ledgers have no remaining open finding.
-- All five critical-review ledgers have no remaining open finding.
+- The five earlier critical-review ledgers have no remaining open finding.
+- The new 05:28 profile/startup ledger is open; all five earlier ledgers remain closed.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
