@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 02:06 ET
+Updated: 2026-08-30 02:45 ET
 
 ## Contents
 
@@ -17,12 +17,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 493 tests passed with 8 Windows platform skips and 495 tests passed with 6 Ubuntu/WSL platform skips; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and branch coverage pass at 88%/87% respectively.
-- Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
+- Latest checks: 509 tests passed with 8 Windows platform skips and 511 tests passed with 6 Ubuntu/WSL platform skips; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and explicit statement/branch/combined coverage floors pass on both platforms.
+- Coverage: Windows 91.49% statements / 77.57% branch-only / 88.16% combined; Ubuntu/WSL 89.82% / 76.99% / 86.75%.
+- Runtime surface: 7 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: the prior two reports are repaired and cleared; fresh first-look report `critical-reviews/20260830-020602.md` records eight medium recovery, release-evidence, availability, and operator-truth findings now queued for remediation.
-- Latest checkpoint: `progress/20260830-014813.md`.
+- Active review round: all eight findings in `critical-reviews/20260830-020602.md` are implemented and cross-platform green; the exact-sdist follow-up is the only remaining independent closure check.
+- Latest checkpoint: `progress/20260830-024554.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the recovery remediation follow-up is verified at topic 40, post 2 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -55,14 +56,14 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
 - [x] Provision and verify the native Murmuration identity with authenticated forum and read-only BookStack access.
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
-- [ ] Quarantine malformed state-dependent lease/retry timestamps without wedging durable work.
-- [ ] Bound SQLite event-loop contention and yield between background work batches.
-- [ ] Prevent unconstrained project builds before the hash-constrained CI release build.
-- [ ] Bind every packaged module, metadata record, and sdist-derived wheel to reviewed source bytes.
-- [ ] Report and enforce statement, branch-only, and combined coverage honestly.
-- [ ] Label unknown collection completeness and cached containment without implying absence authority.
-- [ ] Make the architecture contract available to standalone wheel users.
-- [ ] Retain each CI-verified archive pair as an exact workflow artifact.
+- [x] Quarantine malformed state-dependent lease/retry timestamps without wedging durable work.
+- [x] Bound SQLite event-loop contention and yield between background work batches.
+- [x] Prevent unconstrained project builds before the hash-constrained CI release build.
+- [x] Bind every packaged module, metadata record, and sdist-derived wheel to reviewed source bytes.
+- [x] Report and enforce statement, branch-only, and combined coverage honestly.
+- [x] Label unknown collection completeness and cached containment without implying absence authority.
+- [x] Make the architecture contract available to standalone wheel users.
+- [x] Retain each CI-verified archive pair as an exact workflow artifact.
 - [x] Remediate the high IPv6 loopback activation-takeover finding.
 - [x] Remediate foreign-database mutation ordering and owner-only database permissions.
 - [x] Strengthen isolated-wheel verification against the locked runtime graph.
@@ -500,12 +501,15 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Exact-current verification passes at 493/8 on Windows and 495/6 on Ubuntu/WSL; current archives are 85 sdist entries, 62 wheel entries, and 30 non-code runtime assets. Repeated Windows SHA-256 values are `34B3BFEF062FDC4B3C7D4CAC44814685AE643FDD6426F8A4E34E206F53640EEE` and `5A9067113C46D9679934CED7F8B267542110217D2EF29DFD2390A3134DA14B56`.
 - The 01:51 Murmuration Tend pass reconfirmed the native identity, project/forum bindings, owner profile, and authenticated forum health; topic 40 contains both the initial remediation report and its idempotent recovery follow-up as posts 1 and 2 by `project-a3c5f71ec6d12b`.
 - Fresh first-look review `critical-reviews/20260830-020602.md` inventories the live CLI/web/package/recovery surface and retains eight medium findings after independent adjudication; the current archives themselves are intact, and a constrained wheel rebuild from the sdist is already byte-identical to the direct wheel.
+- Recovery now quarantines malformed state-dependent timing at store reopen, runtime SQLite contention is bounded after startup, background batches yield, and pre-set wake events cannot be lost; focused independent review found no blocking defect.
+- Release verification now checks an exact Git-aware sdist manifest, every included source byte, unsafe archive members, the exact wheel package tree, metadata/dependencies/README, RECORD digests, installed assets, and byte-identical constrained sdist reconstruction.
+- Exact-current Windows and Ubuntu/WSL gates pass at 509/8 and 511/6; the honest branch-only percentages are 77.57% and 76.99%, not the prior combined percentages mislabeled as branch coverage.
 
 ## Risks / watch list
 
 - The architecture document describes deferred capabilities beyond the implemented slice; documentation must keep current behavior distinct from roadmap behavior.
 - Local browser/debug data is present under `.local/` and must remain untracked.
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
-- The first two critical-review ledgers have no remaining open finding; the fresh 02:06 ledger has eight medium findings under active remediation. Live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
+- The first two critical-review ledgers have no remaining open finding; all eight findings in the fresh 02:06 ledger are implemented and green, with final exact-sdist reviewer closure pending. Live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
