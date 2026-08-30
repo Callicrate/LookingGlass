@@ -426,28 +426,37 @@ class SQLiteWebBackend:
     ) -> tuple[RefreshOption, ...]:
         options: list[RefreshOption] = []
         refresh_available, refresh_error = refresh_status or self._refresh_status()
+        malformed_authority_systems = {
+            system.system_id
+            for system in systems
+            if self._store.presentation_authority_is_malformed(system.system_id)
+        }
         bindings_by_system = {
             system.system_id: tuple(
                 binding
-                for binding in self._store.list_connection_bindings(system_id=system.system_id)
+                for binding in self._store.list_readable_connection_bindings(
+                    system_id=system.system_id
+                )
                 if binding.enabled
             )
             for system in systems
-            if system.enabled
+            if system.enabled and system.system_id not in malformed_authority_systems
         }
         capabilities_by_system = {
             system.system_id: {
                 capability.capability_key: capability
-                for capability in self._store.list_capability_bindings(system_id=system.system_id)
+                for capability in self._store.list_readable_capability_bindings(
+                    system_id=system.system_id
+                )
                 if capability.enabled
                 and capability.connection_binding_id
                 in {binding.binding_id for binding in bindings_by_system.get(system.system_id, ())}
             }
             for system in systems
-            if system.enabled
+            if system.enabled and system.system_id not in malformed_authority_systems
         }
 
-        for configured in self._store.list_configured_scopes():
+        for configured in self._store.list_readable_configured_scopes():
             capabilities = capabilities_by_system.get(configured.system_id, {})
             key = (
                 "databricks.workspace.children.read"
@@ -674,8 +683,13 @@ class SQLiteWebBackend:
                 if last
                 else None
             )
-            scopes = self._store.list_configured_scopes(system_id=system.system_id)
-            bindings = self._store.list_connection_bindings(system_id=system.system_id)
+            identity_malformed = self._store.presentation_authority_is_malformed(system.system_id)
+            scopes = self._store.list_readable_configured_scopes(system_id=system.system_id)
+            bindings = (
+                ()
+                if identity_malformed
+                else self._store.list_readable_connection_bindings(system_id=system.system_id)
+            )
             binding_settings = bindings[0].non_secret_settings if len(bindings) == 1 else {}
             fingerprint = binding_settings.get("authority_fingerprint")
             authority_label = (
@@ -685,7 +699,11 @@ class SQLiteWebBackend:
                 if fingerprint == "0" * 64
                 else "Legacy / unverified"
             )
-            identity = self._store.get_configured_identity_for_system(system.system_id)
+            identity = (
+                None
+                if identity_malformed
+                else self._store.get_readable_configured_identity_for_system(system.system_id)
+            )
             retired = self._store.is_system_authority_retired(system.system_id)
             system_views.append(
                 SystemView(
@@ -1025,7 +1043,7 @@ class SQLiteWebBackend:
         systems = self._store.list_readable_systems()
         objects: tuple[RemoteObject, ...] = ()
         if request.target_kind == TargetKind.OBJECT.value:
-            remote_object = self._store.get_object_sync(request.target_id)
+            remote_object = self._store.get_readable_object_sync(request.target_id)
             if remote_object is None:
                 return False
             objects = (remote_object,)
@@ -1054,7 +1072,7 @@ class SQLiteWebBackend:
             raise ValueError("refresh selection is not registered")
         target_kind = TargetKind(request.target_kind)
         if target_kind is TargetKind.CONFIGURED_SCOPE:
-            target = self._store.get_configured_scope(request.target_id)
+            target = self._store.get_readable_configured_scope(request.target_id)
             if target is None:
                 raise ValueError("configured scope is unavailable")
             object_type = target.object_type

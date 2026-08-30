@@ -68,11 +68,27 @@ def _intent(
 
 def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     for view in (
+        "readable_action_activity_recency",
+        "readable_configured_system_identities",
+        "readable_configured_scopes",
+        "readable_capability_bindings",
+        "readable_connection_bindings",
+        "readable_relationships",
+    ):
+        store._connection.execute(f'DROP VIEW "{view}"')
+    store._connection.execute("DROP INDEX ix_adapter_actions_readable_recency")
+    for trigger in (
+        "populate_relationship_read_index",
+        "update_relationship_read_index",
+        "delete_relationship_read_index",
+    ):
+        store._connection.execute(f'DROP TRIGGER "{trigger}"')
+    store._connection.execute("DROP TABLE relationship_read_index")
+    for view in (
         "readable_operational_events",
         "readable_facet_action_status",
         "readable_action_attempts",
         "readable_action_activity",
-        "readable_relationships",
         "readable_facets",
         "readable_remote_objects",
         "readable_systems",
@@ -86,7 +102,10 @@ def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     ):
         store._connection.execute(f'DROP TRIGGER "{trigger}"')
     store._connection.execute(
-        "DELETE FROM schema_migrations WHERE version = '0024_corruption_containment'"
+        """
+        DELETE FROM schema_migrations
+        WHERE version IN ('0024_corruption_containment', '0025_authority_read_plans')
+        """
     )
 
 

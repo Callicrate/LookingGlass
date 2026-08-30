@@ -60,4 +60,7 @@ src = ["src", "tests"]
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "S603", "PERF"]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "S603", "S608", "PERF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["S608"]

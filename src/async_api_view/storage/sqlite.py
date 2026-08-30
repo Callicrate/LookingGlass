@@ -167,6 +167,8 @@ _RUNTIME_EVENT_TYPES = frozenset(
 )
 _RUNTIME_SUMMARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:;()_-]{0,511}$")
 _CONFIG_ID = re.compile(r"\A[a-z0-9._-]{1,128}\Z")
+_AUTHORITY_FINGERPRINT = re.compile(r"\A[0-9a-f]{64}\Z")
+_AUTHORITY_KEY = re.compile(r"\Adatabricks-host-v1:[0-9a-f]{64}\Z")
 _ALERT_SEVERITIES = frozenset({"info", "warning", "error", "critical"})
 _COLLECTION_COVERAGE_RANK = {
     CollectionCoverage.UNKNOWN: 0,
@@ -785,6 +787,158 @@ def _stored_json_object_is_valid(value: object) -> int:
     return int(isinstance(parsed, dict))
 
 
+def _stored_json_array_is_valid(value: object) -> int:
+    if not isinstance(value, str):
+        return 0
+    try:
+        if len(value.encode("utf-8")) > _MAX_JSON_BYTES:
+            return 0
+        parsed = _json_value(value)
+    except (TypeError, ValueError, UnicodeError, json.JSONDecodeError):
+        return 0
+    return int(isinstance(parsed, list))
+
+
+def _stored_binding_settings_is_valid(value: object) -> int:
+    if not isinstance(value, str):
+        return 0
+    try:
+        parsed = _json_value(value)
+        if not isinstance(parsed, dict):
+            return 0
+        fingerprint = parsed.get("authority_fingerprint")
+        profile = parsed.get("profile")
+        workspace_root = parsed.get("workspace_root")
+        if not isinstance(profile, str) or not isinstance(workspace_root, str):
+            return 0
+        require_text(profile, "stored profile", max_length=128)
+        require_text(workspace_root, "stored workspace root", max_length=4096)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return 0
+    if (
+        not isinstance(fingerprint, str)
+        or _AUTHORITY_FINGERPRINT.fullmatch(fingerprint) is None
+        or fingerprint == "0" * 64
+    ):
+        return 0
+    content_capture = parsed.get("content_capture_enabled")
+    if content_capture is not None and not isinstance(content_capture, bool):
+        return 0
+    for name in ("content_max_bytes", "content_retention_days"):
+        setting = parsed.get(name)
+        if setting is not None and (
+            isinstance(setting, bool) or not isinstance(setting, int) or setting <= 0
+        ):
+            return 0
+    return 1
+
+
+def _stored_config_id_is_valid(value: object) -> int:
+    return int(
+        isinstance(value, str)
+        and value == value.casefold()
+        and _CONFIG_ID.fullmatch(value) is not None
+    )
+
+
+def _stored_authority_key_is_valid(value: object) -> int:
+    return int(isinstance(value, str) and _AUTHORITY_KEY.fullmatch(value) is not None)
+
+
+def _stored_identity_matches_binding(authority_key: object, settings_json: object) -> int:
+    if not isinstance(authority_key, str) or not isinstance(settings_json, str):
+        return 0
+    try:
+        settings = _json_value(settings_json)
+        if not isinstance(settings, dict):
+            return 0
+        fingerprint = settings.get("authority_fingerprint")
+        workspace_root = settings.get("workspace_root")
+        if not isinstance(fingerprint, str) or not isinstance(workspace_root, str):
+            return 0
+        material = json.dumps(
+            [fingerprint, workspace_root],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode()
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return 0
+    expected = f"databricks-host-v1:{hashlib.sha256(material).hexdigest()}"
+    return int(authority_key == expected)
+
+
+def _stored_capability_is_valid(
+    capability_binding_id: object,
+    connection_binding_id: object,
+    capability_key: object,
+    capability_version: object,
+    operation_class: object,
+    target_kinds_json: object,
+    produced_facets_json: object,
+    enabled: object,
+    selection_priority: object,
+    collateral_effects_json: object,
+    mitigations_json: object,
+    coverage_policies_json: object,
+    coverage_policy_initialized: object,
+) -> int:
+    if (
+        not isinstance(capability_binding_id, str)
+        or not isinstance(connection_binding_id, str)
+        or not isinstance(capability_key, str)
+        or not isinstance(capability_version, str)
+        or not isinstance(operation_class, str)
+        or not isinstance(target_kinds_json, str)
+        or not isinstance(produced_facets_json, str)
+        or not isinstance(collateral_effects_json, str)
+        or not isinstance(mitigations_json, str)
+        or not isinstance(coverage_policies_json, str)
+    ):
+        return 0
+    if (
+        isinstance(enabled, bool)
+        or not isinstance(enabled, int)
+        or enabled not in {0, 1}
+        or isinstance(selection_priority, bool)
+        or not isinstance(selection_priority, int)
+        or coverage_policy_initialized != 1
+    ):
+        return 0
+    try:
+        target_kinds = _json_value(target_kinds_json)
+        produced_facets = _json_value(produced_facets_json)
+        collateral_effects = _json_value(collateral_effects_json)
+        mitigations = _json_value(mitigations_json)
+        coverage_policies = _json_value(coverage_policies_json)
+        if (
+            not isinstance(target_kinds, list)
+            or not isinstance(produced_facets, list)
+            or not isinstance(collateral_effects, list)
+            or not isinstance(mitigations, list)
+            or not isinstance(coverage_policies, list)
+        ):
+            return 0
+        capability = CapabilityBinding(
+            capability_binding_id=capability_binding_id,
+            connection_binding_id=connection_binding_id,
+            capability_key=capability_key,
+            capability_version=capability_version,
+            operation_class=OperationClass(operation_class),
+            target_kinds=tuple(TargetKind(item) for item in target_kinds),
+            produced_facets=tuple(produced_facets),
+            enabled=bool(enabled),
+            selection_priority=selection_priority,
+            collateral_effects=tuple(collateral_effects),
+            mitigations=tuple(mitigations),
+            coverage_policies=tuple(
+                _coverage_policy_from_value(value) for value in coverage_policies
+            ),
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return 0
+    return int(capability.coverage_policies is not None)
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -821,6 +975,21 @@ def _object_search_pattern(query: str) -> str | None:
     require_text(query, "object_query", max_length=128)
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"{escaped}%"
+
+
+def _prefix_upper_bound(value: str) -> str | None:
+    codepoints = [ord(character) for character in value]
+    for index in range(len(codepoints) - 1, -1, -1):
+        if codepoints[index] < 0x10FFFF:
+            codepoints[index] += 1
+            return "".join(chr(codepoint) for codepoint in codepoints[: index + 1])
+    return None
+
+
+def _ascii_nocase_prefix(value: str) -> str:
+    return value.translate(
+        str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+    )
 
 
 def _json_text(value: object, *, field_name: str) -> str:
@@ -1055,6 +1224,36 @@ class SQLiteStore:
             "rookery_read_is_json_object",
             1,
             tracked_read_validator(_stored_json_object_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_is_json_array",
+            1,
+            tracked_read_validator(_stored_json_array_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_is_binding_settings",
+            1,
+            tracked_read_validator(_stored_binding_settings_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_is_config_id",
+            1,
+            tracked_read_validator(_stored_config_id_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_is_authority_key",
+            1,
+            tracked_read_validator(_stored_authority_key_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_identity_matches_binding",
+            2,
+            tracked_read_validator(_stored_identity_matches_binding),
+        )
+        self._connection.create_function(
+            "rookery_read_is_capability",
+            13,
+            tracked_read_validator(_stored_capability_is_valid),
         )
         self._connection.create_function(
             "rookery_read_is_text",
@@ -1781,6 +1980,77 @@ class SQLiteStore:
             ).fetchone()
         return (row["config_id"], row["authority_key"]) if row is not None else None
 
+    def get_readable_configured_identity_for_system(self, system_id: str) -> tuple[str, str] | None:
+        system_id = require_uuid(system_id, "system_id")
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT config_id, authority_key
+                FROM readable_configured_system_identities
+                WHERE system_id = ?
+                """,
+                (system_id,),
+            ).fetchone()
+        return (row["config_id"], row["authority_key"]) if row is not None else None
+
+    def configured_identity_is_malformed(self, system_id: str) -> bool:
+        system_id = require_uuid(system_id, "system_id")
+        with self._lock:
+            malformed = self._connection.execute(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM configured_system_identities AS identity
+                    WHERE identity.system_id = ?
+                ) AND NOT EXISTS(
+                    SELECT 1 FROM readable_configured_system_identities AS identity
+                    WHERE identity.system_id = ?
+                )
+                """,
+                (system_id, system_id),
+            ).fetchone()[0]
+        if malformed:
+            self._presentation_corruption_detected = True
+        return bool(malformed)
+
+    def presentation_authority_is_malformed(self, system_id: str) -> bool:
+        system_id = require_uuid(system_id, "system_id")
+        with self._lock:
+            malformed = self._connection.execute(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM connection_bindings AS binding
+                    WHERE binding.system_id = ? AND NOT EXISTS(
+                        SELECT 1 FROM readable_connection_bindings AS readable
+                        WHERE readable.binding_id = binding.binding_id
+                    )
+                ) OR EXISTS(
+                    SELECT 1 FROM capability_bindings AS capability
+                    JOIN connection_bindings AS binding
+                      ON binding.binding_id = capability.connection_binding_id
+                    WHERE binding.system_id = ? AND NOT EXISTS(
+                        SELECT 1 FROM readable_capability_bindings AS readable
+                        WHERE readable.capability_binding_id = capability.capability_binding_id
+                    )
+                ) OR EXISTS(
+                    SELECT 1 FROM configured_scopes AS scope
+                    WHERE scope.system_id = ? AND NOT EXISTS(
+                        SELECT 1 FROM readable_configured_scopes AS readable
+                        WHERE readable.scope_id = scope.scope_id
+                    )
+                ) OR EXISTS(
+                    SELECT 1 FROM configured_system_identities AS identity
+                    WHERE identity.system_id = ? AND NOT EXISTS(
+                        SELECT 1 FROM readable_configured_system_identities AS readable
+                        WHERE readable.system_id = identity.system_id
+                    )
+                )
+                """,
+                (system_id,) * 4,
+            ).fetchone()[0]
+        if malformed:
+            self._presentation_corruption_detected = True
+        return malformed
+
     def is_system_authority_retired(self, system_id: str) -> bool:
         system_id = require_uuid(system_id, "system_id")
         with self._lock:
@@ -2340,6 +2610,31 @@ class SQLiteStore:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._configured_scope_from_row(row) for row in rows)
 
+    def list_readable_configured_scopes(
+        self, *, system_id: str | None = None
+    ) -> tuple[ConfiguredScopeRecord, ...]:
+        if system_id is None:
+            statement = "SELECT * FROM readable_configured_scopes ORDER BY display_name, scope_id"
+            parameters: tuple[object, ...] = ()
+        else:
+            statement = (
+                "SELECT * FROM readable_configured_scopes WHERE system_id = ? "
+                "ORDER BY display_name, scope_id"
+            )
+            parameters = (require_uuid(system_id, "system_id"),)
+        with self._lock:
+            rows = self._connection.execute(statement, parameters).fetchall()
+        return tuple(self._configured_scope_from_row(row) for row in rows)
+
+    def get_readable_configured_scope(self, scope_id: str) -> ConfiguredScopeRecord | None:
+        scope_id = require_uuid(scope_id, "scope_id")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM readable_configured_scopes WHERE scope_id = ?",
+                (scope_id,),
+            ).fetchone()
+        return self._configured_scope_from_row(row) if row is not None else None
+
     @staticmethod
     def _configured_scope_from_row(row: sqlite3.Row) -> ConfiguredScopeRecord:
         return ConfiguredScopeRecord(
@@ -2509,30 +2804,75 @@ class SQLiteStore:
         if after_id is not None:
             after_id = require_uuid(after_id, "object cursor ID")
         pattern = _object_search_pattern(query)
-        conditions: list[str] = []
-        parameters: list[object] = []
         if pattern is not None:
-            conditions.append("display_name LIKE ? ESCAPE '\\' COLLATE NOCASE")
-            parameters.append(pattern)
+            lower_bound = _ascii_nocase_prefix(query)
+            upper_bound = _prefix_upper_bound(lower_bound)
             if after_name is not None:
-                conditions.append(
-                    "(display_name COLLATE NOCASE, object_id) > (? COLLATE NOCASE, ?)"
+                with self._lock:
+                    same_name = self._connection.execute(
+                        """
+                        SELECT * FROM readable_remote_objects
+                        WHERE display_name = ? COLLATE NOCASE AND object_id > ?
+                          AND display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                        ORDER BY object_id LIMIT ?
+                        """,
+                        (after_name, after_id, pattern, limit),
+                    ).fetchall()
+                    remaining = limit - len(same_name)
+                    if remaining == 0:
+                        rows = same_name
+                    elif upper_bound is None:
+                        greater_names = self._connection.execute(
+                            """
+                            SELECT * FROM readable_remote_objects
+                            WHERE display_name > ? COLLATE NOCASE
+                              AND display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                            ORDER BY display_name COLLATE NOCASE, object_id LIMIT ?
+                            """,
+                            (after_name, pattern, remaining),
+                        ).fetchall()
+                        rows = (*same_name, *greater_names)
+                    else:
+                        greater_names = self._connection.execute(
+                            """
+                            SELECT * FROM readable_remote_objects
+                            WHERE display_name > ? COLLATE NOCASE
+                              AND display_name < ? COLLATE NOCASE
+                              AND display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                            ORDER BY display_name COLLATE NOCASE, object_id LIMIT ?
+                            """,
+                            (after_name, upper_bound, pattern, remaining),
+                        ).fetchall()
+                        rows = (*same_name, *greater_names)
+                return tuple(self._object_from_row(row) for row in rows)
+            if upper_bound is None:
+                statement = (
+                    "SELECT * FROM readable_remote_objects "
+                    "WHERE display_name >= ? COLLATE NOCASE "
+                    "AND display_name LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                    "ORDER BY display_name COLLATE NOCASE, object_id LIMIT ?"
                 )
-                parameters.extend((after_name, after_id))
-        if after_id is not None and pattern is None:
-            conditions.append("object_id > ?")
-            parameters.append(after_id)
-        statement = "SELECT * FROM readable_remote_objects"
-        if conditions:
-            statement += " WHERE " + " AND ".join(conditions)
-        statement += (
-            " ORDER BY display_name COLLATE NOCASE, object_id LIMIT ?"
-            if pattern is not None
-            else " ORDER BY object_id LIMIT ?"
-        )
-        parameters.append(limit)
+                parameters: tuple[object, ...] = (lower_bound, pattern, limit)
+            else:
+                statement = (
+                    "SELECT * FROM readable_remote_objects "
+                    "WHERE display_name >= ? COLLATE NOCASE "
+                    "AND display_name < ? COLLATE NOCASE "
+                    "AND display_name LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                    "ORDER BY display_name COLLATE NOCASE, object_id LIMIT ?"
+                )
+                parameters = (lower_bound, upper_bound, pattern, limit)
+        else:
+            statement = "SELECT * FROM readable_remote_objects"
+            parameters_list: list[object] = []
+            if after_id is not None:
+                statement += " WHERE object_id > ?"
+                parameters_list.append(after_id)
+            statement += " ORDER BY object_id LIMIT ?"
+            parameters_list.append(limit)
+            parameters = tuple(parameters_list)
         with self._lock:
-            rows = self._connection.execute(statement, tuple(parameters)).fetchall()
+            rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._object_from_row(row) for row in rows)
 
     def _get_facet_row(self, object_id: str, facet: str) -> sqlite3.Row | None:
@@ -2782,7 +3122,25 @@ class SQLiteStore:
             raise ValueError("relationship cursor limit must be between 1 and 101")
         if after_id is not None:
             after_id = require_uuid(after_id, "relationship cursor ID")
+        inner_conditions = [
+            "relationships.subject_id = ?",
+            "relationships.predicate = ?",
+            "relationships.presence = 'present'",
+        ]
+        parameters: list[object] = [subject_id, predicate]
+        if object_type is not None:
+            require_contract_key(object_type, "object_type")
+            inner_conditions.append("relationships.object_type = ?")
+            parameters.append(object_type)
+        if after_id is not None:
+            inner_conditions.append("relationships.object_id > ?")
+            parameters.append(after_id)
         statement = (
+            "WITH relationship_page AS MATERIALIZED ("  # noqa: S608 - fixed SQL fragments
+            "SELECT relationships.* FROM readable_relationships AS relationships WHERE "
+            + " AND ".join(inner_conditions)
+            + " ORDER BY relationships.object_id LIMIT ?"
+            ") "
             "SELECT relationships.relationship_id AS r_relationship_id, "
             "relationships.system_id AS r_system_id, "
             "relationships.subject_id AS r_subject_id, "
@@ -2791,21 +3149,11 @@ class SQLiteStore:
             "relationships.presence AS r_presence, "
             "relationships.observed_at AS r_observed_at, "
             "relationships.supporting_observation_id AS r_supporting_observation_id, "
-            "objects.* FROM readable_relationships AS relationships "
+            "objects.* FROM relationship_page AS relationships "
             "INNER JOIN readable_remote_objects AS objects "
             "ON objects.object_id = relationships.object_id "
-            "WHERE relationships.subject_id = ? AND relationships.predicate = ? "
-            "AND relationships.presence = 'present'"
+            "ORDER BY relationships.object_id"
         )
-        parameters: list[object] = [subject_id, predicate]
-        if object_type is not None:
-            require_contract_key(object_type, "object_type")
-            statement += " AND objects.object_type = ?"
-            parameters.append(object_type)
-        if after_id is not None:
-            statement += " AND relationships.object_id > ?"
-            parameters.append(after_id)
-        statement += " ORDER BY relationships.object_id LIMIT ?"
         parameters.append(limit)
         with self._lock:
             rows = self._connection.execute(statement, tuple(parameters)).fetchall()
@@ -2893,6 +3241,24 @@ class SQLiteStore:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._binding_from_row(row) for row in rows)
 
+    def list_readable_connection_bindings(self, *, system_id: str) -> tuple[ConnectionBinding, ...]:
+        system_id = require_uuid(system_id, "system_id")
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM readable_connection_bindings
+                WHERE system_id = ? ORDER BY binding_id
+                """,
+                (system_id,),
+            ).fetchall()
+        records: list[ConnectionBinding] = []
+        for row in rows:
+            try:
+                records.append(self._binding_from_row(row))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                self._presentation_corruption_detected = True
+        return tuple(records)
+
     def list_capability_bindings(
         self,
         *,
@@ -2935,6 +3301,28 @@ class SQLiteStore:
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._capability_from_row(row) for row in rows)
+
+    def list_readable_capability_bindings(self, *, system_id: str) -> tuple[CapabilityBinding, ...]:
+        system_id = require_uuid(system_id, "system_id")
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT capability.*
+                FROM readable_capability_bindings AS capability
+                JOIN readable_connection_bindings AS binding
+                  ON binding.binding_id = capability.connection_binding_id
+                WHERE binding.system_id = ?
+                ORDER BY capability.capability_key, capability.capability_version
+                """,
+                (system_id,),
+            ).fetchall()
+        records: list[CapabilityBinding] = []
+        for row in rows:
+            try:
+                records.append(self._capability_from_row(row))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                self._presentation_corruption_detected = True
+        return tuple(records)
 
     @staticmethod
     def _capability_from_row(row: sqlite3.Row) -> CapabilityBinding:
@@ -4130,6 +4518,7 @@ class SQLiteStore:
             state=state,
             action_id=action_id,
         )
+        unfiltered = system_id is None and state is None and action_id is None
         conditions: list[str] = []
         parameters: list[object] = []
         if action_id is not None:
@@ -4142,14 +4531,46 @@ class SQLiteStore:
             if state is not None:
                 conditions.append("state = ?")
                 parameters.append(state)
-            if after_created_at is not None:
-                after_action_id = require_uuid(after_action_id, "action cursor ID")  # type: ignore[arg-type]
-                conditions.append(
-                    "(record_created_at < ? OR (record_created_at = ? AND action_id > ?))"
-                )
-                timestamp = _utc_text(require_utc(after_created_at, "action cursor time"))
-                parameters.extend((timestamp, timestamp, after_action_id))
-        statement = "SELECT * FROM readable_action_activity"
+        source = (
+            "SELECT * FROM readable_action_activity_recency"
+            if unfiltered
+            else "SELECT * FROM readable_action_activity"
+        )
+        if after_created_at is not None and action_id is None:
+            after_action_id = require_uuid(after_action_id, "action cursor ID")  # type: ignore[arg-type]
+            timestamp = _utc_text(require_utc(after_created_at, "action cursor time"))
+            same_conditions = (*conditions, "record_created_at = ?", "action_id > ?")
+            same_parameters = (*parameters, timestamp, after_action_id, limit)
+            same_statement = (
+                source
+                + " WHERE "
+                + " AND ".join(same_conditions)
+                + " ORDER BY record_created_at DESC, action_id LIMIT ?"
+            )
+            with self._lock:
+                same_time = self._connection.execute(
+                    same_statement,
+                    same_parameters,
+                ).fetchall()
+                remaining = limit - len(same_time)
+                if remaining == 0:
+                    rows = same_time
+                else:
+                    older_conditions = (*conditions, "record_created_at < ?")
+                    older_parameters = (*parameters, timestamp, remaining)
+                    older_statement = (
+                        source
+                        + " WHERE "
+                        + " AND ".join(older_conditions)
+                        + " ORDER BY record_created_at DESC, action_id LIMIT ?"
+                    )
+                    older = self._connection.execute(
+                        older_statement,
+                        older_parameters,
+                    ).fetchall()
+                    rows = (*same_time, *older)
+            return tuple(self._action_activity_from_row(row) for row in rows)
+        statement = source
         if conditions:
             statement += " WHERE " + " AND ".join(conditions)
         statement += " ORDER BY record_created_at DESC, action_id LIMIT ?"

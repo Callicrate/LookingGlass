@@ -56,11 +56,27 @@ def run(awaitable):
 
 def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     for view in (
+        "readable_action_activity_recency",
+        "readable_configured_system_identities",
+        "readable_configured_scopes",
+        "readable_capability_bindings",
+        "readable_connection_bindings",
+        "readable_relationships",
+    ):
+        store._connection.execute(f'DROP VIEW "{view}"')
+    store._connection.execute("DROP INDEX ix_adapter_actions_readable_recency")
+    for trigger in (
+        "populate_relationship_read_index",
+        "update_relationship_read_index",
+        "delete_relationship_read_index",
+    ):
+        store._connection.execute(f'DROP TRIGGER "{trigger}"')
+    store._connection.execute("DROP TABLE relationship_read_index")
+    for view in (
         "readable_operational_events",
         "readable_facet_action_status",
         "readable_action_attempts",
         "readable_action_activity",
-        "readable_relationships",
         "readable_facets",
         "readable_remote_objects",
         "readable_systems",
@@ -74,7 +90,10 @@ def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     ):
         store._connection.execute(f'DROP TRIGGER "{trigger}"')
     store._connection.execute(
-        "DELETE FROM schema_migrations WHERE version = '0024_corruption_containment'"
+        """
+        DELETE FROM schema_migrations
+        WHERE version IN ('0024_corruption_containment', '0025_authority_read_plans')
+        """
     )
 
 
@@ -116,6 +135,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0022_observation_receipt_order",
             "0023_time_authority",
             "0024_corruption_containment",
+            "0025_authority_read_plans",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -181,7 +201,7 @@ def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_
     with SQLiteStore(path) as store:
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 25
         )
 
 
@@ -196,7 +216,7 @@ def test_new_database_is_migrated_and_marked_before_wal_activation(
         assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 25
         )
         original(store)
 
@@ -491,7 +511,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 25
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -529,7 +549,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 25
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -564,7 +584,7 @@ def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_pa
 
     check = sqlite3.connect(path)
     try:
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 25
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -781,7 +801,7 @@ def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path)
     check = sqlite3.connect(destination)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 25
     finally:
         check.close()
 
@@ -1643,6 +1663,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0022_observation_receipt_order",
         "0023_time_authority",
         "0024_corruption_containment",
+        "0025_authority_read_plans",
     )
     assert versions == (expected,) * workers
 
@@ -1702,6 +1723,146 @@ def test_corruption_containment_migration_canonicalizes_cursor_times(tmp_path) -
 
         assert action_time == expected
         assert event_time == expected
+
+
+def test_readable_view_cursor_plans_remain_bounded_and_indexed(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "readable-plans.sqlite3") as store:
+        action_plan = store._connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT * FROM readable_action_activity_recency
+            ORDER BY record_created_at DESC, action_id LIMIT 21
+            """
+        ).fetchall()
+        object_plan = store._connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT * FROM readable_remote_objects
+            WHERE display_name >= ? COLLATE NOCASE
+              AND display_name < ? COLLATE NOCASE
+              AND display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+            ORDER BY display_name COLLATE NOCASE, object_id LIMIT 21
+            """,
+            ("rare-prefix", "rare-prefiy", "rare-prefix%"),
+        ).fetchall()
+        relationship_plan = store._connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            WITH relationship_page AS MATERIALIZED (
+                SELECT relationships.*
+                FROM readable_relationships AS relationships
+                WHERE relationships.subject_id = ?
+                  AND relationships.predicate = 'contains'
+                  AND relationships.presence = 'present'
+                  AND relationships.object_type = 'file'
+                  AND relationships.object_id > ?
+                ORDER BY relationships.object_id
+                LIMIT 21
+            )
+            SELECT relationships.relationship_id, objects.*
+            FROM relationship_page AS relationships
+            JOIN readable_remote_objects AS objects
+              ON objects.object_id = relationships.object_id
+            ORDER BY relationships.object_id
+            """,
+            (str(uuid4()), str(uuid4())),
+        ).fetchall()
+
+    action_details = [row[3] for row in action_plan]
+    object_details = [row[3] for row in object_plan]
+    relationship_details = [row[3] for row in relationship_plan]
+    assert any("ix_adapter_actions_readable_recency" in detail for detail in action_details)
+    assert not any("TEMP B-TREE" in detail for detail in action_details)
+    assert any("ix_remote_objects_display_cursor" in detail for detail in object_details)
+    assert not any(detail.startswith("SCAN remote_objects") for detail in object_details)
+    assert any("ix_relationships_subject_type_cursor" in detail for detail in relationship_details)
+    assert sum("TEMP B-TREE" in detail for detail in relationship_details) <= 1
+
+
+def test_healthy_readable_relationship_does_not_raise_integrity_warning(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "healthy-readable-relationship.sqlite3") as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        child = store.upsert_object(
+            RemoteObject(
+                object_id=uuid4(),
+                system_id=seeded.system.system_id,
+                object_type="file",
+                object_type_version="1",
+                source_kind="synthetic.file",
+                external_key="/healthy",
+                display_name="healthy",
+                presence=PresenceState.PRESENT,
+                first_seen_at=NOW,
+            )
+        )
+        store._connection.execute(
+            """
+            INSERT INTO relationships (
+                relationship_id, system_id, subject_id, predicate, object_id,
+                presence, observed_at, supporting_observation_id
+            ) VALUES (?, ?, ?, 'contains', ?, 'present', ?, ?)
+            """,
+            (
+                str(uuid4()),
+                seeded.system.system_id,
+                seeded.workspace_root_object_id,
+                child.object_id,
+                NOW.isoformat(),
+                str(uuid4()),
+            ),
+        )
+
+        rows = store.list_related_objects_after_sync(
+            seeded.workspace_root_object_id,
+            after_id=None,
+            limit=21,
+            predicate="contains",
+            object_type="file",
+        )
+
+        assert [row.object.object_id for row in rows] == [child.object_id]
+        assert not store.presentation_corruption_detected
+
+
+def test_nocase_prefix_bounds_and_same_name_cursor_are_lossless(tmp_path) -> None:
+    with SQLiteStore(tmp_path / "prefix-cursor.sqlite3") as store:
+        system = SystemBootstrapService(store).create_system(
+            display_name="local", system_kind="databricks.workspace", now=NOW
+        )
+        for name in ("Zed", "Zed", "Zebra", "zulu", "[bracket"):
+            store.upsert_object(
+                RemoteObject(
+                    object_id=uuid4(),
+                    system_id=system.system_id,
+                    object_type="file",
+                    object_type_version="1",
+                    source_kind="synthetic.file",
+                    external_key=f"/{name}/{uuid4()}",
+                    display_name=name,
+                    presence=PresenceState.PRESENT,
+                    first_seen_at=NOW,
+                )
+            )
+
+        first = store.list_objects_after(
+            after_name=None,
+            after_id=None,
+            limit=2,
+            query="Z",
+        )
+        second = store.list_objects_after(
+            after_name=first[-1].display_name,
+            after_id=first[-1].object_id,
+            limit=10,
+            query="Z",
+        )
+
+        combined = (*first, *second)
+        assert sorted(object.display_name for object in combined) == ["Zebra", "Zed", "Zed", "zulu"]
+        assert len({object.object_id for object in combined}) == 4
+        assert all(object.display_name != "[bracket" for object in combined)
 
 
 def test_configuration_reconciliation_cannot_enable_another_system_kind(tmp_path) -> None:
@@ -1847,6 +2008,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0022_observation_receipt_order",
             "0023_time_authority",
             "0024_corruption_containment",
+            "0025_authority_read_plans",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":

@@ -62,6 +62,40 @@ def _membership_relationship(
 
 
 def _rewind_projection_order_migration(store: SQLiteStore) -> None:
+    for view in (
+        "readable_action_activity_recency",
+        "readable_configured_system_identities",
+        "readable_configured_scopes",
+        "readable_capability_bindings",
+        "readable_connection_bindings",
+        "readable_relationships",
+        "readable_operational_events",
+        "readable_facet_action_status",
+        "readable_action_attempts",
+        "readable_action_activity",
+        "readable_facets",
+        "readable_remote_objects",
+        "readable_systems",
+    ):
+        store._connection.execute(f'DROP VIEW "{view}"')
+    store._connection.execute("DROP INDEX ix_adapter_actions_readable_recency")
+    for trigger in (
+        "populate_relationship_read_index",
+        "update_relationship_read_index",
+        "delete_relationship_read_index",
+        "reject_null_intent_scope_id_insert",
+        "reject_null_intent_scope_id_update",
+        "reject_null_action_id_insert",
+        "reject_null_action_id_update",
+    ):
+        store._connection.execute(f'DROP TRIGGER "{trigger}"')
+    store._connection.execute("DROP TABLE relationship_read_index")
+    store._connection.execute(
+        """
+        DELETE FROM schema_migrations
+        WHERE version IN ('0024_corruption_containment', '0025_authority_read_plans')
+        """
+    )
     for table_name, column_name in (
         ("remote_objects", "last_seen_received_at"),
         ("facets", "received_at"),

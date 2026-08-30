@@ -1373,6 +1373,158 @@ async def test_terminal_intent_tolerates_malformed_eligible_time(tmp_path: Path)
     runtime.store.close()
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "binding_json",
+        "binding_time",
+        "fingerprint",
+        "capability_json",
+        "capability_semantics",
+        "capability_time",
+        "scope_time",
+        "scope_cross_system",
+        "identity",
+        "identity_mismatch",
+    ],
+)
+async def test_malformed_authority_disables_only_affected_system(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    base = settings(tmp_path)
+    first_settings = base.databricks_systems[0]
+    second_settings = replace(
+        first_settings,
+        config_id="other-workspace",
+        name="other-workspace",
+        profile="OTHER_PROFILE",
+        workspace_root="/Other",
+        authority_fingerprint="2" * 64,
+    )
+    project_settings = replace(
+        base,
+        databricks_systems=(first_settings, second_settings),
+    )
+    runtime = build_runtime(project_settings, runner=FakeCliRunner(b"[]"))
+    runtime.worker_available = True
+    before = await runtime.backend.dashboard()
+    first_system = next(system for system in before.systems if system.config_id == "test-workspace")
+    second_system = next(
+        system for system in before.systems if system.config_id == "other-workspace"
+    )
+    first_option = next(
+        option for option in before.refresh_options if option.system_id == first_system.system_id
+    )
+    second_root = next(
+        scope
+        for scope in runtime.store.list_configured_scopes(system_id=second_system.system_id)
+        if scope.object_id is not None
+    )
+    first_scope = runtime.store.list_configured_scopes(system_id=first_system.system_id)[0]
+    connection = runtime.store._connection
+    binding = connection.execute(
+        "SELECT * FROM connection_bindings WHERE system_id = ?",
+        (first_system.system_id,),
+    ).fetchone()
+    capability = connection.execute(
+        """
+        SELECT capability.* FROM capability_bindings AS capability
+        JOIN connection_bindings AS binding
+          ON binding.binding_id = capability.connection_binding_id
+        WHERE binding.system_id = ? ORDER BY capability.capability_key LIMIT 1
+        """,
+        (first_system.system_id,),
+    ).fetchone()
+    if corruption == "binding_json":
+        connection.execute(
+            "UPDATE connection_bindings SET non_secret_settings_json = '{' WHERE binding_id = ?",
+            (binding["binding_id"],),
+        )
+    elif corruption == "binding_time":
+        connection.execute(
+            "UPDATE connection_bindings SET record_updated_at = 'not-a-timestamp' "
+            "WHERE binding_id = ?",
+            (binding["binding_id"],),
+        )
+    elif corruption == "fingerprint":
+        settings_value = json.loads(binding["non_secret_settings_json"])
+        settings_value["authority_fingerprint"] = "x"
+        connection.execute(
+            "UPDATE connection_bindings SET non_secret_settings_json = ? WHERE binding_id = ?",
+            (json.dumps(settings_value), binding["binding_id"]),
+        )
+    elif corruption == "capability_json":
+        connection.execute(
+            "UPDATE capability_bindings SET target_kinds_json = '{' "
+            "WHERE capability_binding_id = ?",
+            (capability["capability_binding_id"],),
+        )
+    elif corruption == "capability_semantics":
+        connection.execute(
+            "UPDATE capability_bindings SET target_kinds_json = '[\"invalid\"]' "
+            "WHERE capability_binding_id = ?",
+            (capability["capability_binding_id"],),
+        )
+    elif corruption == "capability_time":
+        connection.execute(
+            "UPDATE capability_bindings SET record_updated_at = 'not-a-timestamp' "
+            "WHERE capability_binding_id = ?",
+            (capability["capability_binding_id"],),
+        )
+    elif corruption == "scope_time":
+        connection.execute(
+            "UPDATE configured_scopes SET record_updated_at = 'not-a-timestamp' WHERE scope_id = ?",
+            (first_scope.scope_id,),
+        )
+    elif corruption == "scope_cross_system":
+        connection.execute(
+            "UPDATE configured_scopes SET object_id = ? WHERE scope_id = ?",
+            (second_root.object_id, first_scope.scope_id),
+        )
+    elif corruption == "identity":
+        connection.execute(
+            """
+            UPDATE configured_system_identities
+            SET authority_key = '', record_updated_at = 'not-a-timestamp'
+            WHERE system_id = ?
+            """,
+            (first_system.system_id,),
+        )
+    else:
+        connection.execute(
+            """
+            UPDATE configured_system_identities
+            SET authority_key = ?
+            WHERE system_id = ?
+            """,
+            ("databricks-host-v1:" + "f" * 64, first_system.system_id),
+        )
+
+    after = await runtime.backend.dashboard()
+    second_detail = await runtime.backend.object_detail(second_root.object_id)
+    first_after = next(
+        system for system in after.systems if system.system_id == first_system.system_id
+    )
+
+    assert after.integrity_warning
+    assert first_after.authority_label == "Legacy / unverified"
+    assert all(option.system_id != first_system.system_id for option in after.refresh_options)
+    assert any(option.system_id == second_system.system_id for option in after.refresh_options)
+    assert second_detail is not None and second_detail.object.system_id == second_system.system_id
+    assert not await runtime.backend.is_refresh_registered(
+        RefreshRequest(
+            system_id=first_option.system_id,
+            target_kind=first_option.target_kind,
+            target_id=first_option.target_id,
+            capability_key=first_option.capability_key,
+            facet=first_option.facet,
+        )
+    )
+    runtime.store.close()
+
+
 def test_facet_view_distinguishes_due_failed_refreshing_and_current(tmp_path: Path) -> None:
     runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
     root = runtime.store.list_objects()[0]
