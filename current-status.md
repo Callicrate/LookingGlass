@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 08:09 ET
+Updated: 2026-08-30 08:32 ET
 
 ## Contents
 
@@ -24,7 +24,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Active review round: `critical-reviews/20260830-072928.md` reproduces four medium Python-tool, CLI-certification, process-tree, and lease-clock defects. Python and version certification are clear; process-tree and lease-clock final re-reviews are running.
 - Latest checkpoint: `progress/20260830-080953.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, post 7 records profile/startup closure, and post 8 records strict parser/local-recovery closure under that exact identity.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, post 7 records profile/startup closure, and post 8 records strict parser/local-recovery closure. The 08:32 pass was operational and remained read-only while the compatibility candidate is uncommitted.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
