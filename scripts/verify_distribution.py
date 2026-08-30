@@ -105,6 +105,48 @@ def _uv_executable() -> Path:
     return Path(executable).absolute()
 
 
+def locked_installed_requirements(freeze_output: str) -> tuple[str, ...]:
+    """Return exact third-party requirements from one isolated wheel environment."""
+
+    installed: list[str] = []
+    for line in freeze_output.splitlines():
+        requirement = line.strip()
+        if not requirement:
+            continue
+        local_name = requirement.split("@", 1)[0].strip().casefold().replace("_", "-")
+        if local_name == "async-api-view":
+            continue
+        name, separator, version = requirement.partition("==")
+        if (
+            separator != "=="
+            or not name
+            or not version
+            or any(character.isspace() for character in requirement)
+        ):
+            raise RuntimeError(f"installed wheel produced an unpinned requirement: {requirement}")
+        installed.append(requirement)
+    if not installed:
+        raise RuntimeError("installed wheel environment has no runtime dependencies")
+    return tuple(sorted(installed))
+
+
+def validate_installed_audit(audit_output: str, expected_packages: int) -> None:
+    """Require the exact installed dependency count and a clean vulnerability result."""
+
+    audit = json.loads(audit_output)
+    summary = audit.get("summary", {})
+    if (
+        not isinstance(summary.get("audited_packages"), int)
+        or summary["audited_packages"] < expected_packages
+        or summary.get("vulnerabilities") != 0
+        or summary.get("adverse_statuses") != 0
+    ):
+        raise RuntimeError(
+            "installed wheel environment failed its exact dependency audit: "
+            f"expected_packages={expected_packages}, summary={summary}"
+        )
+
+
 def smoke_installed_wheel(
     wheel_archive: Path,
     expected_assets: frozenset[str],
@@ -112,7 +154,9 @@ def smoke_installed_wheel(
     relative_assets = tuple(
         Path(asset).relative_to("async_api_view").as_posix() for asset in sorted(expected_assets)
     )
+    project_root = Path.cwd().resolve()
     with TemporaryDirectory(prefix="rookery-wheel-smoke-") as temporary:
+        runtime_constraints = Path(temporary) / "runtime-constraints.txt"
         environment = Path(temporary) / "venv"
         process_environment = {
             key: value
@@ -121,6 +165,29 @@ def smoke_installed_wheel(
         }
         process_environment["PYTHONNOUSERSITE"] = "1"
         uv = _uv_executable()
+        subprocess.run(  # noqa: S603 - absolute uv from the verified build environment
+            [
+                str(uv),
+                "export",
+                "--locked",
+                "--no-dev",
+                "--no-emit-project",
+                "--no-header",
+                "--format",
+                "requirements.txt",
+                "--output-file",
+                str(runtime_constraints),
+            ],
+            check=True,
+            capture_output=True,
+            cwd=project_root,
+            env=process_environment,
+            text=True,
+            timeout=30,
+        )
+        constraints_text = runtime_constraints.read_text(encoding="utf-8")
+        if "--hash=sha256:" not in constraints_text or "async-api-view==" in constraints_text:
+            raise RuntimeError("locked runtime constraints are incomplete")
         subprocess.run(  # noqa: S603 - absolute uv from the verified build environment
             [
                 str(uv),
@@ -144,6 +211,24 @@ def smoke_installed_wheel(
                 "--quiet",
                 "--python",
                 str(python),
+                "--require-hashes",
+                "-r",
+                str(runtime_constraints),
+            ],
+            check=True,
+            cwd=temporary,
+            env=process_environment,
+            timeout=180,
+        )
+        subprocess.run(  # noqa: S603 - verified absolute uv and private venv interpreter
+            [
+                str(uv),
+                "pip",
+                "install",
+                "--quiet",
+                "--python",
+                str(python),
+                "--no-deps",
                 str(wheel_archive.resolve()),
             ],
             check=True,
@@ -151,6 +236,74 @@ def smoke_installed_wheel(
             env=process_environment,
             timeout=180,
         )
+        subprocess.run(  # noqa: S603 - verified absolute uv and private venv interpreter
+            [str(uv), "pip", "check", "--python", str(python)],
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=process_environment,
+            text=True,
+            timeout=30,
+        )
+        freeze_result = subprocess.run(  # noqa: S603 - verified absolute uv and interpreter
+            [str(uv), "pip", "freeze", "--python", str(python)],
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=process_environment,
+            text=True,
+            timeout=30,
+        )
+        installed_requirements = locked_installed_requirements(freeze_result.stdout)
+        audit_project = Path(temporary) / "audit-project"
+        audit_project.mkdir()
+        (audit_project / "pyproject.toml").write_text(
+            "[project]\n"
+            'name = "rookery-installed-audit"\n'
+            'version = "0"\n'
+            'requires-python = ">=3.12,<3.13"\n'
+            f"dependencies = {json.dumps(installed_requirements)}\n",
+            encoding="utf-8",
+        )
+        audit_result = subprocess.run(  # noqa: S603 - absolute uv from verified environment
+            [
+                str(uv),
+                "audit",
+                "--project",
+                str(audit_project),
+                "--python-version",
+                f"{sys.version_info.major}.{sys.version_info.minor}",
+                "--preview-features",
+                "audit-command",
+                "--preview-features",
+                "json-output",
+                "--output-format",
+                "json",
+            ],
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=process_environment,
+            text=True,
+            timeout=180,
+        )
+        audit_lock = tomllib.loads((audit_project / "uv.lock").read_text(encoding="utf-8"))
+        audited_requirements = {
+            f"{package['name'].casefold().replace('_', '-')}=={package['version']}"
+            for package in audit_lock.get("package", [])
+            if package.get("name") != "rookery-installed-audit"
+        }
+        expected_requirements = {
+            f"{requirement.partition('==')[0].casefold().replace('_', '-')}=="
+            f"{requirement.partition('==')[2]}"
+            for requirement in installed_requirements
+        }
+        if not expected_requirements.issubset(audited_requirements):
+            raise RuntimeError(
+                "installed wheel audit lock does not cover the environment: "
+                f"missing={sorted(expected_requirements - audited_requirements)}"
+            )
+        validate_installed_audit(audit_result.stdout, len(installed_requirements))
         smoke = (
             "from importlib.resources import files; from pathlib import Path; "
             "import async_api_view, async_api_view.composition; "

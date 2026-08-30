@@ -172,6 +172,8 @@ uv run python scripts/verify_distribution.py
 The default test suite uses fake CLI results and does not contact Databricks.
 A live smoke test requires an explicit named profile and Workspace root.
 The same formatting, lint, test, and locked-dependency checks run on Windows and Ubuntu in CI for pushes and pull requests.
+`verify_distribution.py` exports the hash-pinned runtime graph directly from the locked project, installs that graph into the private wheel environment, installs the wheel with `--no-deps`, runs compatibility and checkout-free behavior checks, and audits the exact installed versions. This keeps release smoke and vulnerability evidence on one dependency graph.
+Dependabot opens weekly update proposals for both the `uv` lock and pinned GitHub Actions; proposals must pass the same gates.
 
 ## Project structure
 

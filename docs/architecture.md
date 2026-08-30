@@ -1503,6 +1503,13 @@ Adapter implementation configuration includes:
 - source-specific mappings and completeness rules;
 - error redaction.
 
+### Build and dependency integrity
+
+The committed `uv.lock` is the dependency authority for source-checkout verification and reproducible release smoke.
+Installed-wheel verification MUST export the hash-pinned runtime-only graph from that lock, install it before the wheel, install the wheel without dependency resolution, check installed compatibility, and audit the exact installed versions.
+A separate newest-allowed or range-resolution compatibility job MAY exist, but it MUST be labeled separately and MUST NOT substitute for locked release evidence.
+Automated `uv` and GitHub Actions update proposals MUST run the complete cross-platform gate before merge.
+
 ### Versioning
 
 - Core request, action, observation, type, facet, and capability contracts MUST have explicit versions.
