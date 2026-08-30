@@ -626,7 +626,14 @@ def test_compatibility_check_failures_reap_process_and_readers(
         task = asyncio.create_task(
             runner.run_unmapped(CliInvocation("doctor", ("databricks", "--version")))
         )
-        await created.wait()
+        try:
+            await asyncio.wait_for(created.wait(), timeout=1)
+        except TimeoutError:
+            if task.done():
+                await task
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
         await asyncio.sleep(0)
 
         if failure == "cancel":
