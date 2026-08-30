@@ -18,11 +18,14 @@ import math
 import os
 import re
 import tempfile
+import threading
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from io import StringIO
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -58,7 +61,13 @@ from async_api_view.contracts import (
     canonical_json_bytes,
     canonical_observation_batch_bytes,
 )
-from async_api_view.local_files import RegularFileGuard, prepare_private_directory
+from async_api_view.local_files import (
+    ExclusiveFileLock,
+    ExclusiveLockUnavailable,
+    RegularFileGuard,
+    harden_private_file,
+    prepare_private_directory,
+)
 
 DATABRICKS_ADAPTER_KEY = "databricks"
 DATABRICKS_ADAPTER_VERSION = "1"
@@ -76,6 +85,11 @@ MAX_JSON_DEPTH = 32
 MAX_INGESTION_BATCH_BYTES = 1_000_000
 MAX_INGESTION_BATCH_UNITS = 250
 MAX_DATABRICKS_CONFIG_BYTES = 1024 * 1024
+_CLI_WORK_PREFIX = "rookery-databricks-"
+_CLI_ACTIVE_LOCK = ".active.lock"
+_CLI_PROFILE_SNAPSHOT = ".databrickscfg"
+_LEGACY_ORPHAN_GRACE_SECONDS = 5 * 60
+_CLI_RECOVERY_GUARD = threading.Lock()
 _BUNDLE_CONFIG_FILENAMES = (
     "databricks.yml",
     "databricks.yaml",
@@ -316,19 +330,92 @@ def _normalized_workspace_host(value: object) -> str:
     return f"https://{hostname}" + (f":{normalized_port}" if normalized_port is not None else "")
 
 
-def workspace_authority_fingerprint(host: object) -> str:
-    """Return the non-reversible v1 fingerprint for one normalized workspace host."""
+def _normalized_route_selector(value: object, *, name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise CliUnavailable(f"Databricks profile {name} selector is invalid")
+    normalized = value.strip().casefold()
+    if (
+        not normalized
+        or len(normalized) > 512
+        or any(ord(character) < 32 or ord(character) == 127 for character in normalized)
+    ):
+        raise CliUnavailable(f"Databricks profile {name} selector is invalid")
+    return normalized
+
+
+def workspace_authority_fingerprint(
+    host: object,
+    *,
+    workspace_id: object = None,
+    account_id: object = None,
+    azure_workspace_resource_id: object = None,
+    azure_environment: object = None,
+) -> str:
+    """Return a non-reversible fingerprint for one resolved workspace route."""
 
     normalized = _normalized_workspace_host(host)
-    return hashlib.sha256(f"databricks-workspace-host-v1\0{normalized}".encode()).hexdigest()
+    selectors = (
+        _normalized_route_selector(workspace_id, name="workspace_id"),
+        _normalized_route_selector(account_id, name="account_id"),
+        _normalized_route_selector(
+            azure_workspace_resource_id,
+            name="azure_workspace_resource_id",
+        ),
+        _normalized_route_selector(azure_environment, name="azure_environment"),
+    )
+    if all(selector is None for selector in selectors):
+        payload = f"databricks-workspace-host-v1\0{normalized}"
+    else:
+        payload = "\0".join(
+            (
+                "databricks-workspace-route-v2",
+                normalized,
+                *(selector or "" for selector in selectors),
+            )
+        )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def databricks_profile_authority_fingerprint(
+def _profile_value(
+    parser: configparser.ConfigParser,
+    *,
+    profile: str,
+    key: str,
+) -> str | None:
+    if profile == "DEFAULT":
+        return parser.defaults().get(key)
+    return parser.get(profile, key, raw=True, fallback=None)
+
+
+def _minimal_profile_snapshot(
+    parser: configparser.ConfigParser,
+    *,
+    profile: str,
+) -> bytes:
+    """Serialize only defaults and the selected profile from the verified parse."""
+
+    snapshot = configparser.ConfigParser(interpolation=None, strict=True)
+    snapshot["DEFAULT"] = dict(parser.defaults())
+    if profile != "DEFAULT":
+        if not parser.has_section(profile):  # pragma: no cover - authority lookup guard
+            raise CliUnavailable("Databricks profile configuration is invalid")
+        snapshot[profile] = dict(parser.items(profile, raw=True))
+    output = StringIO()
+    snapshot.write(output)
+    payload = output.getvalue().encode()
+    if len(payload) > MAX_DATABRICKS_CONFIG_BYTES:  # pragma: no cover - subset invariant
+        raise CliUnavailable("Databricks profile configuration exceeds the size limit")
+    return payload
+
+
+def _databricks_profile_authority(
     profile: str,
     *,
     config_file: Path | None = None,
-) -> str:
-    """Read only the bounded host witness from one standard Databricks CLI profile."""
+) -> tuple[str, bytes]:
+    """Return the route fingerprint and a minimal verified CLI config snapshot."""
 
     if _PROFILE.fullmatch(profile) is None:
         raise CliUnavailable("Databricks profile name is invalid")
@@ -337,7 +424,7 @@ def databricks_profile_authority_fingerprint(
         with RegularFileGuard(path) as guard:
             if path.stat().st_size > MAX_DATABRICKS_CONFIG_BYTES:
                 raise CliUnavailable("Databricks profile configuration exceeds the size limit")
-            payload = path.read_text(encoding="utf-8-sig")
+            payload_bytes = path.read_bytes()
             guard.verify()
     except CliUnavailable:
         raise
@@ -346,21 +433,45 @@ def databricks_profile_authority_fingerprint(
     parser = configparser.ConfigParser(interpolation=None, strict=True)
     invalid_configuration = False
     try:
+        payload = payload_bytes.decode("utf-8-sig")
         parser.read_string(payload)
-        if profile == "DEFAULT":
-            host = parser.defaults().get("host")
-        elif parser.has_section(profile):
-            host = parser.get(profile, "host", raw=True, fallback=None)
-        else:
+        if profile != "DEFAULT" and not parser.has_section(profile):
             host = None
-    except configparser.Error:
+        else:
+            host = _profile_value(parser, profile=profile, key="host")
+    except (configparser.Error, UnicodeError):
         invalid_configuration = True
         host = None
     if invalid_configuration:
         raise CliUnavailable("Databricks profile configuration is invalid")
     if host is None:
         raise CliUnavailable("Databricks profile has no workspace authority")
-    return workspace_authority_fingerprint(host)
+    fingerprint = workspace_authority_fingerprint(
+        host,
+        workspace_id=_profile_value(parser, profile=profile, key="workspace_id"),
+        account_id=_profile_value(parser, profile=profile, key="account_id"),
+        azure_workspace_resource_id=_profile_value(
+            parser,
+            profile=profile,
+            key="azure_workspace_resource_id",
+        ),
+        azure_environment=_profile_value(parser, profile=profile, key="azure_environment"),
+    )
+    return fingerprint, _minimal_profile_snapshot(parser, profile=profile)
+
+
+def databricks_profile_authority_fingerprint(
+    profile: str,
+    *,
+    config_file: Path | None = None,
+) -> str:
+    """Read the bounded route witness from one standard Databricks CLI profile."""
+
+    fingerprint, _snapshot = _databricks_profile_authority(
+        profile,
+        config_file=config_file,
+    )
+    return fingerprint
 
 
 def _enforce_binding_target(
@@ -608,6 +719,54 @@ def _trusted_cli_work_root(*, home: Path | None = None) -> Path:
     return resolved_root
 
 
+def _remove_guarded_private_file(path: Path) -> None:
+    if not os.path.lexists(path):
+        return
+    with RegularFileGuard(path) as guard:
+        guard.verify()
+    path.unlink()
+
+
+def _recover_orphaned_cli_work_directories(root: Path) -> bool:
+    """Remove crash-retained profile snapshots without touching active commands."""
+
+    now = time.time()
+    recovery_complete = True
+    for directory in sorted(root.iterdir(), key=lambda item: item.name):
+        if not directory.name.startswith(_CLI_WORK_PREFIX):
+            continue
+        if directory.is_symlink() or directory.is_junction() or not directory.is_dir():
+            raise OSError("Rookery CLI work entries must be private directories")
+        active_lock_path = directory / _CLI_ACTIVE_LOCK
+        if (
+            not os.path.lexists(active_lock_path)
+            and now - directory.stat().st_mtime < _LEGACY_ORPHAN_GRACE_SECONDS
+        ):
+            recovery_complete = False
+            continue
+        try:
+            active_lock = ExclusiveFileLock(active_lock_path)
+        except ExclusiveLockUnavailable:
+            recovery_complete = False
+            continue
+        with active_lock:
+            _remove_guarded_private_file(directory / _CLI_PROFILE_SNAPSHOT)
+        _remove_guarded_private_file(active_lock_path)
+        # The CLI may have left non-secret diagnostics. The credential snapshot is gone.
+        with suppress(OSError):
+            directory.rmdir()
+    return recovery_complete
+
+
+def _recover_cli_work_root(root: Path) -> None:
+    with _CLI_RECOVERY_GUARD:
+        try:
+            with ExclusiveFileLock(root.parent / ".cli-work-recovery.lock"):
+                _recover_orphaned_cli_work_directories(root)
+        except ExclusiveLockUnavailable:
+            return
+
+
 def _candidate_executable_names(executable: str) -> tuple[str, ...]:
     if os.name != "nt" or Path(executable).suffix:
         return (executable,)
@@ -644,7 +803,7 @@ class CliRunner:
     def verify_profile_authority(self, *, profile: str, expected_fingerprint: str) -> None:
         """Fail before dispatch if the named profile no longer selects this workspace."""
 
-        actual = databricks_profile_authority_fingerprint(
+        actual, _snapshot = _databricks_profile_authority(
             profile,
             config_file=self.profile_config_path,
         )
@@ -652,6 +811,22 @@ class CliRunner:
             raise CommandRejected(
                 "Databricks profile authority does not match the configured workspace"
             )
+
+    def profile_authority_snapshot(
+        self,
+        *,
+        profile: str,
+        expected_fingerprint: str,
+    ) -> bytes:
+        actual, snapshot = _databricks_profile_authority(
+            profile,
+            config_file=self.profile_config_path,
+        )
+        if actual != expected_fingerprint:
+            raise CommandRejected(
+                "Databricks profile authority does not match the configured workspace"
+            )
+        return snapshot
 
     def resolve_executable(self) -> str:
         if self._resolved_executable is None:
@@ -684,39 +859,74 @@ class CliRunner:
         *,
         correlation_id: str,
         timeout_message: str,
+        profile_config_snapshot: bytes | None = None,
     ) -> CliExecution:
         started = time.monotonic()
-        with tempfile.TemporaryDirectory(
-            prefix="rookery-databricks-", dir=_trusted_cli_work_root()
-        ) as working_directory:
+        work_root = _trusted_cli_work_root()
+        try:
+            _recover_cli_work_root(work_root)
+        except OSError as exc:
+            raise CliUnavailable("Rookery CLI work recovery failed") from exc
+        with (
+            tempfile.TemporaryDirectory(
+                prefix=_CLI_WORK_PREFIX,
+                dir=work_root,
+            ) as working_directory,
+            ExclusiveFileLock(Path(working_directory) / _CLI_ACTIVE_LOCK),
+        ):
+            process_environment = _controlled_cli_environment()
+            snapshot_path: Path | None = None
             try:
-                process = await asyncio.create_subprocess_exec(
-                    *argv,
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=_controlled_cli_environment(),
-                    cwd=working_directory,
-                )
-            except OSError as exc:
-                raise CliUnavailable("Databricks CLI process could not start") from exc
-            stdout_task = asyncio.create_task(_read_limited(process.stdout, self.stdout_cap))
-            stderr_task = asyncio.create_task(_read_limited(process.stderr, self.stderr_cap))
-            wait_task = asyncio.create_task(process.wait())
-            try:
-                stdout, stderr, exit_code = await asyncio.wait_for(
-                    asyncio.gather(stdout_task, stderr_task, wait_task),
-                    timeout=self.timeout_seconds,
-                )
-            except TimeoutError as exc:
-                await _terminate_process(process, stdout_task, stderr_task, wait_task)
-                raise CliTimeout(timeout_message) from exc
-            except CliOutputLimit:
-                await _terminate_process(process, stdout_task, stderr_task, wait_task)
-                raise
-            except asyncio.CancelledError:
-                await _terminate_process(process, stdout_task, stderr_task, wait_task)
-                raise
+                if profile_config_snapshot is not None:
+                    snapshot_path = Path(working_directory) / _CLI_PROFILE_SNAPSHOT
+                    descriptor = os.open(
+                        snapshot_path,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                        0o600,
+                    )
+                    try:
+                        remaining = memoryview(profile_config_snapshot)
+                        while remaining:
+                            written = os.write(descriptor, remaining)
+                            if written <= 0:  # pragma: no cover - OS invariant
+                                raise OSError("Databricks profile snapshot write made no progress")
+                            remaining = remaining[written:]
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
+                    harden_private_file(snapshot_path)
+                    process_environment["DATABRICKS_CONFIG_FILE"] = str(snapshot_path)
+                try:
+                    process = await asyncio.create_subprocess_exec(
+                        *argv,
+                        stdin=asyncio.subprocess.DEVNULL,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=process_environment,
+                        cwd=working_directory,
+                    )
+                except OSError as exc:
+                    raise CliUnavailable("Databricks CLI process could not start") from exc
+                stdout_task = asyncio.create_task(_read_limited(process.stdout, self.stdout_cap))
+                stderr_task = asyncio.create_task(_read_limited(process.stderr, self.stderr_cap))
+                wait_task = asyncio.create_task(process.wait())
+                try:
+                    stdout, stderr, exit_code = await asyncio.wait_for(
+                        asyncio.gather(stdout_task, stderr_task, wait_task),
+                        timeout=self.timeout_seconds,
+                    )
+                except TimeoutError as exc:
+                    await _terminate_process(process, stdout_task, stderr_task, wait_task)
+                    raise CliTimeout(timeout_message) from exc
+                except CliOutputLimit:
+                    await _terminate_process(process, stdout_task, stderr_task, wait_task)
+                    raise
+                except asyncio.CancelledError:
+                    await _terminate_process(process, stdout_task, stderr_task, wait_task)
+                    raise
+            finally:
+                if snapshot_path is not None:
+                    _remove_guarded_private_file(snapshot_path)
         return CliExecution(
             correlation_id,
             timedelta(seconds=time.monotonic() - started),
@@ -735,7 +945,7 @@ class CliRunner:
         ):
             raise CommandRejected("Databricks invocation requires an authority fingerprint")
         profile = invocation.argv[-3]
-        self.verify_profile_authority(
+        profile_config_snapshot = self.profile_authority_snapshot(
             profile=profile,
             expected_fingerprint=invocation.authority_fingerprint,
         )
@@ -745,10 +955,7 @@ class CliRunner:
             argv,
             correlation_id=str(correlation_id),
             timeout_message="Databricks CLI timed out",
-        )
-        self.verify_profile_authority(
-            profile=profile,
-            expected_fingerprint=invocation.authority_fingerprint,
+            profile_config_snapshot=profile_config_snapshot,
         )
         if execution.exit_code != 0:
             retry_after, retry_after_out_of_bounds = _downstream_retry_after(execution.stderr)

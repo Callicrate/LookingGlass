@@ -273,6 +273,10 @@ class PrivateDirectoryGuard:
         self.close()
 
 
+class ExclusiveLockUnavailable(OSError):
+    """Raised when a valid private lock is already held by another process."""
+
+
 class ExclusiveFileLock:
     """Hold one private, process-scoped nonblocking filesystem lock."""
 
@@ -315,7 +319,7 @@ class ExclusiveFileLock:
 
                 fcntl.flock(self._descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
-            raise OSError("another Rookery serve instance owns this database") from exc
+            raise ExclusiveLockUnavailable("another Rookery process owns this lock") from exc
         self._locked = True
 
     def close(self) -> None:

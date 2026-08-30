@@ -49,15 +49,15 @@ Check available profiles without printing credential values:
 databricks auth profiles
 ```
 
-Generate the non-secret fingerprint of the profile's normalized workspace host, then copy the digest into `authority_fingerprint`:
+Generate the non-secret fingerprint of the profile's resolved workspace route, including any workspace, account, or Azure routing selectors, then copy the digest into `authority_fingerprint`:
 
 ```powershell
 async-api-view fingerprint-profile --profile 'YOUR_PROFILE'
 ```
 
-Rookery checks that fingerprint again before every remote command. Retargeting the same profile name or selecting a profile for another workspace therefore fails before dispatch until configuration explicitly names the new authority, which creates or restores a separate cache.
+Rookery checks that fingerprint again before every remote command. Retargeting the same profile name, including changing a `workspace_id` behind a shared unified host, therefore fails before dispatch until configuration explicitly names the new authority, which creates or restores a separate cache.
 
-Rookery resolves the CLI only from explicit absolute `PATH` entries, launches it from a fresh empty directory beneath a private per-user root, and rejects that root if any ancestor contains a bundle configuration recognized by the supported CLI contract. It removes inherited `DATABRICKS_*` and `BUNDLE_*` variables so ambient authentication or bundle settings cannot override the named profile. Configure the profile in the standard Databricks configuration location; ambient-only credentials and `DATABRICKS_CONFIG_FILE` overrides are intentionally ignored.
+Rookery resolves the CLI only from explicit absolute `PATH` entries, launches it from a fresh empty directory beneath a private per-user root, and rejects that root if any ancestor contains a bundle configuration recognized by the supported CLI contract. It removes inherited `DATABRICKS_*` and `BUNDLE_*` variables so ambient authentication or bundle settings cannot override the named profile. Configure the profile in the standard Databricks configuration location; ambient-only credentials and `DATABRICKS_CONFIG_FILE` overrides are intentionally ignored. For each mapped command, Rookery derives a minimal verified snapshot containing only defaults and the selected profile, writes it to that command's private temporary directory, and supplies it through a child-only `DATABRICKS_CONFIG_FILE`; changing the source profile after verification cannot retarget that process. A held per-command lock protects active snapshots, normal exit removes them before releasing the lock, and every later command performs a bounded locked scan that removes crash-retained snapshots without touching live invocations.
 
 `doctor` verifies only the installed CLI version and required command groups. It does not query workspace inventory or verify that the selected profile exists or can authenticate; the first mapped refresh performs that live check.
 
@@ -94,7 +94,7 @@ Copy-Item -LiteralPath '.\config.example.toml' -Destination '.\config.local.toml
 ```
 
 Edit `config.local.toml` and replace `YOUR_PROFILE` with the intended named profile.
-The file stores only the profile name, SHA-256 authority fingerprint, and configured Workspace root, not Databricks credentials or raw host.
+The file stores only the profile name, SHA-256 route-authority fingerprint, and configured Workspace root, not Databricks credentials, raw host, or raw selectors.
 Keep each `databricks.id` and `authority_fingerprint` stable when renaming a display name or changing to another profile for the same verified workspace. Rotate credentials inside the same named profile normally.
 Legacy entries without `id` remain supported, but adding an explicit ID/fingerprint creates a new verified authority rather than silently blessing legacy cache whose remote host was never recorded.
 Removing an entry disables its refresh authority but preserves cached facts; changing `authority_fingerprint` or `workspace_root` creates a new authority boundary and pauses the predecessor. Returning to the prior fingerprint/root re-enables that authority's original cache.

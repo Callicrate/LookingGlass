@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import subprocess
+import sys
 import traceback
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -372,6 +373,13 @@ def test_profile_authority_fingerprint_normalizes_and_fails_closed(
     assert databricks_profile_authority_fingerprint("DEFAULT", config_file=config) == expected
     assert workspace_authority_fingerprint("https://workspace.example.com:443/") == expected
     assert workspace_authority_fingerprint("https://workspace.example.com./") == expected
+    assert workspace_authority_fingerprint(
+        "https://workspace.example.com",
+        workspace_id="111",
+    ) != workspace_authority_fingerprint(
+        "https://workspace.example.com",
+        workspace_id="222",
+    )
     CliRunner(profile_config_path=config).verify_profile_authority(
         profile="DEFAULT",
         expected_fingerprint=expected,
@@ -409,13 +417,32 @@ def test_profile_authority_fingerprint_normalizes_and_fails_closed(
     assert captured.value.__cause__ is None
     assert captured.value.__context__ is None
 
-    config.write_text("[DEFAULT]\nhost = https://workspace.example.com\n", encoding="utf-8")
+    config.write_text(
+        "[DEFAULT]\nhost = https://workspace.example.com\n"
+        "[PRIMARY]\nworkspace_id = 111\ntoken = selected-placeholder\n"
+        "[OTHER]\nworkspace_id = 222\ntoken = unrelated-placeholder\n",
+        encoding="utf-8",
+    )
     runner = CliRunner(profile_config_path=config)
     runner._resolved_executable = "C:\\trusted\\databricks.exe"
+    verified_source = config.read_bytes()
+    expected, verified_snapshot = databricks_adapter._databricks_profile_authority(
+        "PRIMARY",
+        config_file=config,
+    )
+    assert b"selected-placeholder" in verified_snapshot
+    assert b"unrelated-placeholder" not in verified_snapshot
+    assert b"[OTHER]" not in verified_snapshot
 
-    async def retarget_during_execution(*_args: object, **_kwargs: object) -> CliExecution:
-        config.write_text("[DEFAULT]\nhost = https://retargeted.example.com\n", encoding="utf-8")
-        return CliExecution("test", timedelta(), 0, b"[]", b"")
+    async def retarget_during_execution(*_args: object, **kwargs: object) -> CliExecution:
+        assert kwargs["profile_config_snapshot"] == verified_snapshot
+        config.write_text(
+            "[DEFAULT]\nhost = https://workspace.example.com\n"
+            "[PRIMARY]\nworkspace_id = 222\ntoken = selected-placeholder\n",
+            encoding="utf-8",
+        )
+        config.write_bytes(verified_source)
+        return CliExecution("test", timedelta(), 0, b'[{"path":"/from-a"}]', b"")
 
     monkeypatch.setattr(runner, "_execute", retarget_during_execution)
     invocation = CliInvocation(
@@ -426,14 +453,15 @@ def test_profile_authority_fingerprint_normalizes_and_fails_closed(
             "list",
             "/Shared",
             "--profile",
-            "DEFAULT",
+            "PRIMARY",
             "--output",
             "json",
         ),
         authority_fingerprint=expected,
     )
-    with pytest.raises(CommandRejected, match="does not match"):
-        asyncio.run(runner.run(invocation, correlation_id="test"))
+    execution = asyncio.run(runner.run(invocation, correlation_id="test"))
+    assert b"/from-a" in execution.stdout
+    assert config.read_bytes() == verified_source
 
 
 def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
@@ -480,14 +508,30 @@ def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
         working_directory = Path(kwargs["cwd"])  # type: ignore[arg-type]
         environment = kwargs["env"]  # type: ignore[assignment]
         assert working_directory != bundle_root
-        assert list(working_directory.iterdir()) == []
+        config_path = environment.get("DATABRICKS_CONFIG_FILE")
+        if config_path is None:
+            assert {item.name for item in working_directory.iterdir()} == {
+                databricks_adapter._CLI_ACTIVE_LOCK
+            }
+        else:
+            snapshot = Path(config_path)
+            assert snapshot.parent == working_directory
+            assert snapshot.read_bytes() == b"[configured-profile]\nhost = https://a.example\n"
+            assert {item.name for item in working_directory.iterdir()} == {
+                databricks_adapter._CLI_ACTIVE_LOCK,
+                databricks_adapter._CLI_PROFILE_SNAPSHOT,
+            }
         spawned.append((working_directory, environment))
         return CompleteProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     runner = CliRunner(executable="databricks")
     runner._resolved_executable = "C:\\trusted\\databricks.exe"
-    monkeypatch.setattr(runner, "verify_profile_authority", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runner,
+        "profile_authority_snapshot",
+        lambda **_kwargs: b"[configured-profile]\nhost = https://a.example\n",
+    )
 
     async def exercise() -> None:
         await runner.run_unmapped(CliInvocation("doctor", ("databricks", "--version")))
@@ -512,11 +556,14 @@ def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
     asyncio.run(exercise())
 
     assert len(spawned) == 2
-    for working_directory, environment in spawned:
+    for index, (working_directory, environment) in enumerate(spawned):
         assert not working_directory.exists()
         assert environment["ROOKERY_TEST_ENV"] == "preserved"
         assert environment["PATH"] == str(safe_path)
-        assert not any(name.upper().startswith(("DATABRICKS_", "BUNDLE_")) for name in environment)
+        databricks_keys = {
+            name for name in environment if name.upper().startswith(("DATABRICKS_", "BUNDLE_"))
+        }
+        assert databricks_keys == (set() if index == 0 else {"DATABRICKS_CONFIG_FILE"})
 
 
 @pytest.mark.parametrize("filename", databricks_adapter._BUNDLE_CONFIG_FILENAMES)
@@ -543,6 +590,106 @@ def test_cli_work_root_is_private_and_confined_to_home(tmp_path: Path) -> None:
     if os.name != "nt":
         assert root.parent.stat().st_mode & 0o777 == 0o700
         assert root.stat().st_mode & 0o777 == 0o700
+
+
+def test_active_cli_snapshot_is_not_recovered(tmp_path: Path) -> None:
+    root = tmp_path / "cli-work"
+    root.mkdir()
+    directory = root / f"{databricks_adapter._CLI_WORK_PREFIX}active"
+    directory.mkdir()
+    snapshot = directory / databricks_adapter._CLI_PROFILE_SNAPSHOT
+    snapshot.write_bytes(b"[PROFILE]\ntoken = synthetic-placeholder\n")
+
+    with databricks_adapter.ExclusiveFileLock(directory / databricks_adapter._CLI_ACTIVE_LOCK):
+        assert not databricks_adapter._recover_orphaned_cli_work_directories(root)
+        assert snapshot.exists()
+
+
+def test_hard_exit_profile_snapshot_is_recovered_cross_platform(tmp_path: Path) -> None:
+    root = tmp_path / "cli-work"
+    root.mkdir()
+    databricks_adapter._recover_cli_work_root(root)
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(source_root)
+    child = "\n".join(
+        (
+            "import os, sys, tempfile",
+            "from pathlib import Path",
+            "from async_api_view.local_files import ExclusiveFileLock, harden_private_file",
+            "root = Path(sys.argv[1])",
+            "directory = Path(tempfile.mkdtemp(prefix='rookery-databricks-', dir=root))",
+            "lock = ExclusiveFileLock(directory / '.active.lock')",
+            "snapshot = directory / '.databrickscfg'",
+            "snapshot.write_bytes(b'[PROFILE]\\ntoken = synthetic-placeholder\\n')",
+            "harden_private_file(snapshot)",
+            "os._exit(23)",
+        )
+    )
+
+    result = subprocess.run(  # noqa: S603 - current test interpreter and fixed script
+        (sys.executable, "-c", child, str(root)),
+        check=False,
+        capture_output=True,
+        env=environment,
+    )
+
+    assert result.returncode == 23
+    orphan = next(root.glob(f"{databricks_adapter._CLI_WORK_PREFIX}*"))
+    assert (orphan / databricks_adapter._CLI_PROFILE_SNAPSHOT).exists()
+    databricks_adapter._recover_cli_work_root(root)
+    assert list(root.glob(f"{databricks_adapter._CLI_WORK_PREFIX}*")) == []
+
+
+def test_surviving_process_retries_snapshot_recovery_after_active_owner_dies(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cli-work"
+    root.mkdir()
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(source_root)
+    child = "\n".join(
+        (
+            "import sys, tempfile, time",
+            "from pathlib import Path",
+            "from async_api_view.local_files import ExclusiveFileLock, harden_private_file",
+            "root = Path(sys.argv[1])",
+            "directory = Path(tempfile.mkdtemp(prefix='rookery-databricks-', dir=root))",
+            "lock = ExclusiveFileLock(directory / '.active.lock')",
+            "snapshot = directory / '.databrickscfg'",
+            "snapshot.write_bytes(b'[PROFILE]\\ntoken = synthetic-placeholder\\n')",
+            "harden_private_file(snapshot)",
+            "print(directory, flush=True)",
+            "while True: time.sleep(1)",
+        )
+    )
+    process = subprocess.Popen(  # noqa: S603 - current interpreter and fixed script
+        (sys.executable, "-c", child, str(root)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+    )
+    try:
+        assert process.stdout is not None
+        directory = Path(process.stdout.readline().strip())
+        snapshot = directory / databricks_adapter._CLI_PROFILE_SNAPSHOT
+        assert snapshot.exists()
+
+        databricks_adapter._recover_cli_work_root(root)
+
+        assert snapshot.exists()
+        process.kill()
+        process.wait(timeout=10)
+
+        databricks_adapter._recover_cli_work_root(root)
+
+        assert not snapshot.exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ownership and DACL regression")
@@ -1920,6 +2067,77 @@ class _Ingestion:
         self.batches.append(batch)
         self.lease_ids.append(lease_id)
         return IngestionResult(batch.batch_id, self.status)
+
+
+def test_worker_pins_same_host_workspace_selector_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / ".databrickscfg"
+    source_a = b"[DEFAULT]\nhost = https://unified.example.com\n[PRIMARY]\nworkspace_id = 111\n"
+    config.write_bytes(source_a)
+    expected = databricks_profile_authority_fingerprint("PRIMARY", config_file=config)
+    action = _action("databricks.workspace.children.read", "membership")
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {
+            "profile": "PRIMARY",
+            "workspace_root": "/",
+            "authority_fingerprint": expected,
+        },
+    )
+    runner = CliRunner(profile_config_path=config)
+    runner._resolved_executable = "C:\\trusted\\databricks.exe"
+
+    async def execute_from_snapshot(*_args: object, **kwargs: object) -> CliExecution:
+        snapshot = kwargs["profile_config_snapshot"]
+        assert isinstance(snapshot, bytes)
+        assert b"workspace_id = 111" in snapshot
+        config.write_text(
+            "[DEFAULT]\nhost = https://unified.example.com\n[PRIMARY]\nworkspace_id = 222\n",
+            encoding="utf-8",
+        )
+        config.write_bytes(source_a)
+        return CliExecution(
+            str(uuid4()),
+            timedelta(),
+            0,
+            b'{"objects":[{"path":"/from-111","object_type":"DIRECTORY"}]}',
+            b"",
+        )
+
+    monkeypatch.setattr(runner, "_execute", execute_from_snapshot)
+
+    class WorkspaceTargets:
+        async def resolve(self, **_: object) -> ResolvedTarget:
+            return ResolvedTarget(
+                workspace_path="/",
+                workspace_root="/",
+                canonical_object_id=uuid4(),
+                canonical_object_type="folder",
+            )
+
+    ingestion = _Ingestion()
+    worker = DatabricksWorker(
+        worker_id="snapshot-worker",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC))),
+        lifecycle=_Lifecycle(),
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=ingestion,
+        targets=WorkspaceTargets(),
+        runner=runner,
+    )
+
+    assert asyncio.run(worker.run_once())
+    rendered = json.dumps([batch.to_dict() for batch in ingestion.batches])
+    assert "/from-111" in rendered
+    assert "/from-222" not in rendered
+    assert config.read_bytes() == source_a
 
 
 def test_worker_uses_only_ports() -> None:
