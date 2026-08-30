@@ -24,6 +24,10 @@ from .models import (
 )
 
 
+class ActionLeaseLost(ValueError):
+    """Expected lease-fencing result; callers must not treat it as storage failure."""
+
+
 @runtime_checkable
 class StateQueryPort(Protocol):
     async def get_object(self, object_id: str) -> RemoteObject | None: ...

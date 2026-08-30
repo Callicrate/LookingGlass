@@ -13,6 +13,7 @@ from async_api_view.application import DurableCoordinator, SystemBootstrapServic
 from async_api_view.contracts import (
     ActionAttempt,
     ActionCompletion,
+    ActionLeaseLost,
     ActionOutcome,
     AdapterAction,
     CapabilityCoveragePolicy,
@@ -1273,6 +1274,16 @@ def test_legacy_mark_running_rejects_exact_lease_expiry(tmp_path) -> None:
                 )
             )
 
+        with pytest.raises(ActionLeaseLost, match="lease is no longer current"):
+            run(
+                store.heartbeat(
+                    action_id=action.action_id,
+                    lease_id=lease.lease_id,
+                    worker_id="worker",
+                    at=lease.leased_until,
+                )
+            )
+
         assert store.get_stored_action(action.action_id).state.value == "leased"
 
 
@@ -2135,10 +2146,16 @@ def test_runtime_failure_is_bounded_and_diagnostics_redact_json_and_home_paths(t
             occurred_at=NOW,
         )
     redacted = _redact(
-        'payload {"token":"secret-value"} C:\\Users\\alice\\.databrickscfg /home/alice/.config'
+        'payload {"token":"secret-value","DATABRICKS_TOKEN":"json-secret"} '
+        "DATABRICKS_TOKEN=environment-secret safe\x1b[2J\u202eevil "
+        "C:\\Users\\alice\\.databrickscfg /home/alice/.config"
     )
     assert "secret-value" not in redacted
+    assert "json-secret" not in redacted
+    assert "environment-secret" not in redacted
     assert "alice" not in redacted
+    assert "\x1b" not in redacted
+    assert "\u202e" not in redacted
 
 
 def test_workspace_root_uses_normalized_external_identity(tmp_path) -> None:

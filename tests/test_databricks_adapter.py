@@ -30,11 +30,13 @@ from async_api_view.adapters.databricks import (
     DatabricksWorker,
     DownstreamFailure,
     InvalidDownstreamResponse,
+    LifecyclePersistenceFailure,
     ResolvedTarget,
     redact_diagnostic,
 )
 from async_api_view.contracts import (
     ActionLease,
+    ActionLeaseLost,
     ActionOutcome,
     AdapterAction,
     CapabilityBinding,
@@ -1679,7 +1681,7 @@ class _TimeoutRunner(_Runner):
 
 class _StaleLifecycle(_Lifecycle):
     async def record_attempt(self, attempt: object, *, lease_id: str) -> None:
-        raise RuntimeError(f"stale lease {lease_id}")
+        raise ActionLeaseLost(f"stale lease {lease_id}")
 
 
 class _FailGuard(_Guard):
@@ -1698,7 +1700,12 @@ class _TerminalGuard(_Guard):
 
 class _HeartbeatLostLifecycle(_Lifecycle):
     async def heartbeat(self, **_: object) -> None:
-        raise RuntimeError("lease lost")
+        raise ActionLeaseLost("lease lost")
+
+
+class _HeartbeatFailedLifecycle(_Lifecycle):
+    async def heartbeat(self, **_: object) -> None:
+        raise OSError("lifecycle storage unavailable")
 
 
 class _BlockingRunner:
@@ -2125,6 +2132,37 @@ def test_heartbeat_loss_cancels_running_cli_without_finalizing() -> None:
         heartbeat_seconds=0.001,
     )
     asyncio.run(worker.run_once())
+    assert runner.cancelled
+    assert not any(event[0] in {"attempt", "complete"} for event in lifecycle.events)
+
+
+def test_heartbeat_persistence_failure_reaches_runtime_supervision() -> None:
+    action = _action("databricks.uc.catalogs.read")
+    binding = ConnectionBinding(
+        action.connection_binding_id,
+        action.system_id,
+        DATABRICKS_ADAPTER_KEY,
+        DATABRICKS_ADAPTER_VERSION,
+        True,
+        {"profile": "local"},
+    )
+    runner = _BlockingRunner()
+    lifecycle = _HeartbeatFailedLifecycle()
+    worker = DatabricksWorker(
+        worker_id="test",
+        queue=_Queue(ActionLease(action, uuid4(), datetime.now(UTC))),
+        lifecycle=lifecycle,
+        guard=_Guard(),
+        bindings=_Bindings(binding),
+        ingestion=_Ingestion(),
+        targets=_Targets(),
+        runner=runner,
+        heartbeat_seconds=0.001,
+    )
+
+    with pytest.raises(LifecyclePersistenceFailure, match="heartbeat"):
+        asyncio.run(worker.run_once())
+
     assert runner.cancelled
     assert not any(event[0] in {"attempt", "complete"} for event in lifecycle.events)
 

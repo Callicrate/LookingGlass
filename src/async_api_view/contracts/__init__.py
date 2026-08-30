@@ -58,6 +58,7 @@ from .models import (
     canonical_observation_batch_bytes,
 )
 from .ports import (
+    ActionLeaseLost,
     ActionLifecyclePort,
     ActionQueuePort,
     BindingQueryPort,
@@ -76,6 +77,7 @@ __all__ = [
     "ActionAttempt",
     "ActionCompletion",
     "ActionLease",
+    "ActionLeaseLost",
     "ActionLifecyclePort",
     "ActionOutcome",
     "ActionQueuePort",

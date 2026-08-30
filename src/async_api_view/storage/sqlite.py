@@ -30,6 +30,7 @@ from async_api_view.contracts import (
     ActionAttempt,
     ActionCompletion,
     ActionLease,
+    ActionLeaseLost,
     ActionOutcome,
     ActionState,
     AdapterAction,
@@ -116,12 +117,17 @@ _SECRET_SETTING_PART = re.compile(
     r"(?:password|secret|token|private[_-]?key|authorization|access[_-]?key)", re.IGNORECASE
 )
 _DIAGNOSTIC_SECRET = re.compile(
-    r"(?i)\b(token|password|secret|authorization|profile|host)\b\s*(?:=|:)\s*[^\s,;]+"
+    r"(?i)\b((?:[a-z0-9]+[_-])*(?:token|password|secret|authorization|profile|host|"
+    r"access[_-]?key|private[_-]?key|api[_-]?key))\b\s*(?:=|:)\s*[^\s,;]+"
 )
 _BEARER_SECRET = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 _JSON_SECRET = re.compile(
-    r'(?i)(["\']?(?:token|password|secret|authorization|access[_-]?key|private[_-]?key)'
+    r'(?i)(["\']?(?:(?:[a-z0-9]+[_-])*(?:token|password|secret|authorization|'
+    r"access[_-]?key|private[_-]?key|api[_-]?key))"
     r'["\']?\s*:\s*)(?:"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[^,}\]\s]+)'
+)
+_UNSAFE_DIAGNOSTIC_CHARACTER = re.compile(
+    "[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]"
 )
 _WINDOWS_HOME_PATH = re.compile(
     r"(?i)(?:[A-Z]:\\(?:Users|Documents and Settings)\\[^\\\s\"']+(?:\\[^\s\"']*)*"
@@ -453,7 +459,8 @@ def _batch_digest(batch: ObservationBatch) -> str:
 def _redact(value: str | None) -> str:
     if not value:
         return "no diagnostic supplied"
-    cleaned = value.replace("\x00", "").replace("\r", " ").replace("\n", " ")
+    cleaned = value.replace("\r", " ").replace("\n", " ")
+    cleaned = _UNSAFE_DIAGNOSTIC_CHARACTER.sub("�", cleaned)
     cleaned = _BEARER_SECRET.sub("Bearer <redacted>", cleaned)
     cleaned = _JSON_SECRET.sub(lambda match: f'{match.group(1)}"<redacted>"', cleaned)
     cleaned = _DIAGNOSTIC_SECRET.sub(lambda match: f"{match.group(1)}=<redacted>", cleaned)
@@ -3320,12 +3327,12 @@ class SQLiteStore:
             (action_id, lease_id),
         ).fetchone()
         if row is None:
-            raise ValueError("adapter action lease is no longer current")
+            raise ActionLeaseLost("adapter action lease is no longer current")
         if ActionState(row["state"]) not in allowed_states:
-            raise ValueError("adapter action is not in a lease-authorized state")
+            raise ActionLeaseLost("adapter action is not in a lease-authorized state")
         leased_until = _dt(row["leased_until"])
         if leased_until is None or leased_until <= at:
-            raise ValueError("adapter action lease has expired")
+            raise ActionLeaseLost("adapter action lease has expired")
         return row
 
     async def record_attempt(self, attempt: ActionAttempt, *, lease_id: str) -> None:
@@ -3403,12 +3410,12 @@ class SQLiteStore:
                 SET leased_until = ?
                 WHERE action_id = ? AND lease_id = ? AND lease_worker_id = ?
                   AND state IN ('leased', 'running', 'retry_wait')
-                  AND leased_until >= ?
+                  AND leased_until > ?
                 """,
                 (_utc_text(at + _DEFAULT_LEASE), action_id, lease_id, worker_id, _utc_text(at)),
             )
             if result.rowcount != 1:
-                raise ValueError("adapter action lease is no longer current")
+                raise ActionLeaseLost("adapter action lease is no longer current")
 
     @staticmethod
     def _known_event_system_id(

@@ -11,7 +11,12 @@ from uuid import uuid4
 import httpx2
 import pytest
 
-from async_api_view.adapters.databricks import CliExecution, CliInvocation, CliRunner
+from async_api_view.adapters.databricks import (
+    CliExecution,
+    CliInvocation,
+    CliRunner,
+    LifecyclePersistenceFailure,
+)
 from async_api_view.application import SystemBootstrapService
 from async_api_view.cli import _run_once
 from async_api_view.composition import build_runtime
@@ -1455,11 +1460,12 @@ async def test_recovered_worker_uses_a_new_delivery_batch(
     assert first is not None
     original_record_attempt = runtime.store.record_attempt
 
-    async def lose_lease_before_attempt(*_args: object, **_kwargs: object) -> None:
-        raise ValueError("injected crash boundary")
+    async def fail_attempt_persistence(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("injected crash boundary")
 
-    monkeypatch.setattr(runtime.store, "record_attempt", lose_lease_before_attempt)
-    await runtime.worker.process(first, now=first_started)
+    monkeypatch.setattr(runtime.store, "record_attempt", fail_attempt_persistence)
+    with pytest.raises(LifecyclePersistenceFailure, match="attempt"):
+        await runtime.worker.process(first, now=first_started)
     assert runtime.store.list_actions()[0].state.value == "running"
     assert (
         runtime.store._connection.execute(
@@ -1519,6 +1525,65 @@ async def test_recovered_worker_uses_a_new_delivery_batch(
     assert len(journal_ids) == 2
     assert len(runner.calls) == 2
     runtime.store.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("lifecycle_method", ["record_attempt", "complete_action"])
+async def test_lifecycle_persistence_failure_degrades_worker_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lifecycle_method: str,
+) -> None:
+    runtime = build_runtime(
+        settings(tmp_path, worker_poll_seconds=0.05),
+        runner=FakeCliRunner(b"[]"),
+    )
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=refresh.system_id,
+            target_kind=refresh.target_kind,
+            target_id=refresh.target_id,
+            capability_key=refresh.capability_key,
+            facet=refresh.facet,
+        )
+    )
+    failure_reached = asyncio.Event()
+
+    async def fail_persistence(*_args: object, **_kwargs: object) -> None:
+        failure_reached.set()
+        raise sqlite3.OperationalError("injected lifecycle persistence failure")
+
+    monkeypatch.setattr(runtime.store, lifecycle_method, fail_persistence)
+    await runtime.start()
+    try:
+        await asyncio.wait_for(failure_reached.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        assert runtime.status() == (
+            False,
+            "worker stopped unexpectedly (LifecyclePersistenceFailure)",
+        )
+        degraded = await runtime.backend.dashboard()
+        assert degraded.refresh_unavailable
+        assert degraded.refresh_error == "worker stopped unexpectedly (LifecyclePersistenceFailure)"
+        assert runtime.store.list_actions()[0].state.value == "running"
+        worker_events = [
+            event
+            for event in runtime.store.list_operational_events(alertable_only=True)
+            if event.event_type == "queue.adapter_worker.failed"
+        ]
+        assert len(worker_events) == 1
+        assert "injected lifecycle persistence failure" not in worker_events[0].redacted_summary
+    finally:
+        await runtime.stop()
 
 
 @pytest.mark.anyio

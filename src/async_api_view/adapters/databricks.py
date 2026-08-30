@@ -26,6 +26,7 @@ from async_api_view.contracts import (
     ActionAttempt,
     ActionCompletion,
     ActionLease,
+    ActionLeaseLost,
     ActionLifecyclePort,
     ActionOutcome,
     ActionQueuePort,
@@ -145,6 +146,10 @@ class InvalidDownstreamResponse(DatabricksAdapterError):
 
 class ContentPolicyError(DatabricksAdapterError):
     pass
+
+
+class LifecyclePersistenceFailure(DatabricksAdapterError):
+    """A non-fencing lifecycle write failure that must reach runtime supervision."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1818,6 +1823,8 @@ class DatabricksWorker:
                 target=target,
                 executable=self.runner.executable,
             )
+        except LifecyclePersistenceFailure:
+            raise
         except Exception as exc:
             await self._complete(
                 lease,
@@ -1868,8 +1875,12 @@ class DatabricksWorker:
                             worker_id=self.worker_id,
                             at=datetime.now(UTC),
                         )
-                    except Exception:
+                    except ActionLeaseLost:
                         return
+                    except Exception as exc:
+                        raise LifecyclePersistenceFailure(
+                            "action lifecycle heartbeat could not be persisted"
+                        ) from exc
                     await asyncio.sleep(0)
                 result = await self.ingestion.ingest(
                     batch,
@@ -1925,6 +1936,8 @@ class DatabricksWorker:
                 return
             await self._complete(lease, action, outcome, None, datetime.now(UTC))
             return
+        except LifecyclePersistenceFailure:
+            raise
         except Exception as exc:
             error = classify_failure(exc)
             ended = datetime.now(UTC)
@@ -2002,10 +2015,16 @@ class DatabricksWorker:
                             worker_id=self.worker_id,
                             at=datetime.now(UTC),
                         )
-                    except Exception:
+                    except ActionLeaseLost:
                         task.cancel()
                         await asyncio.gather(task, return_exceptions=True)
                         return None
+                    except Exception as exc:
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                        raise LifecyclePersistenceFailure(
+                            "action lifecycle heartbeat could not be persisted"
+                        ) from exc
             return await task
         except asyncio.CancelledError:
             task.cancel()
@@ -2015,8 +2034,10 @@ class DatabricksWorker:
     async def _record_attempt(self, lease: ActionLease, attempt: ActionAttempt) -> bool:
         try:
             await self.lifecycle.record_attempt(attempt, lease_id=lease.lease_id)
-        except Exception:
+        except ActionLeaseLost:
             return False
+        except Exception as exc:
+            raise LifecyclePersistenceFailure("action attempt could not be persisted") from exc
         return True
 
     async def _complete(
@@ -2033,6 +2054,8 @@ class DatabricksWorker:
                 ActionCompletion(action.action_id, outcome, at, error, diagnostic),
                 lease_id=lease.lease_id,
             )
-        except Exception:
+        except ActionLeaseLost:
             return False
+        except Exception as exc:
+            raise LifecyclePersistenceFailure("action completion could not be persisted") from exc
         return True
