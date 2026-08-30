@@ -1230,6 +1230,7 @@ Their canonical types remain available for later adapter capabilities.
 The certified Databricks CLI 0.298.0 exposes the relevant `workspace`, `catalogs`, `schemas`, `tables`, and `volumes` metadata commands, structured JSON output, and named profiles.
 The adapter MUST accept only releases that passed the complete offline Rookery compatibility harness. Startup verifies the exact certified version and every reachable leaf command's usage plus required profile/output/format flags. A newer release is a review candidate, not automatically compatible.
 Successful certification binds the executable's file identity, size, high-resolution modification time, and SHA-256 digest. Every mapped dispatch rechecks that witness; changed bytes invalidate certification and must pass the complete doctor contract before any profile snapshot or mapped process starts.
+The initial witness MUST match the platform-specific binary digest derived from Databricks' published 0.298.0 checksum manifest before the executable runs. Compatibility output alone cannot establish executable origin.
 
 #### CLI-backed worker boundary
 
@@ -1521,6 +1522,9 @@ Adapter implementation configuration includes:
 The committed `uv.lock` is the dependency authority for source-checkout verification and reproducible release smoke.
 CI installs the locked development graph without installing the local project and runs source tools with synchronization disabled, so no build backend executes before the explicitly hash-constrained build step.
 Installed-wheel verification MUST export the hash-pinned runtime-only graph from that lock, install it before the wheel, install the wheel without dependency resolution, check installed compatibility, and audit the exact installed versions.
+Each standalone wheel release MUST include the exact hash-bearing runtime constraints exported from the reviewed lock. Documented install/upgrade commands MUST populate a private Python 3.12 environment with hash-required, source-build-disabled dependencies before installing the Rookery wheel without dependency resolution. The pair still requires index access, a complete trusted cache, or a separately reviewed wheelhouse and MUST NOT claim to be a self-contained offline bundle.
+A stopped upgrade MUST build and smoke a fresh relocatable sibling environment, then replace the active environment through a recoverable rename while retaining the prior environment for rollback. In-place dependency installation is insufficient because removed packages and executable `.pth` hooks can survive.
+A clean release verification MUST publish a commit-qualified SHA-256 manifest covering the sdist, wheel, and runtime constraints. CI artifact names MUST include the full source commit, and standalone guidance MUST require digest verification before install so equal package versions from different reviewed heads remain distinguishable.
 A verified release pair MUST bind every packaged module and asset to current source bytes, validate wheel dependency metadata and RECORD digests, and reproduce the direct wheel byte-for-byte from the sdist under the same constrained backend graph.
 A CI run that builds release candidates MUST retain the exact verified archives as immutable workflow artifacts rather than requiring a later unbound rebuild.
 A separate newest-allowed or range-resolution compatibility job MAY exist, but it MUST be labeled separately and MUST NOT substitute for locked release evidence.

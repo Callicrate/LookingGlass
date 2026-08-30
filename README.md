@@ -60,13 +60,34 @@ Rookery checks that fingerprint again before every remote command. Retargeting t
 Rookery resolves the CLI only from explicit absolute `PATH` entries, launches it from a fresh empty directory beneath a private per-user root, and rejects that root if any ancestor contains a bundle configuration recognized by the supported CLI contract. It removes inherited `DATABRICKS_*` and `BUNDLE_*` variables so ambient authentication or bundle settings cannot override the named profile. Configure the profile in the standard Databricks configuration location; ambient-only credentials and `DATABRICKS_CONFIG_FILE` overrides are intentionally ignored. For each mapped command, Rookery derives a minimal verified snapshot containing only the selected profile's own keys, writes it to that command's private temporary directory, and supplies it through a child-only `DATABRICKS_CONFIG_FILE`; changing the source profile after verification cannot retarget that process. `DEFAULT` is an ordinary profile and never supplies inherited credentials to another profile. Profiles that enable `skip_verify` are rejected before fingerprinting or dispatch. Each CLI runs in an owned process group on POSIX or kill-on-close Job Object on Windows, so timeout, cancellation, output overflow, and normal cleanup terminate supported auth helpers and other descendants before releasing local work. A held per-command lock protects active snapshots, normal exit removes them before releasing the lock, and every later command performs a bounded locked scan that removes crash-retained snapshots without touching live invocations.
 
 `doctor` verifies the exact certified CLI version plus every reachable leaf command's usage and required profile/output/format flags. It records a full executable identity and SHA-256 witness; every mapped dispatch verifies that witness and reruns certification before execution if the CLI path changes. It does not query workspace inventory or verify that the selected profile exists or can authenticate; the first mapped refresh performs that live check.
+Before running `--version`, doctor requires the executable bytes to match Databricks' official 0.298.0 x86-64 release digest for Windows or Linux. Compatibility-shaped mimic executables and unsupported platforms fail before receiving a profile snapshot or command authority.
 
 ## Standalone wheel install
 
-This path needs the wheel, Python 3.12, `uv`, and the Databricks CLI, but no source checkout or `config.example.toml`.
+This path needs the wheel, its matching `runtime-constraints.txt`, Python 3.12, `uv`, the Databricks CLI, and access to a Python package index for the constrained runtime dependencies, but no source checkout or `config.example.toml`.
+The Rookery wheel plus constraints file is not a self-contained offline bundle. In a restricted environment, pre-populate uv's cache with the complete constrained runtime graph or provide an internally reviewed wheelhouse before installing or upgrading; this repository does not currently publish an offline wheelhouse.
+Download the wheel, constraints file, and commit-qualified `rookery-*-SHA256SUMS.txt` from the same `rookery-distributions-<commit>-<os>` workflow artifact. Verify both install inputs before use:
 
 ```powershell
-uv tool install --python 3.12 'C:\path\to\async_api_view-0.1.0-py3-none-any.whl'
+$manifest = '.\rookery-0.1.0-<commit>-SHA256SUMS.txt'
+foreach ($artifact in @('.\async_api_view-0.1.0-py3-none-any.whl', '.\runtime-constraints.txt')) {
+  $name = Split-Path -Leaf $artifact
+  $line = @(Get-Content -LiteralPath $manifest | Where-Object { $_ -match "  $([regex]::Escape($name))$" })
+  if ($line.Count -ne 1) { throw "Missing or duplicate checksum for $name" }
+  $expected = ($line[0] -split '\s+')[0]
+  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $artifact).Hash.ToLowerInvariant()
+  if ($actual -ne $expected) { throw "Checksum mismatch for $name" }
+}
+```
+
+```powershell
+uv venv --relocatable --python 3.12 '.\rookery-tool'
+if ($LASTEXITCODE -ne 0) { throw 'Could not create the Rookery environment' }
+uv pip install --python '.\rookery-tool\Scripts\python.exe' --require-hashes --no-build -r 'C:\path\to\runtime-constraints.txt'
+if ($LASTEXITCODE -ne 0) { throw 'Could not install the hash-verified runtime graph' }
+uv pip install --python '.\rookery-tool\Scripts\python.exe' --no-deps 'C:\path\to\async_api_view-0.1.0-py3-none-any.whl'
+if ($LASTEXITCODE -ne 0) { throw 'Could not install the verified Rookery wheel' }
+$env:PATH = "$((Resolve-Path -LiteralPath '.\rookery-tool\Scripts').Path);$env:PATH"
 New-Item -ItemType Directory -Path '.\rookery' -Force
 Set-Location -LiteralPath '.\rookery'
 async-api-view init-config --output '.\rookery.toml'
@@ -83,7 +104,49 @@ async-api-view --config '.\rookery.toml' serve
 `init-config` writes UTF-8 TOML, creates parent directories, and refuses to overwrite any existing path. The generated SQLite path is `.local/rookery.sqlite3` relative to the configuration file.
 Rookery treats the database parent as a dedicated current-user state directory; do not point `database_path` at a Git worktree root or a shared directory. Existing configurations that place `rookery.sqlite3` beside the configuration file should move it into a dedicated directory and update the path before starting this version.
 Before upgrading, stop `serve` and use the currently installed version to create a no-overwrite backup in a dedicated private directory. Verify that command succeeds before replacing the package.
-Use `uv tool install --python 3.12 --force '<path-to-new-wheel>'` to upgrade and `uv tool uninstall async-api-view` to remove the installed command; configuration and cached SQLite state remain operator-owned files. Keep `--python 3.12` on every reinstall so the tool environment cannot drift outside the package and CI interpreter contract.
+To upgrade, stop `serve`, create and smoke a fresh relocatable sibling, then swap it into place while retaining the prior environment for rollback:
+
+```powershell
+$active = (Resolve-Path -LiteralPath '.\rookery-tool').Path
+$next = "$active-next"
+$previous = "$active-previous"
+if ((Test-Path -LiteralPath $next) -or (Test-Path -LiteralPath $previous)) { throw 'Upgrade staging paths already exist' }
+uv venv --relocatable --python 3.12 $next
+if ($LASTEXITCODE -ne 0) { throw 'Could not create the staged Rookery environment' }
+uv pip install --python "$next\Scripts\python.exe" --require-hashes --no-build -r '<path-to-matching-runtime-constraints.txt>'
+if ($LASTEXITCODE -ne 0) { throw 'Could not stage the hash-verified runtime graph' }
+uv pip install --python "$next\Scripts\python.exe" --no-deps '<path-to-new-wheel>'
+if ($LASTEXITCODE -ne 0) { throw 'Could not stage the verified Rookery wheel' }
+& "$next\Scripts\async-api-view.exe" --help
+if ($LASTEXITCODE -ne 0) { throw 'Staged Rookery command failed its smoke check' }
+$oldMoved = $false
+$newMoved = $false
+try {
+  Move-Item -LiteralPath $active -Destination $previous -ErrorAction Stop
+  $oldMoved = $true
+  Move-Item -LiteralPath $next -Destination $active -ErrorAction Stop
+  $newMoved = $true
+  & "$active\Scripts\async-api-view.exe" --help
+  if ($LASTEXITCODE -ne 0) { throw 'Relocated Rookery command failed its smoke check' }
+} catch {
+  $upgradeFailure = $_
+  try {
+    if ($newMoved -and (Test-Path -LiteralPath $active)) {
+      Move-Item -LiteralPath $active -Destination $next -ErrorAction Stop
+      $newMoved = $false
+    }
+    if ($oldMoved -and (Test-Path -LiteralPath $previous)) {
+      Move-Item -LiteralPath $previous -Destination $active -ErrorAction Stop
+      $oldMoved = $false
+    }
+  } catch {
+    throw "Upgrade failed and rollback also failed: $($_.Exception.Message)"
+  }
+  throw $upgradeFailure
+}
+```
+
+Keep `$previous` until the upgraded command and local state have passed validation. Remove the private environment to uninstall the command; configuration and cached SQLite state remain operator-owned files. A fresh sibling prevents packages removed from the new lock, including executable `.pth` hooks, from surviving an upgrade. Keep the matching constraints, relocatable Python 3.12 environment, `--require-hashes`, `--no-build`, and `--no-deps` separation on every install. Installation and upgrade still require the configured package index or a complete populated cache; a staging failure leaves the active environment untouched.
 The first later `init`, `run-once`, or `serve` invocation automatically applies pending migrations. In-place downgrade is unsupported because an older binary rejects migration-ledger versions it does not know. Keep the pre-upgrade backup until the upgraded version has passed local validation; restore remains a separate unsupported workflow.
 
 ## Source checkout setup
@@ -192,6 +255,7 @@ uv run --no-sync coverage json -o coverage-report.json
 uv run --no-sync python scripts/check_coverage.py coverage-report.json
 uv lock --check
 uv audit --locked --preview-features audit-command
+uv export --locked --no-dev --no-emit-project --no-header --format requirements.txt --output-file runtime-constraints.txt
 uv build --build-constraint build-constraints.txt --require-hashes
 uv run --no-sync python scripts/verify_distribution.py
 ```
@@ -200,7 +264,7 @@ The default test suite uses fake CLI results and does not contact Databricks.
 A live smoke test requires an explicit named profile and Workspace root.
 The same formatting, lint, test, and locked-dependency checks run on Windows and Ubuntu in CI for pushes and pull requests.
 `check_coverage.py` reports and enforces statement (85%), branch-only (75%), and combined (80%) floors separately.
-`verify_distribution.py` binds every packaged module and runtime asset to current source bytes, validates wheel metadata and RECORD digests, rebuilds the wheel from the sdist under the hash-constrained build graph, requires byte identity, installs the locked runtime graph into a private wheel environment, installs the wheel with `--no-deps`, runs checkout-free behavior checks, and audits the exact installed versions. It separately exercises the documented disposable `uv tool install --python 3.12` and Python-pinned force-upgrade path so tool interpreter drift cannot hide behind the locked wheel smoke. This keeps release smoke and vulnerability evidence on one dependency graph.
+`verify_distribution.py` binds every packaged module and runtime asset to current source bytes, validates wheel metadata and RECORD digests, rebuilds the wheel from the sdist under the hash-constrained build graph, requires byte identity, installs the locked runtime graph into a private wheel environment, installs the wheel with `--no-deps`, runs checkout-free behavior checks, and audits the exact installed versions. It verifies the tracked hash-bearing runtime constraints against `uv.lock`, exercises documented hash-required private-environment installation and fresh-sibling upgrade, rejects corrupted dependency hashes, proves prior-only startup hooks cannot survive, publishes the constraints into `dist/`, and writes a commit-qualified SHA-256 manifest only from a completely clean checkout. This keeps release smoke, standalone execution, vulnerability evidence, and source provenance on one dependency graph.
 Dependabot opens weekly update proposals for both the `uv` lock and pinned GitHub Actions; proposals must pass the same gates.
 
 ## Project structure
