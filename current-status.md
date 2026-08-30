@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 13:35 ET
+Updated: 2026-08-30 14:15 ET
 
 ## Contents
 
@@ -17,14 +17,14 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 630 passed / 8 platform skips; Ubuntu/WSL 632 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained build, exact distribution verification, and installed-wheel smoke pass on both.
-- Coverage: Windows 90.32% statements / 76.70% branch-only / 87.02% combined; Ubuntu/WSL 87.72% / 75.48% / 84.74%.
+- Latest checks: Windows 633 passed / 8 platform skips; Ubuntu/WSL 635 passed / 6 platform skips. Format, standard/security/performance lint and lock/audit pass; constrained build and exact distribution verification remain at the preceding clean commit until this candidate is committed.
+- Coverage: Windows 90.36% statements / 76.81% branch-only / 87.06% combined; Ubuntu/WSL 87.70% / 75.54% / 84.75%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
+- Version control: local `main` includes implementation commit `e668818`, which hardens process ownership, profile parsing, durable timestamp/key contracts, deadline partitioning, and receipt output after independent clearance.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-131411.md` is closed in commit `c332742` after one low expired-form recovery defect and two medium polling/terminal-state defects were repaired, rendered, and independently cleared.
+- Active review round: `critical-reviews/20260830-133812.md` has repaired one medium Windows process-ownership leak path plus four low contract/parser/complexity findings, reduced the Pyright 1.1.411 baseline from 160 to 144 without suppressions, passed exact Windows/WSL behavior gates and independent re-review, and awaits clean-commit package verification.
 - Latest checkpoint: `progress/20260830-133449.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 11 record earlier committed closures, and post 12 records the write-headroom and monotonic-time closures.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 12 record earlier committed closures, and post 13 records the concurrent-receipt, v1 compatibility, and browser-recovery closures with exact author/model provenance reverified.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -63,6 +63,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close concurrent receipt, replay, lease, migration, and backup delta review.
 - [x] Close exported v1 and installed extension-surface review.
 - [x] Close browser recovery, no-JavaScript, polling, and responsive-state review.
+- [ ] Close static-contract and reachable-runtime-defect review without broad suppressions.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
