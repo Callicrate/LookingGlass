@@ -16,9 +16,11 @@ import ipaddress
 import json
 import math
 import os
+import platform
 import re
 import signal
 import stat
+import sys
 import tempfile
 import threading
 import time
@@ -74,6 +76,13 @@ from async_api_view.local_files import (
 DATABRICKS_ADAPTER_KEY = "databricks"
 DATABRICKS_ADAPTER_VERSION = "1"
 CERTIFIED_CLI_VERSIONS = frozenset({(0, 298, 0)})
+# Binary digests extracted from Databricks' official 0.298.0 archives after verifying the
+# corresponding published SHA256SUMS entries. The Windows release is Authenticode-signed by
+# DATABRICKS, INC.; exact byte identity preserves that signed artifact.
+CERTIFIED_CLI_SHA256 = {
+    ("linux", "x86_64"): "1f8d562a8138fce9ac992cfbbaceadd0f9b890c750279d22723e194ffe55ae91",
+    ("win32", "amd64"): "f8847ae09c57eed42c7177ef6d664d1bc4564e4f30b7c3920e435127d7e440be",
+}
 MAX_JSON_BYTES = 4 * 1024 * 1024
 DEFAULT_STDOUT_CAP = 8 * 1024 * 1024
 DEFAULT_STDERR_CAP = 64 * 1024
@@ -152,6 +161,10 @@ class CommandRejected(DatabricksAdapterError):
 
 class CliUnavailable(DatabricksAdapterError):
     pass
+
+
+class CliRuntimeUnavailable(CliUnavailable):
+    """A worker-global executable or process boundary failure."""
 
 
 class CliIncompatible(DatabricksAdapterError):
@@ -1214,8 +1227,8 @@ class CliRunner:
     def _current_executable_witness(self) -> _ExecutableWitness:
         try:
             return _executable_witness(Path(self.resolve_executable()))
-        except OSError as exc:
-            raise CliUnavailable("Databricks CLI executable could not be witnessed") from exc
+        except (CliUnavailable, OSError) as exc:
+            raise CliRuntimeUnavailable("Databricks CLI executable could not be witnessed") from exc
 
     async def ensure_executable_compatibility(self) -> None:
         current = await asyncio.to_thread(self._current_executable_witness)
@@ -1223,6 +1236,19 @@ class CliRunner:
             return
         self._certified_executable_witness = None
         await self.doctor()
+
+    @staticmethod
+    def _verify_official_executable(witness: _ExecutableWitness) -> None:
+        key = (sys.platform.casefold(), platform.machine().casefold())
+        expected = CERTIFIED_CLI_SHA256.get(key)
+        if expected is None:
+            raise CliIncompatible(
+                f"Databricks CLI 0.298.0 is not certified on platform {key[0]}/{key[1]}"
+            )
+        if witness.sha256 != expected:
+            raise CliIncompatible(
+                "Databricks CLI executable does not match the certified official 0.298.0 digest"
+            )
 
     async def _execute(
         self,
@@ -1233,11 +1259,11 @@ class CliRunner:
         profile_config_snapshot: bytes | None = None,
     ) -> CliExecution:
         started = time.monotonic()
-        work_root = _trusted_cli_work_root()
         try:
+            work_root = _trusted_cli_work_root()
             _recover_cli_work_root(work_root)
-        except OSError as exc:
-            raise CliUnavailable("Rookery CLI work recovery failed") from exc
+        except (CliUnavailable, OSError) as exc:
+            raise CliRuntimeUnavailable("Rookery CLI work recovery failed") from exc
         with (
             tempfile.TemporaryDirectory(
                 prefix=_CLI_WORK_PREFIX,
@@ -1283,14 +1309,16 @@ class CliRunner:
                         **process_options,
                     )
                 except OSError as exc:
-                    raise CliUnavailable("Databricks CLI process could not start") from exc
+                    raise CliRuntimeUnavailable("Databricks CLI process could not start") from exc
                 try:
                     process_tree = _ProcessTree(process)
                 except OSError as exc:
                     if process.returncode is None:
                         process.kill()
                     await process.wait()
-                    raise CliUnavailable("Rookery could not own the CLI process tree") from exc
+                    raise CliRuntimeUnavailable(
+                        "Rookery could not own the CLI process tree"
+                    ) from exc
                 try:
                     stdout_task = asyncio.create_task(
                         _read_limited(process.stdout, self.stdout_cap)
@@ -1383,6 +1411,7 @@ class CliRunner:
         self.resolve_executable()
         self._certified_executable_witness = None
         initial_witness = await asyncio.to_thread(self._current_executable_witness)
+        self._verify_official_executable(initial_witness)
         version_result = await self.run_unmapped(
             CliInvocation("doctor", (self.executable, "--version"))
         )
@@ -2639,6 +2668,7 @@ class DatabricksWorker:
         except LifecyclePersistenceFailure:
             raise
         except Exception as exc:
+            worker_global_failure = isinstance(exc, CliIncompatible | CliRuntimeUnavailable)
             error = classify_failure(exc)
             ended = datetime.now(UTC)
             downstream_failure = exc if isinstance(exc, DownstreamFailure) else None
@@ -2671,10 +2701,14 @@ class DatabricksWorker:
                     redacted_diagnostic=safe_diagnostic(error),
                 ),
             ):
+                if worker_global_failure:
+                    raise
                 return
             if retry_at is not None:
                 return
             await self._complete(lease, action, ActionOutcome.FAILED, error, ended)
+            if worker_global_failure:
+                raise
 
     async def _binding(self, action: AdapterAction) -> ConnectionBinding:
         binding = await self.bindings.get_connection_binding(action.connection_binding_id)

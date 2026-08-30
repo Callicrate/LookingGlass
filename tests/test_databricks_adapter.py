@@ -333,6 +333,12 @@ class ScriptedDoctorRunner(CliRunner):
             sha256=f"{self.executable_generation:064x}",
         )
 
+    @staticmethod
+    def _verify_official_executable(
+        _witness: databricks_adapter._ExecutableWitness,
+    ) -> None:
+        return None
+
     async def run_unmapped(self, invocation: CliInvocation) -> CliExecution:
         args = invocation.argv[1:]
         self.calls.append(args)
@@ -415,6 +421,18 @@ def test_mapped_compatibility_recertifies_changed_executable_before_dispatch() -
 
     assert runner.calls[original_calls:] == [("--version",)]
     assert runner._certified_executable_witness is None
+
+
+def test_doctor_rejects_unofficial_digest_before_executing_binary() -> None:
+    class UntrustedRunner(ScriptedDoctorRunner):
+        _verify_official_executable = staticmethod(CliRunner._verify_official_executable)
+
+    runner = UntrustedRunner(b"Databricks CLI v0.298.0")
+
+    with pytest.raises(CliIncompatible, match=r"official 0\.298\.0 digest"):
+        asyncio.run(runner.doctor())
+
+    assert runner.calls == []
 
 
 def test_profile_authority_fingerprint_normalizes_and_fails_closed(

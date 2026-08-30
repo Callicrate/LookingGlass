@@ -14,6 +14,7 @@ import pytest
 
 from async_api_view.adapters.databricks import (
     CliExecution,
+    CliIncompatible,
     CliInvocation,
     CliRunner,
     LifecyclePersistenceFailure,
@@ -147,6 +148,25 @@ class BlockingStartupCliRunner(FakeCliRunner):
             self.cancelled = True
             raise
         raise AssertionError("blocking compatibility check unexpectedly resumed")
+
+
+class RuntimeIncompatibleCliRunner(FakeCliRunner):
+    def __init__(self) -> None:
+        super().__init__(b"[]")
+        self.certified = True
+        self.failure_reached = asyncio.Event()
+        self.recovered = asyncio.Event()
+
+    async def doctor(self) -> None:
+        if not self.certified:
+            raise CliIncompatible("certified CLI changed")
+        self.recovered.set()
+
+    async def run(self, invocation: CliInvocation, *, correlation_id: str) -> CliExecution:
+        del invocation, correlation_id
+        self.certified = False
+        self.failure_reached.set()
+        raise CliIncompatible("certified CLI changed")
 
 
 def settings(
@@ -1792,6 +1812,75 @@ async def test_worker_startup_retries_with_one_event_and_clears_dashboard_error(
     assert len(worker_events) == 1
 
     await runtime.stop()
+
+
+@pytest.mark.anyio
+async def test_runtime_disables_refresh_until_changed_cli_recertifies(tmp_path: Path) -> None:
+    runner = RuntimeIncompatibleCliRunner()
+    runtime = build_runtime(
+        settings(tmp_path, worker_poll_seconds=0.05),
+        runner=runner,
+    )
+    await runtime.start()
+    try:
+        for _ in range(100):
+            if runtime.worker_available:
+                break
+            await asyncio.sleep(0.01)
+        assert runtime.worker_available
+        runner.recovered.clear()
+        dashboard = await runtime.backend.dashboard()
+        refresh = next(
+            option
+            for option in dashboard.refresh_options
+            if option.capability_key == "databricks.workspace.children.read"
+            and option.target_kind == "configured_scope"
+        )
+        await runtime.backend.submit_refresh(
+            RefreshRequest(
+                system_id=refresh.system_id,
+                target_kind=refresh.target_kind,
+                target_id=refresh.target_id,
+                capability_key=refresh.capability_key,
+                facet=refresh.facet,
+            )
+        )
+        await asyncio.wait_for(runner.failure_reached.wait(), timeout=1)
+        for _ in range(100):
+            if not runtime.worker_available:
+                break
+            await asyncio.sleep(0.01)
+
+        assert runtime.status() == (
+            False,
+            "worker stopped unexpectedly (CliIncompatible)",
+        )
+        action = runtime.store.list_actions()[0]
+        assert action.state.value == "failed"
+        assert action.error_class == "adapter_contract_mismatch"
+        unavailable = await runtime.backend.dashboard()
+        assert unavailable.refresh_unavailable
+        assert all(not option.enabled for option in unavailable.refresh_options)
+        worker_events = [
+            event
+            for event in runtime.store.list_operational_events(alertable_only=True)
+            if event.event_type == "queue.adapter_worker.failed"
+        ]
+        assert len(worker_events) == 1
+
+        runner.certified = True
+        runtime.wake()
+        await asyncio.wait_for(runner.recovered.wait(), timeout=1)
+        for _ in range(100):
+            if runtime.worker_available:
+                break
+            await asyncio.sleep(0.01)
+        recovered = await runtime.backend.dashboard()
+        assert runtime.worker_available
+        assert not recovered.refresh_unavailable
+        assert all(option.enabled for option in recovered.refresh_options)
+    finally:
+        await runtime.stop()
 
 
 @pytest.mark.anyio
