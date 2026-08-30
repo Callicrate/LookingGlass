@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 14:15 ET
+Updated: 2026-08-30 14:21 ET
 
 ## Contents
 
@@ -22,8 +22,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` includes implementation commit `e668818`, which hardens process ownership, profile parsing, durable timestamp/key contracts, deadline partitioning, and receipt output after independent clearance.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-133812.md` is closed after repairing one medium Windows process-ownership leak path plus four low contract/parser/complexity findings, reducing the Pyright 1.1.411 baseline from 160 to 144 without suppressions, and passing exact Windows/WSL behavior, package, and independent-review gates.
-- Latest checkpoint: `progress/20260830-133449.md`.
+- Active review round: `critical-reviews/20260830-141800.md` is testing stored-row corruption containment across browser reads, projections, history, and worker recovery while preserving fail-closed identity/authority boundaries.
+- Latest checkpoint: `progress/20260830-142109.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 12 record earlier committed closures, and post 13 records the concurrent-receipt, v1 compatibility, and browser-recovery closures with exact author/model provenance reverified.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -64,6 +64,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close exported v1 and installed extension-surface review.
 - [x] Close browser recovery, no-JavaScript, polling, and responsive-state review.
 - [x] Close static-contract and reachable-runtime-defect review without broad suppressions.
+- [ ] Close stored-state corruption-containment and read-availability review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
