@@ -402,44 +402,76 @@ def validate_installed_audit(audit_output: str, expected_packages: int) -> None:
         )
 
 
-def smoke_uv_tool_install(
+def smoke_pinned_cli_environment(
     wheel_archive: Path,
     *,
     uv: Path,
     temporary: str,
     process_environment: dict[str, str],
+    runtime_constraints: Path,
+    expected_requirements: tuple[str, ...],
 ) -> None:
-    """Exercise the documented Python-pinned tool install and force-upgrade path."""
+    """Exercise documented hash-verified private-environment install and upgrade."""
 
-    tool_root = Path(temporary) / "uv-tools"
-    tool_bin = Path(temporary) / "uv-tool-bin"
-    tool_environment = dict(process_environment)
-    tool_environment["UV_TOOL_DIR"] = str(tool_root)
-    tool_environment["UV_TOOL_BIN_DIR"] = str(tool_bin)
-    base_command = [
-        str(uv),
-        "tool",
-        "install",
-        "--python",
-        "3.12",
-        "--no-config",
-        str(wheel_archive.resolve()),
-    ]
-    for force in (False, True):
-        command = [*base_command[:-1]]
-        if force:
-            command.append("--force")
-        command.append(base_command[-1])
-        subprocess.run(  # noqa: S603 - absolute uv and verified local wheel
-            command,
+    def create_environment(environment: Path) -> Path:
+        subprocess.run(  # noqa: S603 - absolute uv and fixed private environment
+            [
+                str(uv),
+                "venv",
+                "--quiet",
+                "--relocatable",
+                "--python",
+                "3.12",
+                str(environment),
+            ],
             check=True,
             capture_output=True,
             cwd=temporary,
-            env=tool_environment,
+            env=process_environment,
+            text=True,
+            timeout=30,
+        )
+        python = _venv_python(environment)
+        subprocess.run(  # noqa: S603 - absolute uv, exact hashes, and private interpreter
+            [
+                str(uv),
+                "pip",
+                "install",
+                "--python",
+                str(python),
+                "--require-hashes",
+                "--no-build",
+                "-r",
+                str(runtime_constraints),
+            ],
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=process_environment,
             text=True,
             timeout=180,
         )
-        python = _venv_python(tool_root / "async-api-view")
+        subprocess.run(  # noqa: S603 - absolute uv and verified local wheel
+            [
+                str(uv),
+                "pip",
+                "install",
+                "--python",
+                str(python),
+                "--no-deps",
+                str(wheel_archive.resolve()),
+            ],
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=process_environment,
+            text=True,
+            timeout=180,
+        )
+        return python
+
+    def verify_environment(environment: Path) -> None:
+        python = _venv_python(environment)
         version = subprocess.run(  # noqa: S603 - interpreter in disposable tool environment
             [
                 str(python),
@@ -449,24 +481,154 @@ def smoke_uv_tool_install(
             check=True,
             capture_output=True,
             cwd=temporary,
-            env=tool_environment,
+            env=process_environment,
             text=True,
             timeout=30,
         ).stdout.strip()
         if version != "3.12":
+            raise RuntimeError(f"documented private environment used Python {version}")
+        freeze_result = subprocess.run(  # noqa: S603 - verified disposable tool interpreter
+            [str(uv), "pip", "freeze", "--python", str(python)],
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=process_environment,
+            text=True,
+            timeout=30,
+        )
+        installed_requirements = locked_installed_requirements(freeze_result.stdout)
+        if installed_requirements != expected_requirements:
             raise RuntimeError(
-                f"documented uv tool {'upgrade' if force else 'install'} used Python {version}"
+                "documented private install diverged from the locked runtime graph: "
+                f"expected={expected_requirements}, installed={installed_requirements}"
             )
-    cli = tool_bin / ("async-api-view.exe" if os.name == "nt" else "async-api-view")
-    subprocess.run(  # noqa: S603 - disposable documented tool entry point
-        [str(cli), "--help"],
+        subprocess.run(  # noqa: S603 - disposable documented tool entry point
+            [str(_venv_cli(environment)), "--help"],
+            check=True,
+            capture_output=True,
+            cwd=temporary,
+            env=process_environment,
+            text=True,
+            timeout=30,
+        )
+
+    environment = Path(temporary) / "standalone-venv"
+    create_environment(environment)
+    verify_environment(environment)
+    constraints_text = runtime_constraints.read_text(encoding="utf-8")
+    click_block = re.search(r"(?ms)^click==.*?(?=^[A-Za-z0-9]|\Z)", constraints_text)
+    if click_block is None:
+        raise RuntimeError("runtime constraints have no Click hash block")
+    corrupted_block = re.sub(
+        r"sha256:[0-9a-f]{64}",
+        f"sha256:{'0' * 64}",
+        click_block.group(0),
+    )
+    corrupted_constraints = Path(temporary) / "corrupted-runtime-constraints.txt"
+    corrupted_constraints.write_text(
+        constraints_text.replace(click_block.group(0), corrupted_block),
+        encoding="utf-8",
+        newline="\n",
+    )
+    corrupt_environment = Path(temporary) / "corrupt-venv"
+    subprocess.run(  # noqa: S603 - absolute uv and fixed private environment
+        [str(uv), "venv", "--quiet", "--python", "3.12", str(corrupt_environment)],
         check=True,
         capture_output=True,
         cwd=temporary,
-        env=tool_environment,
+        env=process_environment,
         text=True,
         timeout=30,
     )
+    rejected = subprocess.run(  # noqa: S603 - deliberate hash-failure probe
+        [
+            str(uv),
+            "pip",
+            "install",
+            "--python",
+            str(_venv_python(corrupt_environment)),
+            "--require-hashes",
+            "--no-build",
+            "-r",
+            str(corrupted_constraints),
+        ],
+        check=False,
+        capture_output=True,
+        cwd=temporary,
+        env=process_environment,
+        text=True,
+        timeout=180,
+    )
+    if rejected.returncode == 0 or "hash" not in (rejected.stdout + rejected.stderr).casefold():
+        raise RuntimeError("corrupted runtime dependency hash was not rejected")
+    verify_environment(environment)
+
+    prior_wheel = Path(temporary) / "prior_only-1.0-py3-none-any.whl"
+    marker = Path(temporary) / "prior-only-startup-marker"
+    metadata_root = "prior_only-1.0.dist-info"
+    startup = f"import pathlib; pathlib.Path({str(marker)!r}).write_text('ran')\n".encode()
+    records = (
+        "prior_only.pth,,\n"
+        f"{metadata_root}/METADATA,,\n"
+        f"{metadata_root}/WHEEL,,\n"
+        f"{metadata_root}/RECORD,,\n"
+    )
+    with ZipFile(prior_wheel, "w") as wheel:
+        wheel.writestr("prior_only.pth", startup)
+        wheel.writestr(
+            f"{metadata_root}/METADATA",
+            "Metadata-Version: 2.1\nName: prior-only\nVersion: 1.0\n",
+        )
+        wheel.writestr(
+            f"{metadata_root}/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: rookery-verifier\n"
+            "Root-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        wheel.writestr(f"{metadata_root}/RECORD", records)
+    subprocess.run(  # noqa: S603 - synthetic local wheel in disposable environment
+        [
+            str(uv),
+            "pip",
+            "install",
+            "--python",
+            str(_venv_python(environment)),
+            "--no-deps",
+            str(prior_wheel),
+        ],
+        check=True,
+        capture_output=True,
+        cwd=temporary,
+        env=process_environment,
+        text=True,
+        timeout=30,
+    )
+    subprocess.run(  # noqa: S603 - disposable interpreter and startup-hook probe
+        [str(_venv_python(environment)), "-c", "pass"],
+        check=True,
+        cwd=temporary,
+        env=process_environment,
+        timeout=30,
+    )
+    if not marker.is_file():
+        raise RuntimeError("prior-only startup hook did not execute before upgrade")
+
+    next_environment = Path(temporary) / "standalone-venv-next"
+    create_environment(next_environment)
+    verify_environment(next_environment)
+    marker.unlink()
+    previous_environment = Path(temporary) / "standalone-venv-previous"
+    environment.rename(previous_environment)
+    next_environment.rename(environment)
+    verify_environment(environment)
+    subprocess.run(  # noqa: S603 - relocated disposable interpreter
+        [str(_venv_python(environment)), "-c", "pass"],
+        check=True,
+        cwd=temporary,
+        env=process_environment,
+        timeout=30,
+    )
+    if marker.exists():
+        raise RuntimeError("prior-only startup hook survived fresh-environment upgrade")
 
 
 def smoke_installed_wheel(
@@ -487,12 +649,6 @@ def smoke_installed_wheel(
         }
         process_environment["PYTHONNOUSERSITE"] = "1"
         uv = _uv_executable()
-        smoke_uv_tool_install(
-            wheel_archive,
-            uv=uv,
-            temporary=temporary,
-            process_environment=process_environment,
-        )
         subprocess.run(  # noqa: S603 - absolute uv from the verified build environment
             [
                 str(uv),
@@ -516,6 +672,9 @@ def smoke_installed_wheel(
         constraints_text = runtime_constraints.read_text(encoding="utf-8")
         if "--hash=sha256:" not in constraints_text or "async-api-view==" in constraints_text:
             raise RuntimeError("locked runtime constraints are incomplete")
+        tracked_constraints = project_root / "runtime-constraints.txt"
+        if runtime_constraints.read_bytes() != tracked_constraints.read_bytes():
+            raise RuntimeError("tracked runtime constraints do not match uv.lock")
         subprocess.run(  # noqa: S603 - absolute uv from the verified build environment
             [
                 str(uv),
@@ -583,6 +742,14 @@ def smoke_installed_wheel(
             timeout=30,
         )
         installed_requirements = locked_installed_requirements(freeze_result.stdout)
+        smoke_pinned_cli_environment(
+            wheel_archive,
+            uv=uv,
+            temporary=temporary,
+            process_environment=process_environment,
+            runtime_constraints=tracked_constraints,
+            expected_requirements=installed_requirements,
+        )
         audit_project = Path(temporary) / "audit-project"
         audit_project.mkdir()
         (audit_project / "pyproject.toml").write_text(
@@ -766,6 +933,62 @@ def verify_sdist_rebuild(source_archive: Path, wheel_archive: Path) -> None:
             raise RuntimeError("sdist rebuild does not reproduce the directly built wheel")
 
 
+def publish_release_evidence(
+    source_archive: Path,
+    wheel_archive: Path,
+    runtime_constraints: Path,
+) -> Path | None:
+    """Publish exact constraints and a commit-bound checksum manifest for a clean checkout."""
+
+    distribution_dir = source_archive.parent
+    published_constraints = distribution_dir / "runtime-constraints.txt"
+    published_constraints.write_bytes(runtime_constraints.read_bytes())
+    for stale in distribution_dir.glob("rookery-*-SHA256SUMS.txt"):
+        stale.unlink()
+    executable = shutil.which("git")
+    if executable is None:
+        raise RuntimeError("git is required for release provenance verification")
+    git = str(Path(executable).absolute())
+    status = subprocess.run(  # noqa: S603 - absolute git and fixed read-only arguments
+        [git, "status", "--porcelain", "--untracked-files=all"],
+        check=True,
+        capture_output=True,
+        cwd=Path.cwd().resolve(),
+        timeout=30,
+    ).stdout
+    if status.strip():
+        if os.environ.get("GITHUB_SHA"):
+            raise RuntimeError("CI release verification requires a clean tracked checkout")
+        return None
+    commit = subprocess.run(  # noqa: S603 - absolute git and fixed read-only arguments
+        [git, "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        cwd=Path.cwd().resolve(),
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+    expected_commit = os.environ.get("GITHUB_SHA")
+    if expected_commit and commit != expected_commit:
+        raise RuntimeError(
+            f"release provenance commit mismatch: expected {expected_commit}, observed {commit}"
+        )
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+    manifest = distribution_dir / f"rookery-{project['version']}-{commit}-SHA256SUMS.txt"
+    artifacts = (source_archive, wheel_archive, published_constraints)
+    lines = [
+        f"# project={project['name']}",
+        f"# version={project['version']}",
+        f"# commit={commit}",
+    ]
+    lines.extend(
+        f"{hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact.name}"
+        for artifact in artifacts
+    )
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    return manifest
+
+
 def main() -> None:
     distribution_dir = Path("dist")
     source_archive = _single_archive(distribution_dir, "*.tar.gz", "source")
@@ -785,10 +1008,21 @@ def main() -> None:
     verify_wheel_record(wheel_archive)
     verify_sdist_rebuild(source_archive, wheel_archive)
     smoke_installed_wheel(wheel_archive, expected_assets)
+    manifest = publish_release_evidence(
+        source_archive,
+        wheel_archive,
+        Path("runtime-constraints.txt"),
+    )
+    manifest_summary = (
+        f"; manifest {manifest.name}"
+        if manifest is not None
+        else "; manifest deferred until clean commit"
+    )
     print(
         f"Verified {source_archive.name} ({len(source_names)} entries), "
         f"{wheel_archive.name} ({wheel_entry_count} entries), "
-        f"and {len(expected_assets)} installed runtime assets."
+        f"and {len(expected_assets)} installed runtime assets"
+        f"{manifest_summary}."
     )
 
 
