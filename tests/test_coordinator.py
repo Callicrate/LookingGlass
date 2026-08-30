@@ -104,7 +104,10 @@ def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     store._connection.execute(
         """
         DELETE FROM schema_migrations
-        WHERE version IN ('0024_corruption_containment', '0025_authority_read_plans')
+        WHERE version IN (
+            '0024_corruption_containment', '0025_authority_read_plans',
+            '0026_lazy_scope_warning'
+        )
         """
     )
 

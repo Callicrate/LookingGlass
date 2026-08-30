@@ -1966,6 +1966,26 @@ class SQLiteStore:
             ).fetchone()
         return row["system_id"] if row is not None else None
 
+    def get_readable_configured_system_identity(
+        self, *, system_kind: str, config_id: str, authority_key: str
+    ) -> str | None:
+        require_contract_key(system_kind, "system_kind")
+        config_id = _canonical_config_id(config_id)
+        require_text(authority_key, "authority_key", max_length=2048)
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT system_id
+                FROM readable_configured_system_identities
+                WHERE system_kind = ? AND config_id = ? COLLATE NOCASE
+                  AND authority_key = ?
+                ORDER BY record_created_at, config_id, system_id
+                LIMIT 1
+                """,
+                (system_kind, config_id, authority_key),
+            ).fetchone()
+        return row["system_id"] if row is not None else None
+
     def get_configured_identity_for_system(self, system_id: str) -> tuple[str, str] | None:
         """Return the non-secret config ID and authority key for one local system."""
 
@@ -2290,6 +2310,61 @@ class SQLiteStore:
                 (system_kind, config_id, authority_key, system_id, created_at, timestamp),
             )
 
+    def repair_configuration_record_timestamps(
+        self, *, system_kind: str, now: datetime | None = None
+    ) -> None:
+        """Canonicalize non-authoritative bookkeeping before configuration reconstruction."""
+
+        require_contract_key(system_kind, "system_kind")
+        timestamp = _utc_text(now or _now())
+        with self._immediate_transaction() as connection:
+            connection.execute(
+                """
+                UPDATE systems SET
+                    record_created_at = CASE
+                        WHEN rookery_is_canonical_timestamp(record_created_at) = 1
+                        THEN record_created_at
+                        WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                        THEN record_updated_at ELSE ? END,
+                    record_updated_at = CASE
+                        WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                        THEN record_updated_at ELSE ? END
+                WHERE system_kind = ?
+                """,
+                (timestamp, timestamp, system_kind),
+            )
+            for table_name, system_condition in (
+                (
+                    "connection_bindings",
+                    "system_id IN (SELECT system_id FROM systems WHERE system_kind = ?)",
+                ),
+                (
+                    "capability_bindings",
+                    "connection_binding_id IN (SELECT binding_id FROM connection_bindings "
+                    "WHERE system_id IN (SELECT system_id FROM systems WHERE system_kind = ?))",
+                ),
+                (
+                    "configured_scopes",
+                    "system_id IN (SELECT system_id FROM systems WHERE system_kind = ?)",
+                ),
+                ("configured_system_identities", "system_kind = ?"),
+            ):
+                connection.execute(
+                    f"""
+                    UPDATE {table_name} SET
+                        record_created_at = CASE
+                            WHEN rookery_is_canonical_timestamp(record_created_at) = 1
+                            THEN record_created_at
+                            WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                            THEN record_updated_at ELSE ? END,
+                        record_updated_at = CASE
+                            WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                            THEN record_updated_at ELSE ? END
+                    WHERE {system_condition}
+                    """,  # noqa: S608 - fixed table and condition fragments
+                    (timestamp, timestamp, system_kind),
+                )
+
     def reconcile_configured_resources(
         self,
         *,
@@ -2312,6 +2387,30 @@ class SQLiteStore:
         desired_scopes = tuple(require_uuid(value, "scope_id") for value in scope_ids)
         timestamp = _utc_text(now or _now())
         with self._immediate_transaction() as connection:
+            for table_name, id_column, desired_ids in (
+                ("systems", "system_id", desired_systems),
+                ("connection_bindings", "binding_id", desired_bindings),
+                ("capability_bindings", "capability_binding_id", desired_capabilities),
+                ("configured_scopes", "scope_id", desired_scopes),
+            ):
+                connection.executemany(
+                    f"""UPDATE {table_name} SET record_created_at = CASE
+                            WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                            THEN record_updated_at ELSE ? END
+                        WHERE {id_column} = ?
+                          AND rookery_is_canonical_timestamp(record_created_at) = 0""",  # noqa: S608 - fixed identifiers
+                    ((timestamp, value) for value in desired_ids),
+                )
+            connection.executemany(
+                """
+                UPDATE configured_system_identities SET record_created_at = CASE
+                    WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                    THEN record_updated_at ELSE ? END
+                WHERE system_id = ?
+                  AND rookery_is_canonical_timestamp(record_created_at) = 0
+                """,
+                ((timestamp, value) for value in desired_systems),
+            )
             active_systems = tuple(
                 row["system_id"]
                 for row in connection.execute(

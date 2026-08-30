@@ -1404,6 +1404,7 @@ def build_runtime(
 
 def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) -> None:
     bootstrap = SystemBootstrapService(store)
+    store.repair_configuration_record_timestamps(system_kind="databricks.workspace")
     configured_system_ids: set[str] = set()
     configured_binding_ids: set[str] = set()
     configured_capability_ids: set[str] = set()
@@ -1425,7 +1426,7 @@ def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) ->
         )
         stable = legacy_stable
         if config_id is not None:
-            mapped = store.get_configured_system_identity(
+            mapped = store.get_readable_configured_system_identity(
                 system_kind="databricks.workspace",
                 config_id=config_id,
                 authority_key=authority_key,

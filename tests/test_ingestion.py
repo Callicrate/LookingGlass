@@ -93,7 +93,10 @@ def _rewind_projection_order_migration(store: SQLiteStore) -> None:
     store._connection.execute(
         """
         DELETE FROM schema_migrations
-        WHERE version IN ('0024_corruption_containment', '0025_authority_read_plans')
+        WHERE version IN (
+            '0024_corruption_containment', '0025_authority_read_plans',
+            '0026_lazy_scope_warning'
+        )
         """
     )
     for table_name, column_name in (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 from dataclasses import replace
@@ -2147,6 +2148,129 @@ def test_workspace_root_change_creates_new_authority_and_pauses_predecessor(
         not scope.enabled for scope in changed.store.list_configured_scopes(system_id=original_id)
     )
     changed.store.close()
+
+
+@pytest.mark.anyio
+async def test_corrupt_identity_cannot_bridge_authority_generations(tmp_path: Path) -> None:
+    first_runner = FakeCliRunner(b"[]")
+    original = build_runtime(
+        settings(tmp_path, workspace_root="/A", authority_fingerprint="1" * 64),
+        runner=first_runner,
+    )
+    original.worker_available = True
+    option = (await original.backend.dashboard()).refresh_options[0]
+    intent_id = await original.backend.submit_refresh(
+        RefreshRequest(
+            system_id=option.system_id,
+            target_kind=option.target_kind,
+            target_id=option.target_id,
+            capability_key=option.capability_key,
+            facet=option.facet,
+        )
+    )
+    admitted = await original.coordinator.run_once(now=datetime.now(UTC))
+    assert admitted is not None and admitted.action_id is not None
+    old_system_id = option.system_id
+    action_id = admitted.action_id
+    original.store.close()
+
+    material = json.dumps(["2" * 64, "/B"], ensure_ascii=True, separators=(",", ":")).encode()
+    corrupt_key = f"databricks-host-v1:{hashlib.sha256(material).hexdigest()}"
+    with SQLiteStore(tmp_path / "state.sqlite3") as corrupt:
+        corrupt._connection.execute(
+            "UPDATE configured_system_identities SET authority_key = ? WHERE system_id = ?",
+            (corrupt_key, old_system_id),
+        )
+
+    second_runner = FakeCliRunner(b"[]")
+    changed = build_runtime(
+        settings(tmp_path, workspace_root="/B", authority_fingerprint="2" * 64),
+        runner=second_runner,
+    )
+    systems = changed.store.list_systems()
+    old_system = next(system for system in systems if system.system_id == old_system_id)
+    new_system = next(system for system in systems if system.enabled)
+    old_action = changed.store.get_stored_action(action_id)
+    receipt = await changed.backend.intent(intent_id)
+
+    assert not old_system.enabled
+    assert new_system.system_id != old_system_id
+    assert old_action is not None and old_action.state.value == "cancelled"
+    assert receipt is not None and receipt.terminal
+    assert not await changed.worker.run_once()
+    assert second_runner.calls == []
+    changed.store.close()
+
+
+@pytest.mark.anyio
+async def test_configuration_repair_canonicalizes_desired_resource_timestamps(
+    tmp_path: Path,
+) -> None:
+    project_settings = settings(tmp_path)
+    initial = build_runtime(project_settings, runner=FakeCliRunner(b"[]"))
+    initial.worker_available = True
+    option = (await initial.backend.dashboard()).refresh_options[0]
+    await initial.backend.submit_refresh(
+        RefreshRequest(
+            system_id=option.system_id,
+            target_kind=option.target_kind,
+            target_id=option.target_id,
+            capability_key=option.capability_key,
+            facet=option.facet,
+        )
+    )
+    admitted = await initial.coordinator.run_once(now=datetime.now(UTC))
+    assert admitted is not None and admitted.action_id is not None
+    system_id = initial.store.list_systems()[0].system_id
+    connection = initial.store._connection
+    for table, condition in (
+        ("systems", "system_id = ?"),
+        ("connection_bindings", "system_id = ?"),
+        (
+            "capability_bindings",
+            "connection_binding_id IN ("
+            "SELECT binding_id FROM connection_bindings WHERE system_id = ?)",
+        ),
+        ("configured_scopes", "system_id = ?"),
+        ("configured_system_identities", "system_id = ?"),
+    ):
+        connection.execute(
+            f"UPDATE {table} SET record_created_at = 'not-a-timestamp' WHERE {condition}",
+            (system_id,),
+        )
+    initial.store.close()
+
+    repaired_runner = FakeCliRunner(b"[]")
+    repaired = build_runtime(project_settings, runner=repaired_runner)
+    checks = repaired.store._connection.execute(
+        """
+        SELECT
+            (SELECT MIN(rookery_is_canonical_timestamp(record_created_at))
+             FROM systems WHERE system_id = ?),
+            (SELECT MIN(rookery_is_canonical_timestamp(record_created_at))
+             FROM connection_bindings WHERE system_id = ?),
+            (SELECT MIN(rookery_is_canonical_timestamp(capability.record_created_at))
+             FROM capability_bindings AS capability
+             JOIN connection_bindings AS binding
+               ON binding.binding_id = capability.connection_binding_id
+             WHERE binding.system_id = ?),
+            (SELECT MIN(rookery_is_canonical_timestamp(record_created_at))
+             FROM configured_scopes WHERE system_id = ?),
+            (SELECT MIN(rookery_is_canonical_timestamp(record_created_at))
+             FROM configured_system_identities WHERE system_id = ?)
+        """,
+        (system_id,) * 5,
+    ).fetchone()
+    dashboard = await repaired.backend.dashboard()
+
+    assert tuple(checks) == (1, 1, 1, 1, 1)
+    assert dashboard.refresh_options
+    assert not dashboard.integrity_warning
+    assert await repaired.worker.run_once()
+    assert len(repaired_runner.calls) == 1
+    stored = repaired.store.get_stored_action(admitted.action_id)
+    assert stored is not None and stored.state.value in {"succeeded", "partial"}
+    repaired.store.close()
 
 
 def test_composition_failure_closes_open_store(
