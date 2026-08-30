@@ -288,6 +288,7 @@ class ObjectDetailView:
     disconnected: bool = False
     error: str | None = None
     refresh_empty_reason: str = ""
+    integrity_warning: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +325,7 @@ class AlertHistoryView:
     previous_page_url: str | None = None
     next_page_url: str | None = None
     loaded_at: datetime | str | None = None
+    integrity_warning: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,6 +369,7 @@ class ActionDetailView:
     attempt_total: int = 0
     attempts_truncated: bool = False
     loaded_at: datetime | str | None = None
+    integrity_warning: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +387,7 @@ class ActionHistoryView:
     previous_page_url: str | None = None
     next_page_url: str | None = None
     loaded_at: datetime | str | None = None
+    integrity_warning: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,6 +426,7 @@ class DashboardView:
     next_page_url: str | None = None
     alerts: tuple[OperationalEventView, ...] = ()
     refresh_empty_reason: str = ""
+    integrity_warning: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -429,7 +434,7 @@ class IntentScopeView:
     label: str
     state: str
     system_id: str = ""
-    target_kind: Literal["configured_scope", "object", "system"] = "configured_scope"
+    target_kind: Literal["configured_scope", "object", "system", "unavailable"] = "configured_scope"
     target_id: str = ""
     capability_key: str = ""
     facet: str = ""

@@ -1080,6 +1080,299 @@ async def test_dashboard_reads_action_and_object_snapshots_once(
     runtime.store.close()
 
 
+@pytest.mark.anyio
+async def test_malformed_presentation_rows_are_isolated_with_visible_warning(
+    tmp_path: Path,
+) -> None:
+    project_settings = settings(tmp_path)
+    runtime = build_runtime(project_settings, runner=FakeCliRunner(b"[]"))
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "databricks.workspace.metadata.read"
+    )
+    intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=refresh.system_id,
+            target_kind=refresh.target_kind,
+            target_id=refresh.target_id,
+            capability_key=refresh.capability_key,
+            facet=refresh.facet,
+        )
+    )
+    admitted = await runtime.coordinator.run_once(now=datetime.now(UTC))
+    assert admitted is not None and admitted.action_id is not None
+    action_id = admitted.action_id
+    system_id = refresh.system_id
+    parent = runtime.store.get_object_sync(refresh.target_id)
+    assert parent is not None
+    healthy_child = runtime.store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=system_id,
+            object_type="file",
+            object_type_version="1",
+            source_kind="synthetic.file",
+            external_key="/healthy",
+            display_name="healthy",
+            presence=PresenceState.PRESENT,
+            first_seen_at=datetime.now(UTC),
+        )
+    )
+    corrupt_child = runtime.store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=system_id,
+            object_type="file",
+            object_type_version="1",
+            source_kind="synthetic.file",
+            external_key="/corrupt-relation",
+            display_name="corrupt relation",
+            presence=PresenceState.PRESENT,
+            first_seen_at=datetime.now(UTC),
+        )
+    )
+    other_system = SystemBootstrapService(runtime.store).create_system(
+        display_name="other",
+        system_kind="databricks.workspace",
+        now=datetime.now(UTC),
+    )
+    cross_system_child = runtime.store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=other_system.system_id,
+            object_type="file",
+            object_type_version="1",
+            source_kind="synthetic.file",
+            external_key="/cross-system",
+            display_name="cross system",
+            presence=PresenceState.PRESENT,
+            first_seen_at=datetime.now(UTC),
+        )
+    )
+    corrupt_object = runtime.store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=system_id,
+            object_type="file",
+            object_type_version="1",
+            source_kind="synthetic.file",
+            external_key="/corrupt-object",
+            display_name="corrupt object",
+            presence=PresenceState.PRESENT,
+            first_seen_at=datetime.now(UTC),
+        )
+    )
+    invalid_contract_object = runtime.store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=system_id,
+            object_type="file",
+            object_type_version="1",
+            source_kind="synthetic.file",
+            external_key="/invalid-contract-object",
+            display_name="invalid contract object",
+            presence=PresenceState.PRESENT,
+            first_seen_at=datetime.now(UTC),
+        )
+    )
+    now_text = datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    runtime.store.record_runtime_failure(
+        event_type="queue.coordinator.failed",
+        summary="synthetic healthy warning",
+        occurred_at=datetime.now(UTC),
+    )
+    connection = runtime.store._connection
+    connection.execute(
+        "UPDATE remote_objects SET first_seen_at = 'not-a-timestamp' WHERE object_id = ?",
+        (corrupt_object.object_id,),
+    )
+    connection.execute(
+        """
+        UPDATE remote_objects
+        SET object_type_version = '', first_seen_at = ?, last_seen_at = ?
+        WHERE object_id = ?
+        """,
+        (
+            (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+            datetime.now(UTC).isoformat(),
+            invalid_contract_object.object_id,
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO systems (
+            system_id, display_name, system_kind, enabled,
+            record_created_at, record_updated_at
+        ) VALUES (?, 'corrupt system', 'databricks.workspace', 0, 'not-a-timestamp', ?)
+        """,
+        (str(uuid4()), now_text),
+    )
+    connection.executemany(
+        """
+        INSERT INTO facets (
+            object_id, facet, facet_version, knowledge, payload_json,
+            observed_at, state_changed_at
+        ) VALUES (?, ?, '1', 'known', ?, ?, ?)
+        """,
+        (
+            (parent.object_id, "attributes", '{"healthy":true}', now_text, now_text),
+            (parent.object_id, "metadata", "{", now_text, now_text),
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO relationships (
+            relationship_id, system_id, subject_id, predicate, object_id,
+            presence, observed_at, supporting_observation_id
+        ) VALUES (?, ?, ?, 'contains', ?, 'present', ?, ?)
+        """,
+        (
+            (
+                str(uuid4()),
+                system_id,
+                parent.object_id,
+                healthy_child.object_id,
+                now_text,
+                str(uuid4()),
+            ),
+            (
+                str(uuid4()),
+                system_id,
+                parent.object_id,
+                corrupt_child.object_id,
+                "not-a-timestamp",
+                str(uuid4()),
+            ),
+            (
+                str(uuid4()),
+                system_id,
+                parent.object_id,
+                cross_system_child.object_id,
+                now_text,
+                str(uuid4()),
+            ),
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO action_attempts (
+            attempt_id, action_id, ordinal, started_at
+        ) VALUES (?, ?, ?, ?)
+        """,
+        (
+            (str(uuid4()), action_id, 1, now_text),
+            (str(uuid4()), action_id, 2, "not-a-timestamp"),
+        ),
+    )
+    corrupt_action_id = str(uuid4())
+    connection.execute(
+        """
+        INSERT INTO adapter_actions (
+            action_id, correlation_id, system_id, connection_binding_id,
+            adapter_key, adapter_version, capability_key, capability_version,
+            target_kind, target_id, deadline, contract_version, dedupe_key,
+            state, record_created_at
+        )
+        SELECT ?, ?, system_id, connection_binding_id, adapter_key, adapter_version,
+               capability_key, capability_version, target_kind, target_id, deadline,
+               contract_version, ?, 'failed', 'not-a-timestamp'
+        FROM adapter_actions WHERE action_id = ?
+        """,
+        (corrupt_action_id, str(uuid4()), str(uuid4()), action_id),
+    )
+    connection.execute(
+        """
+        INSERT INTO operational_events (
+            event_id, idempotency_key, event_type, severity, alertable,
+            system_id, intent_scope_id, action_id, attempt_id, error_class,
+            redacted_summary, occurred_at
+        )
+        SELECT ?, ?, event_type, severity, alertable, system_id, intent_scope_id,
+               action_id, attempt_id, error_class, redacted_summary, 'not-a-timestamp'
+        FROM operational_events ORDER BY occurred_at DESC LIMIT 1
+        """,
+        (str(uuid4()), str(uuid4())),
+    )
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute(
+        """
+        INSERT INTO operational_events (
+            event_id, idempotency_key, event_type, severity, alertable,
+            system_id, intent_scope_id, action_id, attempt_id, error_class,
+            redacted_summary, occurred_at
+        ) VALUES (?, ?, 'queue.coordinator.failed', 'error', 1,
+                  NULL, NULL, ?, NULL, 'unknown_adapter_failure',
+                  'synthetic corrupt link', ?)
+        """,
+        (str(uuid4()), str(uuid4()), action_id.upper(), now_text),
+    )
+    connection.execute("PRAGMA foreign_keys = ON")
+    runtime.store.close()
+
+    reopened = build_runtime(project_settings, runner=FakeCliRunner(b"[]"))
+    reopened.worker_available = True
+    warning = "Rookery isolated malformed cached records"
+    dashboard_view = await reopened.backend.dashboard()
+    history = await reopened.backend.action_history()
+    alerts = await reopened.backend.alert_history()
+    action = await reopened.backend.action_detail(action_id)
+    corrupt_action = await reopened.backend.action_detail(corrupt_action_id)
+    object_view = await reopened.backend.object_detail(str(parent.object_id))
+
+    assert dashboard_view.systems and not dashboard_view.disconnected
+    assert warning in dashboard_view.integrity_warning
+    assert history.actions and warning in history.integrity_warning
+    assert alerts.alerts and warning in alerts.integrity_warning
+    corrupt_link_alert = next(
+        alert for alert in alerts.alerts if alert.summary == "synthetic corrupt link"
+    )
+    assert corrupt_link_alert.action_id is None
+    assert action is not None and len(action.attempts) == 1
+    assert corrupt_action is None
+    assert warning in action.integrity_warning
+    assert object_view is not None
+    assert [child.object_id for child in object_view.children] == [healthy_child.object_id]
+    assert [facet.name for facet in object_view.object.facets] == ["attributes"]
+    assert warning in object_view.integrity_warning
+    assert await reopened.backend.intent(intent_id) is not None
+    reopened.store.close()
+
+
+@pytest.mark.anyio
+async def test_terminal_intent_tolerates_malformed_eligible_time(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    runtime.worker_available = True
+    option = (await runtime.backend.dashboard()).refresh_options[0]
+    intent_id = await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=option.system_id,
+            target_kind=option.target_kind,
+            target_id=option.target_id,
+            capability_key=option.capability_key,
+            facet=option.facet,
+        )
+    )
+    runtime.store._connection.execute(
+        """
+        UPDATE refresh_intent_scopes
+        SET state = 'rejected', disposition_reason = 'persisted_intent_contract_mismatch',
+            eligible_at = 'not-a-timestamp'
+        WHERE intent_id = ?
+        """,
+        (intent_id,),
+    )
+
+    view = await runtime.backend.intent(intent_id)
+
+    assert view is not None and view.terminal
+    assert view.scopes[0].eligible_at is None
+    assert view.scopes[0].failure == "persisted_intent_contract_mismatch"
+    runtime.store.close()
+
+
 def test_facet_view_distinguishes_due_failed_refreshing_and_current(tmp_path: Path) -> None:
     runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
     root = runtime.store.list_objects()[0]

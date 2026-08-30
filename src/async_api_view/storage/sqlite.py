@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from functools import cache
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from async_api_view.contracts import (
     AbsenceAuthority,
@@ -129,6 +129,8 @@ _TERMINAL_INTENT_STATES = {
     IntentScopeState.EXPIRED,
     IntentScopeState.CANCELLED,
 }
+_ACTION_STATE_VALUES = frozenset(item.value for item in ActionState)
+_INTENT_SCOPE_STATE_VALUES = frozenset(item.value for item in IntentScopeState)
 
 
 class StorageHeadroomUnavailable(RuntimeError):
@@ -282,6 +284,12 @@ def _schema_signature_through(
     """Derive a table signature by applying authoritative migrations in memory."""
 
     with closing(sqlite3.connect(":memory:")) as reference:
+        reference.create_function(
+            "rookery_canonicalize_timestamp",
+            1,
+            _stored_timestamp_canonical_value,
+            deterministic=True,
+        )
         for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
             reference.executescript(migration.read_text(encoding="utf-8"))
             if migration.stem == final_version:
@@ -326,6 +334,12 @@ def _schema_ddl_through(
     """Derive authoritative table/index DDL, including constraints and predicates."""
 
     with closing(sqlite3.connect(":memory:")) as reference:
+        reference.create_function(
+            "rookery_canonicalize_timestamp",
+            1,
+            _stored_timestamp_canonical_value,
+            deterministic=True,
+        )
         reference.execute(
             """
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -699,6 +713,78 @@ def _stored_timestamp_is_canonical(value: object) -> int:
     return int(parsed is not None and _utc_text(parsed) == value)
 
 
+def _stored_timestamp_is_valid(value: object) -> int:
+    if not isinstance(value, str):
+        return 0
+    try:
+        return int(_dt(value) is not None)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _stored_timestamp_canonical_value(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = _dt(value)
+    except (TypeError, ValueError):
+        return None
+    return _utc_text(parsed) if parsed is not None else None
+
+
+def _stored_uuid_is_valid(value: object) -> int:
+    if not isinstance(value, str):
+        return 0
+    try:
+        normalized = str(UUID(value))
+    except (ValueError, AttributeError):
+        return 0
+    return int(normalized == value)
+
+
+def _stored_contract_key_is_valid(value: object) -> int:
+    if not isinstance(value, str):
+        return 0
+    try:
+        require_contract_key(value, "stored contract key")
+    except (TypeError, ValueError):
+        return 0
+    return 1
+
+
+def _stored_text_is_valid(value: object, max_length: object) -> int:
+    if not isinstance(max_length, int):
+        return 0
+    try:
+        require_text(value, "stored text", max_length=max_length)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+    return 1
+
+
+def _stored_timestamp_order_is_valid(first: object, last: object) -> int:
+    if not isinstance(first, str) or not isinstance(last, str):
+        return 0
+    try:
+        first_at = _dt(first)
+        last_at = _dt(last)
+    except (TypeError, ValueError):
+        return 0
+    return int(first_at is not None and last_at is not None and last_at >= first_at)
+
+
+def _stored_json_object_is_valid(value: object) -> int:
+    if not isinstance(value, str):
+        return 0
+    try:
+        if len(value.encode("utf-8")) > _MAX_JSON_BYTES:
+            return 0
+        parsed = _json_value(value)
+    except (TypeError, ValueError, UnicodeError, json.JSONDecodeError):
+        return 0
+    return int(isinstance(parsed, dict))
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -745,7 +831,11 @@ def _json_text(value: object, *, field_name: str) -> str:
 
 
 def _json_value(value: str) -> object:
-    return json.loads(value)
+    try:
+        parsed = json.loads(value)
+    except RecursionError:
+        raise ValueError("stored JSON exceeds the supported nesting depth") from None
+    return validate_json(parsed, "stored JSON")
 
 
 def _batch_digest(batch: ObservationBatch) -> str:
@@ -923,11 +1013,68 @@ class SQLiteStore:
             raise
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
+        self._presentation_corruption_detected = False
+
+        def tracked_read_validator(validator: Callable[..., int]) -> Callable[..., int]:
+            def tracked(*values: object) -> int:
+                valid = validator(*values)
+                if not valid:
+                    self._presentation_corruption_detected = True
+                return valid
+
+            return tracked
+
         self._connection.create_function(
             "rookery_is_canonical_timestamp",
             1,
             _stored_timestamp_is_canonical,
             deterministic=True,
+        )
+        self._connection.create_function(
+            "rookery_canonicalize_timestamp",
+            1,
+            _stored_timestamp_canonical_value,
+            deterministic=True,
+        )
+        self._connection.create_function(
+            "rookery_read_is_timestamp",
+            1,
+            tracked_read_validator(_stored_timestamp_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_is_uuid",
+            1,
+            tracked_read_validator(_stored_uuid_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_is_contract_key",
+            1,
+            tracked_read_validator(_stored_contract_key_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_is_json_object",
+            1,
+            tracked_read_validator(_stored_json_object_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_is_text",
+            2,
+            tracked_read_validator(_stored_text_is_valid),
+        )
+        self._connection.create_function(
+            "rookery_read_timestamp_order_is_valid",
+            2,
+            tracked_read_validator(_stored_timestamp_order_is_valid),
+        )
+
+        def mark_read_corruption() -> None:
+            self._presentation_corruption_detected = True
+            return None
+
+        self._connection.create_function(
+            "rookery_read_corruption",
+            0,
+            mark_read_corruption,
         )
         self._lock = threading.RLock()
         try:
@@ -990,6 +1137,12 @@ class SQLiteStore:
             if self._last_authority_time is None or sampled > self._last_authority_time:
                 self._last_authority_time = sampled
             return self._last_authority_time
+
+    @property
+    def presentation_corruption_detected(self) -> bool:
+        """Return whether a browser-facing read isolated malformed cached data."""
+
+        return self._presentation_corruption_detected
 
     def _advance_authority_floor(self, value: datetime) -> datetime:
         value = require_utc(value, "authority floor")
@@ -1152,8 +1305,8 @@ class SQLiteStore:
 
         scope_rows = connection.execute(
             """
-            SELECT * FROM refresh_intent_scopes
-            WHERE (
+            SELECT rowid AS quarantine_rowid, * FROM refresh_intent_scopes
+            WHERE intent_scope_id IS NULL OR (
                 state = 'leased' AND (
                     lease_id IS NULL OR lease_worker_id IS NULL
                     OR rookery_is_canonical_timestamp(leased_until) = 0
@@ -1161,6 +1314,9 @@ class SQLiteStore:
             ) OR (
                 state = 'deferred' AND eligible_at IS NOT NULL
                 AND rookery_is_canonical_timestamp(eligible_at) = 0
+            ) OR state NOT IN (
+                'queued', 'leased', 'deferred', 'coalesced', 'admitted',
+                'satisfied', 'rejected', 'expired', 'cancelled'
             )
             ORDER BY queue_requested_at, intent_scope_id
             """
@@ -1176,7 +1332,13 @@ class SQLiteStore:
                 and row["eligible_at"] is not None
                 and not _stored_timestamp_is_canonical(row["eligible_at"])
             )
-            if malformed_lease or malformed_deferral:
+            malformed_state = row["state"] not in _INTENT_SCOPE_STATE_VALUES
+            if (
+                row["intent_scope_id"] is None
+                or malformed_lease
+                or malformed_deferral
+                or malformed_state
+            ):
                 self._terminalize_intent_scope_contract_failure(
                     connection,
                     row=row,
@@ -1185,14 +1347,17 @@ class SQLiteStore:
 
         action_rows = connection.execute(
             """
-            SELECT * FROM adapter_actions
-            WHERE (
+            SELECT rowid AS quarantine_rowid, * FROM adapter_actions
+            WHERE action_id IS NULL OR (
                 state IN ('leased', 'running') AND (
                     lease_id IS NULL OR lease_worker_id IS NULL
                     OR rookery_is_canonical_timestamp(leased_until) = 0
                 )
             ) OR (
                 state = 'retry_wait' AND rookery_is_canonical_timestamp(retry_at) = 0
+            ) OR state NOT IN (
+                'ready', 'leased', 'running', 'retry_wait', 'satisfied',
+                'succeeded', 'partial', 'failed', 'cancelled'
             )
             ORDER BY record_created_at, action_id
             """
@@ -1206,13 +1371,84 @@ class SQLiteStore:
             malformed_retry = row["state"] == "retry_wait" and not (
                 _stored_timestamp_is_canonical(row["retry_at"])
             )
-            if malformed_lease or malformed_retry:
+            malformed_state = row["state"] not in _ACTION_STATE_VALUES
+            if row["action_id"] is None or malformed_lease or malformed_retry or malformed_state:
                 self._terminalize_action_contract_failure(
                     connection,
                     action_id=row["action_id"],
+                    action_rowid=row["quarantine_rowid"],
                     authority_now=now,
-                    reason="persisted_action_timing_mismatch",
+                    reason=(
+                        "persisted_action_state_mismatch"
+                        if malformed_state
+                        else "persisted_action_timing_mismatch"
+                    ),
                 )
+
+        linked_scope_rows = connection.execute(
+            """
+            SELECT scope.rowid AS quarantine_rowid, scope.*,
+                   link.action_id AS joined_action_id,
+                   action.state AS linked_action_state
+            FROM refresh_intent_scopes AS scope
+            LEFT JOIN action_intent_scopes AS link
+              ON link.intent_scope_id = scope.intent_scope_id
+            LEFT JOIN adapter_actions AS action
+              ON action.action_id = scope.linked_action_id
+            WHERE scope.state IN ('admitted', 'coalesced')
+              AND (
+                  scope.linked_action_id IS NULL OR action.rowid IS NULL
+                  OR link.action_id IS NULL
+                  OR link.action_id != scope.linked_action_id
+              )
+            ORDER BY scope.queue_requested_at, scope.rowid
+            """
+        ).fetchall()
+        for row in linked_scope_rows:
+            if (
+                row["joined_action_id"] is None
+                and row["linked_action_state"] in {item.value for item in _TERMINAL_ACTION_STATES}
+                and _stored_uuid_is_valid(row["intent_scope_id"])
+                and _stored_uuid_is_valid(row["linked_action_id"])
+            ):
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO action_intent_scopes (action_id, intent_scope_id)
+                    VALUES (?, ?)
+                    """,
+                    (row["linked_action_id"], row["intent_scope_id"]),
+                )
+                self._refresh_intent_aggregate_for_intent(
+                    connection,
+                    intent_id=row["intent_id"],
+                )
+                continue
+            linked_action_ids = {
+                value
+                for value in (row["linked_action_id"], row["joined_action_id"])
+                if isinstance(value, str)
+            }
+            self._terminalize_intent_scope_contract_failure(connection, row=row, now=now)
+            for action_id in linked_action_ids:
+                live_parent = connection.execute(
+                    """
+                    SELECT 1
+                    FROM action_intent_scopes AS link
+                    JOIN refresh_intent_scopes AS scope
+                      ON scope.intent_scope_id = link.intent_scope_id
+                    WHERE link.action_id = ?
+                      AND scope.state IN ('admitted', 'coalesced')
+                    LIMIT 1
+                    """,
+                    (action_id,),
+                ).fetchone()
+                if live_parent is None:
+                    self._terminalize_action_contract_failure(
+                        connection,
+                        action_id=action_id,
+                        authority_now=now,
+                        reason="persisted_action_link_mismatch",
+                    )
 
     @staticmethod
     @contextmanager
@@ -1476,6 +1712,13 @@ class SQLiteStore:
         with self._lock:
             rows = self._connection.execute(
                 "SELECT * FROM systems ORDER BY display_name, system_id"
+            ).fetchall()
+        return tuple(self._system_from_row(row) for row in rows)
+
+    def list_readable_systems(self) -> tuple[SystemRecord, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM readable_systems ORDER BY display_name, system_id"
             ).fetchall()
         return tuple(self._system_from_row(row) for row in rows)
 
@@ -2231,7 +2474,7 @@ class SQLiteStore:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("object limit must be between 1 and 100")
         pattern = _object_search_pattern(query)
-        statement = "SELECT * FROM remote_objects"
+        statement = "SELECT * FROM readable_remote_objects"
         parameters: tuple[object, ...]
         if pattern is None:
             parameters = (limit, offset)
@@ -2279,7 +2522,7 @@ class SQLiteStore:
         if after_id is not None and pattern is None:
             conditions.append("object_id > ?")
             parameters.append(after_id)
-        statement = "SELECT * FROM remote_objects"
+        statement = "SELECT * FROM readable_remote_objects"
         if conditions:
             statement += " WHERE " + " AND ".join(conditions)
         statement += (
@@ -2296,6 +2539,15 @@ class SQLiteStore:
         return self._connection.execute(
             "SELECT * FROM facets WHERE object_id = ? AND facet = ?", (object_id, facet)
         ).fetchone()
+
+    def get_readable_object_sync(self, object_id: str) -> RemoteObject | None:
+        object_id = require_uuid(object_id, "object_id")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM readable_remote_objects WHERE object_id = ?",
+                (object_id,),
+            ).fetchone()
+        return self._object_from_row(row) if row is not None else None
 
     @staticmethod
     def _facet_from_row(row: sqlite3.Row) -> FacetState:
@@ -2339,7 +2591,7 @@ class SQLiteStore:
                        action.action_id AS provenance_action_id,
                        action.capability_key AS provenance_capability_key,
                        action.capability_version AS provenance_capability_version
-                FROM facets AS facet
+                FROM readable_facets AS facet
                 LEFT JOIN observation_journal AS journal
                   ON journal.observation_id = facet.supporting_observation_id
                 LEFT JOIN observation_batches AS batch ON batch.batch_id = journal.batch_id
@@ -2539,9 +2791,9 @@ class SQLiteStore:
             "relationships.presence AS r_presence, "
             "relationships.observed_at AS r_observed_at, "
             "relationships.supporting_observation_id AS r_supporting_observation_id, "
-            "objects.* FROM relationships AS relationships "
-            "INDEXED BY ix_relationships_subject_predicate "
-            "INNER JOIN remote_objects AS objects ON objects.object_id = relationships.object_id "
+            "objects.* FROM readable_relationships AS relationships "
+            "INNER JOIN readable_remote_objects AS objects "
+            "ON objects.object_id = relationships.object_id "
             "WHERE relationships.subject_id = ? AND relationships.predicate = ? "
             "AND relationships.presence = 'present'"
         )
@@ -2990,16 +3242,36 @@ class SQLiteStore:
             ).fetchall()
         return tuple(self._intent_scope_record(row) for row in rows)
 
-    @staticmethod
-    def _intent_scope_record(row: sqlite3.Row) -> IntentScopeRecord:
+    def _intent_scope_record(self, row: sqlite3.Row) -> IntentScopeRecord:
+        state = IntentScopeState(row["state"])
+        try:
+            scope = _scope_from_row(row)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            if state not in _TERMINAL_INTENT_STATES:
+                raise
+            scope = None
+            self._presentation_corruption_detected = True
+        try:
+            eligible_at = _dt(row["eligible_at"])
+        except (TypeError, ValueError):
+            if state not in _TERMINAL_INTENT_STATES:
+                raise
+            eligible_at = None
+            self._presentation_corruption_detected = True
+        linked_action_id = row["linked_action_id"]
+        if linked_action_id is not None and not _stored_uuid_is_valid(linked_action_id):
+            if state not in _TERMINAL_INTENT_STATES:
+                raise ValueError("stored intent scope has an invalid action link")
+            linked_action_id = None
+            self._presentation_corruption_detected = True
         return IntentScopeRecord(
             intent_scope_id=row["intent_scope_id"],
             intent_id=row["intent_id"],
-            scope=_scope_from_row(row),
-            state=IntentScopeState(row["state"]),
+            scope=scope,
+            state=state,
             disposition_reason=row["disposition_reason"],
-            eligible_at=_dt(row["eligible_at"]),
-            linked_action_id=row["linked_action_id"],
+            eligible_at=eligible_at,
+            linked_action_id=linked_action_id,
             satisfying_observation_id=row["satisfying_observation_id"],
         )
 
@@ -3035,20 +3307,31 @@ class SQLiteStore:
         now: datetime,
     ) -> None:
         reason = "persisted_intent_contract_mismatch"
+        persisted_scope_id = row["intent_scope_id"]
+        if persisted_scope_id is not None:
+            connection.execute(
+                "DELETE FROM action_intent_scopes WHERE intent_scope_id = ?",
+                (persisted_scope_id,),
+            )
+        scope_id = persisted_scope_id
+        if scope_id is None:
+            scope_id = str(uuid4())
         connection.execute(
             """
             UPDATE refresh_intent_scopes
             SET state = 'rejected', disposition_reason = ?, eligible_at = NULL,
-                lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
-            WHERE intent_scope_id = ?
+                linked_action_id = NULL, satisfying_observation_id = NULL,
+                lease_id = NULL, lease_worker_id = NULL, leased_until = NULL,
+                lease_authority_at = NULL, intent_scope_id = ?
+            WHERE rowid = ?
             """,
-            (reason, row["intent_scope_id"]),
+            (reason, scope_id, row["quarantine_rowid"]),
         )
         self._insert_event(
             connection,
             idempotency_key=_quarantine_event_key(
                 "intent-scope",
-                row["intent_scope_id"],
+                scope_id,
             ),
             event_type="refresh.intent.contract_mismatch",
             severity="error",
@@ -3059,9 +3342,9 @@ class SQLiteStore:
             summary=reason,
             occurred_at=now,
         )
-        self._refresh_intent_aggregate(
+        self._refresh_intent_aggregate_for_intent(
             connection,
-            intent_scope_id=row["intent_scope_id"],
+            intent_id=row["intent_id"],
         )
 
     def _promote_due_intent_scopes(self) -> bool:
@@ -3144,7 +3427,8 @@ class SQLiteStore:
             while True:
                 row = connection.execute(
                     """
-                    SELECT scope.*, intent.idempotency_key, intent.origin, intent.actor_id,
+                    SELECT scope.rowid AS quarantine_rowid, scope.*,
+                           intent.idempotency_key, intent.origin, intent.actor_id,
                            intent.ui_session_id, intent.requested_at, intent.expires_at,
                            intent.priority, intent.contract_version
                     FROM refresh_intent_scopes AS scope
@@ -3323,6 +3607,15 @@ class SQLiteStore:
         ).fetchone()
         if row is None:
             return
+        SQLiteStore._refresh_intent_aggregate_for_intent(
+            connection,
+            intent_id=row["intent_id"],
+        )
+
+    @staticmethod
+    def _refresh_intent_aggregate_for_intent(
+        connection: sqlite3.Connection, *, intent_id: str
+    ) -> None:
         scope_rows = connection.execute(
             """
             SELECT scope.state, action.state AS action_state
@@ -3330,7 +3623,7 @@ class SQLiteStore:
             LEFT JOIN adapter_actions AS action ON action.action_id = scope.linked_action_id
             WHERE scope.intent_id = ?
             """,
-            (row["intent_id"],),
+            (intent_id,),
         ).fetchall()
         complete = all(
             scope_row["state"] in {item.value for item in _TERMINAL_INTENT_STATES}
@@ -3340,15 +3633,19 @@ class SQLiteStore:
         if complete:
             connection.execute(
                 "UPDATE refresh_intents SET aggregate_state = 'complete' WHERE intent_id = ?",
-                (row["intent_id"],),
+                (intent_id,),
             )
 
     def _refresh_action_parent_aggregates(
         self, connection: sqlite3.Connection, *, action_id: str
     ) -> None:
         linked_scopes = connection.execute(
-            "SELECT intent_scope_id FROM action_intent_scopes WHERE action_id = ?",
-            (action_id,),
+            """
+            SELECT intent_scope_id FROM action_intent_scopes WHERE action_id = ?
+            UNION
+            SELECT intent_scope_id FROM refresh_intent_scopes WHERE linked_action_id = ?
+            """,
+            (action_id, action_id),
         ).fetchall()
         for linked_scope in linked_scopes:
             self._refresh_intent_aggregate(
@@ -3539,7 +3836,7 @@ class SQLiteStore:
         action_id = require_uuid(action_id, "action_id")
         with self._lock:
             row = self._connection.execute(
-                "SELECT * FROM adapter_actions WHERE action_id = ?", (action_id,)
+                "SELECT * FROM readable_action_activity WHERE action_id = ?", (action_id,)
             ).fetchone()
             return self._action_from_row(row) if row else None
 
@@ -3618,7 +3915,7 @@ class SQLiteStore:
         action_id = require_uuid(action_id, "action_id")
         with self._lock:
             row = self._connection.execute(
-                "SELECT * FROM adapter_actions WHERE action_id = ?", (action_id,)
+                "SELECT * FROM readable_action_activity WHERE action_id = ?", (action_id,)
             ).fetchone()
         return self._action_activity_from_row(row) if row is not None else None
 
@@ -3631,7 +3928,7 @@ class SQLiteStore:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT * FROM action_attempts
+                SELECT * FROM readable_action_attempts
                 WHERE action_id = ?
                 ORDER BY ordinal DESC
                 LIMIT ?
@@ -3678,8 +3975,7 @@ class SQLiteStore:
                 status.occurred_at,
                 status.redacted_diagnostic
             FROM visible
-            CROSS JOIN facet_action_status AS status
-                INDEXED BY ix_facet_action_status_target
+            CROSS JOIN readable_facet_action_status AS status
             WHERE status.target_kind = 'object'
               AND status.target_id = visible.object_id
         """
@@ -3698,8 +3994,7 @@ class SQLiteStore:
             FROM visible
             CROSS JOIN configured_scopes AS configured
                 INDEXED BY ix_configured_scopes_object
-            CROSS JOIN facet_action_status AS status
-                INDEXED BY ix_facet_action_status_target
+            CROSS JOIN readable_facet_action_status AS status
             WHERE configured.object_id = visible.object_id
               AND status.target_kind = 'configured_scope'
               AND status.target_id = configured.scope_id
@@ -3854,7 +4149,7 @@ class SQLiteStore:
                 )
                 timestamp = _utc_text(require_utc(after_created_at, "action cursor time"))
                 parameters.extend((timestamp, timestamp, after_action_id))
-        statement = "SELECT * FROM adapter_actions"
+        statement = "SELECT * FROM readable_action_activity"
         if conditions:
             statement += " WHERE " + " AND ".join(conditions)
         statement += " ORDER BY record_created_at DESC, action_id LIMIT ?"
@@ -3906,11 +4201,11 @@ class SQLiteStore:
                 """
                 SELECT action.*
                 FROM systems AS system
-                JOIN adapter_actions AS action
+                JOIN readable_action_activity AS action
                   ON action.action_id = COALESCE(
                       (
                           SELECT active.action_id
-                          FROM adapter_actions AS active
+                           FROM readable_action_activity AS active
                           WHERE active.system_id = system.system_id
                             AND active.state IN ('ready', 'leased', 'running', 'retry_wait')
                           ORDER BY active.record_created_at DESC, active.action_id
@@ -3918,7 +4213,7 @@ class SQLiteStore:
                       ),
                       (
                           SELECT latest.action_id
-                          FROM adapter_actions AS latest
+                           FROM readable_action_activity AS latest
                           WHERE latest.system_id = system.system_id
                           ORDER BY latest.record_created_at DESC, latest.action_id
                           LIMIT 1
@@ -4213,7 +4508,8 @@ class SQLiteStore:
             while True:
                 row = connection.execute(
                     """
-                    SELECT * FROM adapter_actions INDEXED BY ix_adapter_actions_claim_order
+                    SELECT rowid AS quarantine_rowid, *
+                    FROM adapter_actions INDEXED BY ix_adapter_actions_claim_order
                     WHERE adapter_key = ? AND state = 'ready'
                     ORDER BY record_created_at, action_id
                     LIMIT 1
@@ -4228,6 +4524,7 @@ class SQLiteStore:
                     self._terminalize_action_contract_failure(
                         connection,
                         action_id=row["action_id"],
+                        action_rowid=row["quarantine_rowid"],
                         authority_now=lease_now,
                     )
                     quarantined += 1
@@ -4256,6 +4553,7 @@ class SQLiteStore:
                     self._terminalize_action_contract_failure(
                         connection,
                         action_id=row["action_id"],
+                        action_rowid=row["quarantine_rowid"],
                         authority_now=lease_now,
                         reason="malformed_attempt_contract",
                     )
@@ -4550,23 +4848,25 @@ class SQLiteStore:
         ):
             raise ValueError("operational event limit must be between 1 and 100")
         if system_id is None and not alertable_only:
-            statement = "SELECT * FROM operational_events ORDER BY occurred_at DESC, event_id"
+            statement = (
+                "SELECT * FROM readable_operational_events ORDER BY occurred_at DESC, event_id"
+            )
             parameters: tuple[object, ...] = ()
         elif system_id is None:
             statement = (
-                "SELECT * FROM operational_events WHERE alertable = 1 "
+                "SELECT * FROM readable_operational_events WHERE alertable = 1 "
                 "ORDER BY occurred_at DESC, event_id"
             )
             parameters = ()
         elif not alertable_only:
             statement = (
-                "SELECT * FROM operational_events WHERE system_id = ? "
+                "SELECT * FROM readable_operational_events WHERE system_id = ? "
                 "ORDER BY occurred_at DESC, event_id"
             )
             parameters = (require_uuid(system_id, "system_id"),)
         else:
             statement = (
-                "SELECT * FROM operational_events WHERE system_id = ? AND alertable = 1 "
+                "SELECT * FROM readable_operational_events WHERE system_id = ? AND alertable = 1 "
                 "ORDER BY occurred_at DESC, event_id"
             )
             parameters = (require_uuid(system_id, "system_id"),)
@@ -4625,27 +4925,27 @@ class SQLiteStore:
             raise ValueError("severity is not registered")
         if event_type is None and severity is None:
             statement = (
-                "SELECT * FROM operational_events WHERE alertable = 1 "
+                "SELECT * FROM readable_operational_events WHERE alertable = 1 "
                 "ORDER BY occurred_at DESC, event_id LIMIT ? OFFSET ?"
             )
             parameters: tuple[object, ...] = (limit, offset)
         elif event_type is not None and severity is None:
             statement = (
-                "SELECT * FROM operational_events "
+                "SELECT * FROM readable_operational_events "
                 "WHERE alertable = 1 AND event_type = ? "
                 "ORDER BY occurred_at DESC, event_id LIMIT ? OFFSET ?"
             )
             parameters = (event_type, limit, offset)
         elif event_type is None:
             statement = (
-                "SELECT * FROM operational_events "
+                "SELECT * FROM readable_operational_events "
                 "WHERE alertable = 1 AND severity = ? "
                 "ORDER BY occurred_at DESC, event_id LIMIT ? OFFSET ?"
             )
             parameters = (severity, limit, offset)
         else:
             statement = (
-                "SELECT * FROM operational_events "
+                "SELECT * FROM readable_operational_events "
                 "WHERE alertable = 1 AND event_type = ? AND severity = ? "
                 "ORDER BY occurred_at DESC, event_id LIMIT ? OFFSET ?"
             )
@@ -4677,53 +4977,53 @@ class SQLiteStore:
             timestamp = _utc_text(require_utc(after_occurred_at, "alert cursor time"))
         if event_type is None and severity is None and timestamp is None:
             statement = (
-                "SELECT * FROM operational_events WHERE alertable = 1 "
+                "SELECT * FROM readable_operational_events WHERE alertable = 1 "
                 "ORDER BY occurred_at DESC, event_id LIMIT ?"
             )
             parameters: tuple[object, ...] = (limit,)
         elif event_type is None and severity is None:
             statement = (
-                "SELECT * FROM operational_events WHERE alertable = 1 "
+                "SELECT * FROM readable_operational_events WHERE alertable = 1 "
                 "AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?)) "
                 "ORDER BY occurred_at DESC, event_id LIMIT ?"
             )
             parameters = (timestamp, timestamp, after_event_id, limit)
         elif event_type is not None and severity is None and timestamp is None:
             statement = (
-                "SELECT * FROM operational_events WHERE alertable = 1 AND event_type = ? "
+                "SELECT * FROM readable_operational_events WHERE alertable = 1 AND event_type = ? "
                 "ORDER BY occurred_at DESC, event_id LIMIT ?"
             )
             parameters = (event_type, limit)
         elif event_type is not None and severity is None:
             statement = (
-                "SELECT * FROM operational_events WHERE alertable = 1 AND event_type = ? "
+                "SELECT * FROM readable_operational_events WHERE alertable = 1 AND event_type = ? "
                 "AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?)) "
                 "ORDER BY occurred_at DESC, event_id LIMIT ?"
             )
             parameters = (event_type, timestamp, timestamp, after_event_id, limit)
         elif event_type is None and timestamp is None:
             statement = (
-                "SELECT * FROM operational_events WHERE alertable = 1 AND severity = ? "
+                "SELECT * FROM readable_operational_events WHERE alertable = 1 AND severity = ? "
                 "ORDER BY occurred_at DESC, event_id LIMIT ?"
             )
             parameters = (severity, limit)
         elif event_type is None:
             statement = (
-                "SELECT * FROM operational_events WHERE alertable = 1 AND severity = ? "
+                "SELECT * FROM readable_operational_events WHERE alertable = 1 AND severity = ? "
                 "AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?)) "
                 "ORDER BY occurred_at DESC, event_id LIMIT ?"
             )
             parameters = (severity, timestamp, timestamp, after_event_id, limit)
         elif timestamp is None:
             statement = (
-                "SELECT * FROM operational_events "
+                "SELECT * FROM readable_operational_events "
                 "WHERE alertable = 1 AND event_type = ? AND severity = ? "
                 "ORDER BY occurred_at DESC, event_id LIMIT ?"
             )
             parameters = (event_type, severity, limit)
         else:
             statement = (
-                "SELECT * FROM operational_events "
+                "SELECT * FROM readable_operational_events "
                 "WHERE alertable = 1 AND event_type = ? AND severity = ? "
                 "AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?)) "
                 "ORDER BY occurred_at DESC, event_id LIMIT ?"
@@ -4831,53 +5131,75 @@ class SQLiteStore:
         self,
         connection: sqlite3.Connection,
         *,
-        action_id: str,
+        action_id: str | None,
         authority_now: datetime,
         reason: str = "malformed_action_contract",
+        action_rowid: int | None = None,
     ) -> GuardDecision:
-        row = connection.execute(
-            "SELECT system_id FROM adapter_actions WHERE action_id = ?", (action_id,)
-        ).fetchone()
+        if action_rowid is None:
+            row = connection.execute(
+                "SELECT rowid AS quarantine_rowid, action_id, system_id "
+                "FROM adapter_actions WHERE action_id = ?",
+                (action_id,),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                "SELECT rowid AS quarantine_rowid, action_id, system_id "
+                "FROM adapter_actions WHERE rowid = ?",
+                (action_rowid,),
+            ).fetchone()
         if row is None:
             return GuardDecision(GuardDisposition.FAIL, "unknown_action")
+        persisted_action_id = row["action_id"]
+        if persisted_action_id is None:
+            persisted_action_id = str(uuid4())
+            connection.execute(
+                "UPDATE adapter_actions SET action_id = ? WHERE rowid = ?",
+                (persisted_action_id, row["quarantine_rowid"]),
+            )
         connection.execute(
             """
             UPDATE refresh_intent_scopes
             SET state = 'rejected', disposition_reason = ?, eligible_at = NULL,
                 lease_id = NULL, lease_worker_id = NULL, leased_until = NULL
-            WHERE intent_scope_id IN (
-                SELECT intent_scope_id FROM action_intent_scopes WHERE action_id = ?
+            WHERE (
+                intent_scope_id IN (
+                    SELECT intent_scope_id FROM action_intent_scopes WHERE action_id = ?
+                ) OR linked_action_id = ?
             ) AND state IN ('admitted', 'coalesced')
             """,
-            (reason, action_id),
+            (reason, persisted_action_id, persisted_action_id),
         )
         connection.execute(
             """
             UPDATE adapter_actions
             SET state = 'failed', completed_at = ?, lease_id = NULL, lease_worker_id = NULL,
                 leased_until = NULL, retry_at = NULL, error_class = ?, redacted_diagnostic = ?
-            WHERE action_id = ?
+            WHERE rowid = ?
             """,
             (
                 _utc_text(authority_now),
                 ErrorClass.ADAPTER_CONTRACT_MISMATCH.value,
                 _redact(reason),
-                action_id,
+                row["quarantine_rowid"],
             ),
         )
         self._insert_event(
             connection,
-            idempotency_key=_quarantine_event_key("action", action_id),
+            idempotency_key=_quarantine_event_key("action", persisted_action_id),
             event_type="refresh.action.failed",
             severity="error",
             alertable=True,
             system_id=self._known_event_system_id(connection, row["system_id"]),
-            action_id=action_id,
+            action_id=persisted_action_id,
             error_class=ErrorClass.ADAPTER_CONTRACT_MISMATCH.value,
             summary=reason,
             occurred_at=authority_now,
         )
-        self._refresh_action_parent_aggregates(connection, action_id=action_id)
+        self._refresh_action_parent_aggregates(
+            connection,
+            action_id=persisted_action_id,
+        )
         return GuardDecision(GuardDisposition.FAIL, reason)
 
     def _guard_expire_action(

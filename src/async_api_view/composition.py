@@ -252,6 +252,11 @@ class SQLiteWebBackend:
             return False, self._store.write_headroom_error
         return True, None
 
+    def _integrity_warning(self) -> str:
+        if not self._store.presentation_corruption_detected:
+            return ""
+        return "Rookery isolated malformed cached records; healthy cached state remains available."
+
     def _facet_view(
         self,
         *,
@@ -617,7 +622,7 @@ class SQLiteWebBackend:
         query = query or DashboardQuery()
         worker_available, _worker_error = self._worker_status()
         refresh_available, refresh_error = self._refresh_status()
-        systems = self._store.list_systems()
+        systems = self._store.list_readable_systems()
         system_names = {system.system_id: system.display_name for system in systems}
         object_cursor = self._cursor_values(
             query.cursor,
@@ -757,6 +762,7 @@ class SQLiteWebBackend:
             ),
             alerts=alerts,
             refresh_empty_reason=refresh_empty_reason,
+            integrity_warning=self._integrity_warning(),
         )
 
     @staticmethod
@@ -796,7 +802,7 @@ class SQLiteWebBackend:
         if action_cursor:
             after_created_at = self._cursor_time(action_cursor[0])
             after_action_id = str(UUID(action_cursor[1]))
-        systems = self._store.list_systems()
+        systems = self._store.list_readable_systems()
         system_names = {system.system_id: system.display_name for system in systems}
         action_rows = self._store.list_action_activity_after(
             after_created_at=after_created_at,
@@ -843,13 +849,14 @@ class SQLiteWebBackend:
                 else None
             ),
             loaded_at=datetime.now(UTC),
+            integrity_warning=self._integrity_warning(),
         )
 
     async def action_detail(self, action_id: str) -> ActionDetailView | None:
         action = self._store.get_action_activity(action_id)
         if action is None:
             return None
-        systems = self._store.list_systems()
+        systems = self._store.list_readable_systems()
         system_names = {system.system_id: system.display_name for system in systems}
         attempt_rows = self._store.list_action_attempts(action_id, limit=101)
         attempts_truncated = len(attempt_rows) > 100
@@ -860,6 +867,7 @@ class SQLiteWebBackend:
             attempt_total=len(visible_attempts),
             attempts_truncated=attempts_truncated,
             loaded_at=datetime.now(UTC),
+            integrity_warning=self._integrity_warning(),
         )
 
     async def alert_history(self, query: AlertHistoryQuery | None = None) -> AlertHistoryView:
@@ -872,7 +880,7 @@ class SQLiteWebBackend:
         if alert_cursor:
             after_occurred_at = self._cursor_time(alert_cursor[0])
             after_event_id = str(UUID(alert_cursor[1]))
-        systems = self._store.list_systems()
+        systems = self._store.list_readable_systems()
         system_names = {system.system_id: system.display_name for system in systems}
         alert_rows = self._store.list_alertable_events_after(
             after_occurred_at=after_occurred_at,
@@ -910,16 +918,17 @@ class SQLiteWebBackend:
                 else None
             ),
             loaded_at=datetime.now(UTC),
+            integrity_warning=self._integrity_warning(),
         )
 
     async def object_detail(
         self, object_id: str, query: ObjectDetailQuery | None = None
     ) -> ObjectDetailView | None:
         query = query or ObjectDetailQuery()
-        remote_object = self._store.get_object_sync(object_id)
+        remote_object = self._store.get_readable_object_sync(object_id)
         if remote_object is None:
             return None
-        systems = self._store.list_systems()
+        systems = self._store.list_readable_systems()
         latest_facet_actions = {
             (record.system_id, record.object_id, record.facet): record
             for record in self._store.list_latest_facet_actions((object_id,))
@@ -1009,10 +1018,11 @@ class SQLiteWebBackend:
             disconnected=not worker_available,
             error=worker_error,
             refresh_empty_reason=refresh_empty_reason,
+            integrity_warning=self._integrity_warning(),
         )
 
     async def is_refresh_registered(self, request: RefreshRequest) -> bool:
-        systems = self._store.list_systems()
+        systems = self._store.list_readable_systems()
         objects: tuple[RemoteObject, ...] = ()
         if request.target_kind == TargetKind.OBJECT.value:
             remote_object = self._store.get_object_sync(request.target_id)
@@ -1122,6 +1132,16 @@ class SQLiteWebBackend:
                     terminal = terminal and scope_terminal
             else:
                 terminal = terminal and scope_terminal
+            if record.scope is None:
+                views.append(
+                    IntentScopeView(
+                        label="Stored scope unavailable",
+                        state=state,
+                        target_kind="unavailable",
+                        failure=record.disposition_reason or "persisted_intent_contract_mismatch",
+                    )
+                )
+                continue
             target_label = record.scope.target.target_id
             if record.scope.target.kind is TargetKind.CONFIGURED_SCOPE:
                 configured = self._store.get_configured_scope(target_label)

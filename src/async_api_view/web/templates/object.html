@@ -26,6 +26,12 @@
       <span>{{ view.error|display }}</span>
     </section>
     {% endif %}
+    {% if view.integrity_warning %}
+    <section class="notice notice--warning" role="status">
+      <strong>Some cached records were isolated</strong>
+      <span>{{ view.integrity_warning|display }}</span>
+    </section>
+    {% endif %}
 
     <section class="object-summary" aria-labelledby="object-heading">
       <div>

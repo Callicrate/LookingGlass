@@ -54,6 +54,30 @@ def run(awaitable):
     return asyncio.run(awaitable)
 
 
+def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
+    for view in (
+        "readable_operational_events",
+        "readable_facet_action_status",
+        "readable_action_attempts",
+        "readable_action_activity",
+        "readable_relationships",
+        "readable_facets",
+        "readable_remote_objects",
+        "readable_systems",
+    ):
+        store._connection.execute(f'DROP VIEW "{view}"')
+    for trigger in (
+        "reject_null_intent_scope_id_insert",
+        "reject_null_intent_scope_id_update",
+        "reject_null_action_id_insert",
+        "reject_null_action_id_update",
+    ):
+        store._connection.execute(f'DROP TRIGGER "{trigger}"')
+    store._connection.execute(
+        "DELETE FROM schema_migrations WHERE version = '0024_corruption_containment'"
+    )
+
+
 def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
     path = tmp_path / "state.sqlite3"
     with SQLiteStore(path) as store:
@@ -91,6 +115,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0021_intent_aggregate_indexes",
             "0022_observation_receipt_order",
             "0023_time_authority",
+            "0024_corruption_containment",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -156,7 +181,7 @@ def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_
     with SQLiteStore(path) as store:
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
         )
 
 
@@ -171,7 +196,7 @@ def test_new_database_is_migrated_and_marked_before_wal_activation(
         assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
         )
         original(store)
 
@@ -466,7 +491,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -504,7 +529,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -539,7 +564,7 @@ def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_pa
 
     check = sqlite3.connect(path)
     try:
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -756,7 +781,7 @@ def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path)
     check = sqlite3.connect(destination)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 23
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 24
     finally:
         check.close()
 
@@ -1617,8 +1642,66 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0021_intent_aggregate_indexes",
         "0022_observation_receipt_order",
         "0023_time_authority",
+        "0024_corruption_containment",
     )
     assert versions == (expected,) * workers
+
+
+def test_corruption_containment_migration_canonicalizes_cursor_times(tmp_path) -> None:
+    path = tmp_path / "cursor-time-migration.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+        )
+        action = AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="databricks.workspace.children.read",
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+        run(store.enqueue(action))
+        event = store.record_runtime_failure(
+            event_type="queue.coordinator.failed",
+            summary="synthetic migration warning",
+            occurred_at=NOW,
+        )
+        _rewind_nonnull_queue_id_migration(store)
+        legacy_time = NOW.isoformat()
+        store._connection.execute(
+            "UPDATE adapter_actions SET record_created_at = ? WHERE action_id = ?",
+            (legacy_time, action.action_id),
+        )
+        store._connection.execute(
+            "UPDATE operational_events SET occurred_at = ? WHERE event_id = ?",
+            (legacy_time, event.event_id),
+        )
+
+    with SQLiteStore(path) as migrated:
+        expected = NOW.isoformat(timespec="microseconds").replace("+00:00", "Z")
+        action_time = migrated._connection.execute(
+            "SELECT record_created_at FROM adapter_actions WHERE action_id = ?",
+            (action.action_id,),
+        ).fetchone()[0]
+        event_time = migrated._connection.execute(
+            "SELECT occurred_at FROM operational_events WHERE event_id = ?",
+            (event.event_id,),
+        ).fetchone()[0]
+
+        assert action_time == expected
+        assert event_time == expected
 
 
 def test_configuration_reconciliation_cannot_enable_another_system_kind(tmp_path) -> None:
@@ -1763,6 +1846,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0021_intent_aggregate_indexes",
             "0022_observation_receipt_order",
             "0023_time_authority",
+            "0024_corruption_containment",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -3878,13 +3962,258 @@ def test_overlong_corrupt_action_id_quarantines_without_blocking_queue(tmp_path)
     assert tuple(poisoned_row) == ("failed", "adapter_contract_mismatch")
     events = store.list_operational_events(alertable_only=True)
     assert len(events) == 1
-    assert events[0].action_id == overlong_action_id
+    assert events[0].action_id is None
     assert events[0].system_id is None
+    assert store.presentation_corruption_detected
     event_key = store._connection.execute(
         "SELECT idempotency_key FROM operational_events WHERE event_id = ?",
         (events[0].event_id,),
     ).fetchone()[0]
     assert len(event_key) < 512
+
+
+def test_null_corrupt_action_id_is_rekeyed_once_without_blocking_queue(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "null-action-poison.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+
+        def action_for(*, facet: str, capability_key: str) -> AdapterAction:
+            scope = RefreshScope(
+                system_id=seeded.system.system_id,
+                target=TargetRef(
+                    TargetKind.CONFIGURED_SCOPE,
+                    seeded.workspace_root_scope.scope_id,
+                ),
+                object_type="folder",
+                facet=facet,
+                capability_key=capability_key,
+            )
+            return AdapterAction(
+                action_id=uuid4(),
+                correlation_id=uuid4(),
+                system_id=seeded.system.system_id,
+                connection_binding_id=seeded.connection_binding_id,
+                adapter_key="databricks",
+                adapter_version="1",
+                capability_key=capability_key,
+                capability_version="1",
+                target=scope.target,
+                requested_scopes=(scope,),
+            )
+
+        poisoned = action_for(
+            facet="membership", capability_key="databricks.workspace.children.read"
+        )
+        healthy = action_for(facet="metadata", capability_key="databricks.workspace.metadata.read")
+        run(store.enqueue(poisoned))
+        run(store.enqueue(healthy))
+        _rewind_nonnull_queue_id_migration(store)
+        store._connection.execute("PRAGMA foreign_keys = OFF")
+        store._connection.execute(
+            "DELETE FROM adapter_action_scopes WHERE action_id = ?",
+            (poisoned.action_id,),
+        )
+        store._connection.execute(
+            "UPDATE adapter_actions SET action_id = NULL WHERE action_id = ?",
+            (poisoned.action_id,),
+        )
+        store._connection.execute("PRAGMA foreign_keys = ON")
+
+    with SQLiteStore(path) as reopened:
+        calls = 0
+        terminalize = reopened._terminalize_action_contract_failure
+
+        def bounded_terminalize(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise AssertionError("NULL poison was selected more than once")
+            return terminalize(*args, **kwargs)
+
+        monkeypatch.setattr(reopened, "_terminalize_action_contract_failure", bounded_terminalize)
+        lease = run(reopened.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+
+        assert lease is not None and lease.action.action_id == healthy.action_id
+        poison_row = reopened._connection.execute(
+            """
+            SELECT action_id, state, error_class
+            FROM adapter_actions WHERE correlation_id = ?
+            """,
+            (poisoned.correlation_id,),
+        ).fetchone()
+        UUID(poison_row["action_id"])
+        assert tuple(poison_row)[1:] == ("failed", "adapter_contract_mismatch")
+        with pytest.raises(sqlite3.IntegrityError, match="must not be NULL"):
+            reopened._connection.execute(
+                "UPDATE adapter_actions SET action_id = NULL WHERE action_id = ?",
+                (healthy.action_id,),
+            )
+
+
+@pytest.mark.parametrize("state", ["leased", "running", "retry_wait"])
+def test_restart_rekeys_and_fails_null_action_id_in_active_state(tmp_path, state: str) -> None:
+    path = tmp_path / f"null-active-action-{state}.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+        )
+        action = AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="databricks.workspace.children.read",
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+        run(store.enqueue(action))
+        _rewind_nonnull_queue_id_migration(store)
+        store._connection.execute("PRAGMA foreign_keys = OFF")
+        store._connection.execute(
+            "DELETE FROM adapter_action_scopes WHERE action_id = ?",
+            (action.action_id,),
+        )
+        store._connection.execute(
+            """
+            UPDATE adapter_actions
+            SET action_id = NULL, state = ?, lease_id = ?, lease_worker_id = ?,
+                leased_until = ?, retry_at = ?
+            WHERE action_id = ?
+            """,
+            (
+                state,
+                str(uuid4()) if state in {"leased", "running"} else None,
+                "worker" if state in {"leased", "running"} else None,
+                (
+                    (NOW + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+                    if state in {"leased", "running"}
+                    else None
+                ),
+                (
+                    (NOW + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+                    if state == "retry_wait"
+                    else None
+                ),
+                action.action_id,
+            ),
+        )
+        store._connection.execute("PRAGMA foreign_keys = ON")
+
+    with SQLiteStore(path) as reopened:
+        row = reopened._connection.execute(
+            """
+            SELECT action_id, state, error_class
+            FROM adapter_actions WHERE correlation_id = ?
+            """,
+            (action.correlation_id,),
+        ).fetchone()
+
+        UUID(row["action_id"])
+        assert tuple(row)[1:] == ("failed", "adapter_contract_mismatch")
+
+
+def test_recursive_action_json_quarantines_once_and_valid_work_progresses(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "recursive-action-json.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+
+    def action_for(*, facet: str, capability_key: str) -> AdapterAction:
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet=facet,
+            capability_key=capability_key,
+        )
+        return AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key=capability_key,
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+
+    poisoned = action_for(facet="membership", capability_key="databricks.workspace.children.read")
+    healthy = action_for(facet="metadata", capability_key="databricks.workspace.metadata.read")
+    run(store.enqueue(poisoned))
+    run(store.enqueue(healthy))
+    store._connection.execute(
+        "UPDATE adapter_action_scopes SET field_mask_json = ? WHERE action_id = ?",
+        ("[" * 1_100 + "]" * 1_100, poisoned.action_id),
+    )
+
+    lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+
+    assert lease is not None and lease.action.action_id == healthy.action_id
+    poison_row = store._connection.execute(
+        "SELECT state, error_class FROM adapter_actions WHERE action_id = ?",
+        (poisoned.action_id,),
+    ).fetchone()
+    assert tuple(poison_row) == ("failed", "adapter_contract_mismatch")
+    assert len(store.list_operational_events(alertable_only=True)) == 1
+
+
+def test_unknown_action_state_is_failed_during_restart(tmp_path) -> None:
+    path = tmp_path / "unknown-action-state.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+            capability_key="databricks.workspace.children.read",
+        )
+        action = AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="databricks.workspace.children.read",
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+        run(store.enqueue(action))
+        store._connection.execute("PRAGMA ignore_check_constraints = ON")
+        store._connection.execute(
+            "UPDATE adapter_actions SET state = 'corrupt' WHERE action_id = ?",
+            (action.action_id,),
+        )
+        store._connection.execute("PRAGMA ignore_check_constraints = OFF")
+
+    with SQLiteStore(path) as reopened:
+        row = reopened._connection.execute(
+            "SELECT state, error_class FROM adapter_actions WHERE action_id = ?",
+            (action.action_id,),
+        ).fetchone()
+
+        assert tuple(row) == ("failed", "adapter_contract_mismatch")
+        assert len(reopened.list_operational_events(alertable_only=True)) == 1
 
 
 def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> None:

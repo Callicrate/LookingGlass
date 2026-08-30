@@ -72,7 +72,7 @@ class IntentScopeWork:
 class IntentScopeRecord:
     intent_scope_id: str
     intent_id: str
-    scope: RefreshScope
+    scope: RefreshScope | None
     state: IntentScopeState
     disposition_reason: str | None
     eligible_at: datetime | None

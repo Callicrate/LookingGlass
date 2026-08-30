@@ -3,7 +3,7 @@ import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -63,6 +63,30 @@ def _intent(
         scopes=(scope,),
         requested_at=now,
         expires_at=expires_at,
+    )
+
+
+def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
+    for view in (
+        "readable_operational_events",
+        "readable_facet_action_status",
+        "readable_action_attempts",
+        "readable_action_activity",
+        "readable_relationships",
+        "readable_facets",
+        "readable_remote_objects",
+        "readable_systems",
+    ):
+        store._connection.execute(f'DROP VIEW "{view}"')
+    for trigger in (
+        "reject_null_intent_scope_id_insert",
+        "reject_null_intent_scope_id_update",
+        "reject_null_action_id_insert",
+        "reject_null_action_id_update",
+    ):
+        store._connection.execute(f'DROP TRIGGER "{trigger}"')
+    store._connection.execute(
+        "DELETE FROM schema_migrations WHERE version = '0024_corruption_containment'"
     )
 
 
@@ -707,6 +731,233 @@ def test_overlong_corrupt_scope_id_quarantines_without_blocking_queue(tmp_path) 
         (events[0].event_id,),
     ).fetchone()[0]
     assert len(event_key) < 512
+
+
+def test_null_corrupt_scope_id_is_rekeyed_once_without_blocking_queue(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "null-intent-poison.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+        poisoned = run(store.submit_refresh(_intent(scope, NOW)))
+        valid = run(store.submit_refresh(_intent(scope, NOW + timedelta(seconds=1))))
+        _rewind_nonnull_queue_id_migration(store)
+        store._connection.execute("PRAGMA foreign_keys = OFF")
+        store._connection.execute(
+            """
+            UPDATE refresh_intent_scopes
+            SET intent_scope_id = NULL, target_kind = 'invalid'
+            WHERE intent_scope_id = ?
+            """,
+            (poisoned.scope_ids[0],),
+        )
+        store._connection.execute("PRAGMA foreign_keys = ON")
+
+    with SQLiteStore(path) as reopened:
+        calls = 0
+        terminalize = reopened._terminalize_intent_scope_contract_failure
+
+        def bounded_terminalize(*args, **kwargs) -> None:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise AssertionError("NULL poison was selected more than once")
+            terminalize(*args, **kwargs)
+
+        monkeypatch.setattr(
+            reopened,
+            "_terminalize_intent_scope_contract_failure",
+            bounded_terminalize,
+        )
+        result = run(DurableCoordinator(reopened, worker_id="coordinator").run_once(now=NOW))
+
+        assert result is not None and result.state is IntentScopeState.ADMITTED
+        poison_row = reopened._connection.execute(
+            """
+            SELECT intent_scope_id, state, disposition_reason
+            FROM refresh_intent_scopes WHERE intent_id = ?
+            """,
+            (poisoned.intent_id,),
+        ).fetchone()
+        UUID(poison_row["intent_scope_id"])
+        assert tuple(poison_row)[1:] == ("rejected", "persisted_intent_contract_mismatch")
+        assert reopened.list_intent_scopes(valid.intent_id)[0].state is IntentScopeState.ADMITTED
+        with pytest.raises(sqlite3.IntegrityError, match="must not be NULL"):
+            reopened._connection.execute(
+                "UPDATE refresh_intent_scopes SET intent_scope_id = NULL WHERE intent_id = ?",
+                (valid.intent_id,),
+            )
+
+
+@pytest.mark.parametrize("state", ["leased", "deferred"])
+def test_restart_rekeys_and_rejects_null_scope_id_in_active_state(tmp_path, state: str) -> None:
+    path = tmp_path / f"null-active-intent-{state}.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+        receipt = run(store.submit_refresh(_intent(scope, NOW)))
+        _rewind_nonnull_queue_id_migration(store)
+        store._connection.execute("PRAGMA foreign_keys = OFF")
+        store._connection.execute(
+            """
+            UPDATE refresh_intent_scopes
+            SET intent_scope_id = NULL, state = ?,
+                lease_id = ?, lease_worker_id = ?, leased_until = ?, eligible_at = ?
+            WHERE intent_scope_id = ?
+            """,
+            (
+                state,
+                str(uuid4()) if state == "leased" else None,
+                "worker" if state == "leased" else None,
+                NOW.isoformat().replace("+00:00", "Z") if state == "leased" else None,
+                NOW.isoformat().replace("+00:00", "Z") if state == "deferred" else None,
+                receipt.scope_ids[0],
+            ),
+        )
+        store._connection.execute("PRAGMA foreign_keys = ON")
+
+    with SQLiteStore(path) as reopened:
+        row = reopened._connection.execute(
+            """
+            SELECT intent_scope_id, state, disposition_reason
+            FROM refresh_intent_scopes WHERE intent_id = ?
+            """,
+            (receipt.intent_id,),
+        ).fetchone()
+
+        UUID(row["intent_scope_id"])
+        assert tuple(row)[1:] == ("rejected", "persisted_intent_contract_mismatch")
+
+
+def test_recursive_scope_json_quarantines_once_and_valid_work_progresses(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "recursive-intent-json.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    poisoned = run(store.submit_refresh(_intent(scope, NOW)))
+    valid = run(store.submit_refresh(_intent(scope, NOW + timedelta(seconds=1))))
+    store._connection.execute(
+        "UPDATE refresh_intent_scopes SET field_mask_json = ? WHERE intent_scope_id = ?",
+        ("[" * 1_100 + "]" * 1_100, poisoned.scope_ids[0]),
+    )
+
+    result = run(DurableCoordinator(store, worker_id="coordinator").run_once(now=NOW))
+
+    assert result is not None and result.state is IntentScopeState.ADMITTED
+    assert store.list_intent_scopes(poisoned.intent_id)[0].state is IntentScopeState.REJECTED
+    assert store.list_intent_scopes(valid.intent_id)[0].state is IntentScopeState.ADMITTED
+    assert len(store.list_operational_events(alertable_only=True)) == 1
+
+
+@pytest.mark.parametrize("corruption", ["malformed", "dangling", "missing_join"])
+def test_corrupt_action_link_rejects_scope_and_terminalizes_orphan(
+    tmp_path, corruption: str
+) -> None:
+    path = tmp_path / f"corrupt-action-link-{corruption}.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+        receipt = run(store.submit_refresh(_intent(scope, NOW)))
+        admitted = run(DurableCoordinator(store, worker_id="first").run_once(now=NOW))
+        assert admitted is not None and admitted.action_id is not None
+        if corruption == "missing_join":
+            store._connection.execute(
+                "DELETE FROM action_intent_scopes WHERE intent_scope_id = ?",
+                (receipt.scope_ids[0],),
+            )
+        else:
+            linked_action_id = "not-a-uuid" if corruption == "malformed" else str(uuid4())
+            store._connection.execute(
+                "UPDATE refresh_intent_scopes SET linked_action_id = ? WHERE intent_scope_id = ?",
+                (linked_action_id, receipt.scope_ids[0]),
+            )
+
+    with SQLiteStore(path) as reopened:
+        scope_record = reopened.list_intent_scopes(receipt.intent_id)[0]
+        stored_action = reopened.get_stored_action(admitted.action_id)
+        aggregate = reopened._connection.execute(
+            "SELECT aggregate_state FROM refresh_intents WHERE intent_id = ?",
+            (receipt.intent_id,),
+        ).fetchone()[0]
+
+        assert scope_record.state is IntentScopeState.REJECTED
+        assert scope_record.linked_action_id is None
+        assert stored_action is not None and stored_action.state.value == "failed"
+        assert aggregate == "complete"
+
+
+def test_terminal_action_missing_join_restores_history_and_parent_aggregate(tmp_path) -> None:
+    path = tmp_path / "terminal-action-missing-link.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+        receipt = run(store.submit_refresh(_intent(scope, NOW)))
+        admitted = run(DurableCoordinator(store, worker_id="first").run_once(now=NOW))
+        assert admitted is not None and admitted.action_id is not None
+        store._connection.execute(
+            """
+            UPDATE adapter_actions
+            SET state = 'succeeded', completed_at = ?
+            WHERE action_id = ?
+            """,
+            (NOW.isoformat().replace("+00:00", "Z"), admitted.action_id),
+        )
+        store._connection.execute(
+            "DELETE FROM action_intent_scopes WHERE intent_scope_id = ?",
+            (receipt.scope_ids[0],),
+        )
+
+    with SQLiteStore(path) as reopened:
+        scope_record = reopened.list_intent_scopes(receipt.intent_id)[0]
+        aggregate = reopened._connection.execute(
+            "SELECT aggregate_state FROM refresh_intents WHERE intent_id = ?",
+            (receipt.intent_id,),
+        ).fetchone()[0]
+        restored = reopened._connection.execute(
+            "SELECT action_id FROM action_intent_scopes WHERE intent_scope_id = ?",
+            (receipt.scope_ids[0],),
+        ).fetchone()[0]
+
+        assert scope_record.state is IntentScopeState.ADMITTED
+        assert scope_record.linked_action_id == admitted.action_id
+        assert restored == admitted.action_id
+        assert aggregate == "complete"
+
+
+def test_unknown_intent_scope_state_is_rejected_during_restart(tmp_path) -> None:
+    path = tmp_path / "unknown-intent-state.sqlite3"
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+        receipt = run(store.submit_refresh(_intent(scope, NOW)))
+        store._connection.execute("PRAGMA ignore_check_constraints = ON")
+        store._connection.execute(
+            "UPDATE refresh_intent_scopes SET state = 'corrupt' WHERE intent_scope_id = ?",
+            (receipt.scope_ids[0],),
+        )
+        store._connection.execute("PRAGMA ignore_check_constraints = OFF")
+
+    with SQLiteStore(path) as reopened:
+        record = reopened.list_intent_scopes(receipt.intent_id)[0]
+        aggregate = reopened._connection.execute(
+            "SELECT aggregate_state FROM refresh_intents WHERE intent_id = ?",
+            (receipt.intent_id,),
+        ).fetchone()[0]
+
+        assert record.state is IntentScopeState.REJECTED
+        assert aggregate == "complete"
 
 
 def test_intent_poison_terminalization_operational_error_rolls_back(

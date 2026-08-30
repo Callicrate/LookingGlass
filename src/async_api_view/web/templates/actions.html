@@ -15,6 +15,7 @@
     <a class="back-link" href="/">← Cached state</a>
   </header>
   <main id="main">
+    {% if view.integrity_warning %}<section class="notice notice--warning" role="status"><strong>Some cached records were isolated</strong><span>{{ view.integrity_warning|display }}</span></section>{% endif %}
     <section aria-labelledby="activity-heading">
       <div class="section-heading">
         <div><p class="eyebrow">Durable worker history</p><h2 id="activity-heading">Adapter actions</h2></div>

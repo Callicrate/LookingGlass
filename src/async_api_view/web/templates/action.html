@@ -15,6 +15,7 @@
     <a class="back-link" href="{{ return_to }}">← Action activity</a>
   </header>
   <main id="main">
+    {% if view.integrity_warning %}<section class="notice notice--warning" role="status"><strong>Some cached records were isolated</strong><span>{{ view.integrity_warning|display }}</span></section>{% endif %}
     <section class="action-summary" aria-labelledby="action-heading">
       <div class="scope-title">
         <div><p class="eyebrow">{{ view.action.system_name|display }}</p><h2 id="action-heading">{{ view.action.capability_key|display }}</h2></div>

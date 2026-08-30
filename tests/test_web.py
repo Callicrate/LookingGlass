@@ -699,6 +699,22 @@ def test_ready_dashboard_keeps_stale_cached_facts_and_activity_visible() -> None
     assert "timeout" in response.text
 
 
+def test_dashboard_renders_cached_record_isolation_as_a_nonblocking_warning() -> None:
+    view = replace(
+        ready_dashboard(),
+        integrity_warning=(
+            "Rookery isolated malformed cached records; healthy cached state remains available."
+        ),
+    )
+
+    response = client_for(FakeBackend(dashboard_view=view)).get("/")
+
+    assert response.status_code == 200
+    assert "Some cached records were isolated" in response.text
+    assert view.integrity_warning in response.text
+    assert "Disconnected" not in response.text
+
+
 def test_duplicate_system_names_render_unique_authority_attribution() -> None:
     dashboard = ready_dashboard()
     enabled = replace(

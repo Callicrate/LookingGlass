@@ -16,6 +16,7 @@
   </header>
 
   <main id="main">
+    {% if view.integrity_warning %}<section class="notice notice--warning" role="status"><strong>Some cached records were isolated</strong><span>{{ view.integrity_warning|display }}</span></section>{% endif %}
     <section aria-labelledby="alerts-heading">
       <div class="section-heading">
         <div><p class="eyebrow">Durable and redacted</p><h2 id="alerts-heading">Alertable failures</h2></div>
