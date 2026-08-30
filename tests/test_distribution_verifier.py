@@ -1,6 +1,7 @@
 import json
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +19,7 @@ _COVERAGE = _load_script("rookery_check_coverage", "check_coverage.py")
 _DISTRIBUTION = _load_script("rookery_verify_distribution_unit", "verify_distribution.py")
 validate_coverage_totals = _COVERAGE.validate_coverage_totals
 locked_installed_requirements = _DISTRIBUTION.locked_installed_requirements
+publish_release_evidence = _DISTRIBUTION.publish_release_evidence
 validate_installed_audit = _DISTRIBUTION.validate_installed_audit
 
 
@@ -35,6 +37,40 @@ fastapi==0.141.1
 
     with pytest.raises(RuntimeError, match="unpinned requirement"):
         locked_installed_requirements("fastapi>=0.115")
+
+
+def test_dirty_release_verification_preserves_existing_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    distribution = tmp_path / "dist"
+    distribution.mkdir()
+    source = distribution / "async_api_view-0.1.0.tar.gz"
+    wheel = distribution / "async_api_view-0.1.0-py3-none-any.whl"
+    constraints = tmp_path / "runtime-constraints.txt"
+    published_constraints = distribution / "runtime-constraints.txt"
+    manifest = distribution / "rookery-0.1.0-clean-SHA256SUMS.txt"
+    for path, content in (
+        (source, b"source"),
+        (wheel, b"wheel"),
+        (constraints, b"new constraints"),
+        (published_constraints, b"published constraints"),
+        (manifest, b"clean manifest"),
+    ):
+        path.write_bytes(content)
+    before = {path.name: path.read_bytes() for path in distribution.iterdir()}
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.setattr(_DISTRIBUTION.shutil, "which", lambda _name: "C:/git.exe")
+    monkeypatch.setattr(
+        _DISTRIBUTION.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=b" M current-status.md\n"),
+    )
+
+    assert publish_release_evidence(source, wheel, constraints) is None
+
+    after = {path.name: path.read_bytes() for path in distribution.iterdir()}
+    assert after == before
 
 
 @pytest.mark.parametrize(

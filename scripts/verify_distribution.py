@@ -801,12 +801,19 @@ def smoke_installed_wheel(
         validate_installed_audit(audit_result.stdout, len(installed_requirements))
         smoke = (
             "from importlib.resources import files; from pathlib import Path; "
+            "from datetime import UTC,datetime; from uuid import uuid4; "
             "import async_api_view, async_api_view.composition; "
+            "from async_api_view.contracts import ObservationBatch; "
             f"assets={json.dumps(relative_assets)}; "
             f"venv=Path({json.dumps(str(environment.resolve()))}); "
             "location=Path(async_api_view.__file__).resolve(); "
             "assert location.is_relative_to(venv), location; "
             "root=files('async_api_view'); "
+            "now=datetime(2026,8,30,tzinfo=UTC); "
+            "batch=ObservationBatch(uuid4(),uuid4(),uuid4(),'databricks','1',"
+            "now,now,(),(),(),None,'1'); "
+            "assert batch.contract_version=='1'; "
+            "assert 'observed_at_is_local' not in batch.to_dict(); "
             "missing=[asset for asset in assets "
             "if not root.joinpath(*asset.split('/')).is_file()]; "
             "assert not missing, missing"
@@ -843,6 +850,8 @@ def smoke_installed_wheel(
             )
         ):
             raise RuntimeError("installed CLI help is missing required commands")
+        if "Rookery" not in help_result.stdout or "async-api-view" not in help_result.stdout:
+            raise RuntimeError("installed CLI help does not map the product and command names")
         config = Path(temporary) / "rookery.toml"
         architecture = Path(temporary) / "rookery-architecture.md"
         for command in (
@@ -940,11 +949,6 @@ def publish_release_evidence(
 ) -> Path | None:
     """Publish exact constraints and a commit-bound checksum manifest for a clean checkout."""
 
-    distribution_dir = source_archive.parent
-    published_constraints = distribution_dir / "runtime-constraints.txt"
-    published_constraints.write_bytes(runtime_constraints.read_bytes())
-    for stale in distribution_dir.glob("rookery-*-SHA256SUMS.txt"):
-        stale.unlink()
     executable = shutil.which("git")
     if executable is None:
         raise RuntimeError("git is required for release provenance verification")
@@ -973,6 +977,9 @@ def publish_release_evidence(
         raise RuntimeError(
             f"release provenance commit mismatch: expected {expected_commit}, observed {commit}"
         )
+    distribution_dir = source_archive.parent
+    published_constraints = distribution_dir / "runtime-constraints.txt"
+    published_constraints.write_bytes(runtime_constraints.read_bytes())
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
     manifest = distribution_dir / f"rookery-{project['version']}-{commit}-SHA256SUMS.txt"
     artifacts = (source_archive, wheel_archive, published_constraints)
@@ -986,6 +993,9 @@ def publish_release_evidence(
         for artifact in artifacts
     )
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    for stale in distribution_dir.glob("rookery-*-SHA256SUMS.txt"):
+        if stale != manifest:
+            stale.unlink()
     return manifest
 
 

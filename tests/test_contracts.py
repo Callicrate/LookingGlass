@@ -100,6 +100,39 @@ def test_contracts_normalize_aware_times_and_are_json_serializable() -> None:
     assert batch.observed_at == NOW
     assert '"contract_version": "1"' in encoded
     assert '"observed_at": "2026-08-24T12:00:00Z"' in encoded
+    assert "observed_at_is_local" not in encoded
+
+
+def test_observation_batch_keeps_v1_positional_and_default_json_compatibility() -> None:
+    batch = ObservationBatch(
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        "databricks",
+        "1",
+        NOW,
+        NOW,
+        (),
+        (),
+        (),
+        None,
+        "1",
+    )
+
+    assert batch.contract_version == "1"
+    assert not batch.observed_at_is_local
+    assert "observed_at_is_local" not in batch.to_dict()
+    local = ObservationBatch(
+        batch.batch_id,
+        batch.system_id,
+        batch.connection_binding_id,
+        batch.adapter_key,
+        batch.adapter_version,
+        batch.observed_at,
+        batch.received_at,
+        observed_at_is_local=True,
+    )
+    assert local.to_dict()["observed_at_is_local"] is True
 
 
 def test_refresh_scope_serializes_an_optional_registered_capability_selector() -> None:

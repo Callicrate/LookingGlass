@@ -417,8 +417,8 @@ class ObservationBatch(JSONDTO):
     relationship_observations: tuple[RelationshipObservation, ...] = ()
     coverage: tuple[CoverageDeclaration, ...] = ()
     action_id: str | UUID | None = None
-    observed_at_is_local: bool = False
     contract_version: str = CONTRACT_VERSION
+    observed_at_is_local: bool = False
 
     def __post_init__(self) -> None:
         _check_version(self.contract_version)
@@ -464,6 +464,12 @@ class ObservationBatch(JSONDTO):
             for scope in item.authorized_by
         ):
             raise ValueError("item authority scopes must belong to the batch system")
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        value = JSONDTO.to_dict(self)
+        if not self.observed_at_is_local:
+            value.pop("observed_at_is_local", None)
+        return value
 
 
 def canonical_observation_batch_bytes(batch: ObservationBatch) -> bytes:

@@ -53,7 +53,10 @@ workspace_root = "/"
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="async-api-view",
-        description="View and refresh locally cached remote-system state.",
+        description=(
+            "Rookery local state viewer and refresher, distributed as the "
+            "async-api-view compatibility command."
+        ),
     )
     parser.add_argument(
         "--config",
