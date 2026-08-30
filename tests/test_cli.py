@@ -59,7 +59,7 @@ def test_init_config_creates_loadable_template_without_overwrite(tmp_path: Path)
         encoding="utf-8"
     )
     settings = load_settings(output)
-    assert settings.app.database_path == output.parent / "rookery.sqlite3"
+    assert settings.app.database_path == output.parent / ".local" / "rookery.sqlite3"
     assert settings.databricks_systems[0].profile == "YOUR_PROFILE"
 
 
@@ -140,6 +140,47 @@ def test_database_commands_fail_cleanly_on_incompatible_sqlite_state(
     moved = database.with_suffix(".moved")
     database.rename(moved)
     assert moved.is_file()
+
+
+@pytest.mark.parametrize("command", ["init", "run-once", "serve"])
+def test_database_commands_reject_foreign_sqlite_without_mutation_or_sidecars(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    database = tmp_path / f"foreign-{command}.sqlite3"
+    config = tmp_path / f"foreign-{command}.toml"
+    foreign = sqlite3.connect(database)
+    try:
+        foreign.execute("CREATE TABLE foreign_state (value TEXT NOT NULL)")
+        foreign.execute("INSERT INTO foreign_state VALUES ('preserve me')")
+        foreign.commit()
+        assert foreign.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    finally:
+        foreign.close()
+    original = database.read_bytes()
+    config.write_text(
+        f'[app]\ndatabase_path = "{database.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    argv = ["--config", str(config), command]
+    if command == "serve":
+        argv.append("--allow-redirected-activation")
+
+    assert cli.main(argv) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "/bootstrap#" not in captured.err
+    assert database.read_bytes() == original
+    assert not Path(f"{database}-wal").exists()
+    assert not Path(f"{database}-shm").exists()
+    check = sqlite3.connect(database)
+    try:
+        assert check.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert check.execute("SELECT value FROM foreign_state").fetchone()[0] == "preserve me"
+    finally:
+        check.close()
 
 
 def test_backup_command_creates_snapshot_and_refuses_overwrite(tmp_path: Path) -> None:

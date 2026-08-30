@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import tomllib
 from dataclasses import dataclass
@@ -235,7 +236,7 @@ def load_settings(path: Path) -> ProjectSettings:
         database_path = config_path.parent / database_path
 
     app = AppSettings(
-        database_path=database_path.resolve(strict=False),
+        database_path=Path(os.path.abspath(database_path)),
         host=_loopback_host(app_raw.get("host", "127.0.0.1")),
         port=_positive_int(app_raw.get("port", 8765), "app.port", maximum=65535),
         worker_poll_seconds=_positive_float(

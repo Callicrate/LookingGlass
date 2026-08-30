@@ -1,5 +1,8 @@
 import asyncio
+import os
 import sqlite3
+import stat
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -98,6 +101,39 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
         assert not any("TEMP B-TREE" in row[3] for row in child_plan)
 
 
+def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_path) -> None:
+    path = tmp_path / "state" / "rookery.sqlite3"
+    path.parent.mkdir()
+    path.touch()
+
+    with SQLiteStore(path) as store:
+        assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
+        assert (
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+        )
+
+
+def test_new_database_is_migrated_and_marked_before_wal_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "state" / "rookery.sqlite3"
+    original = SQLiteStore._enable_wal_mode
+
+    def verify_before_wal(store: SQLiteStore) -> None:
+        assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
+        assert (
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+        )
+        original(store)
+
+    monkeypatch.setattr(SQLiteStore, "_enable_wal_mode", verify_before_wal)
+
+    with SQLiteStore(path) as store:
+        assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
 def test_unrelated_sqlite_schema_is_rejected_before_ledger_mutation(tmp_path) -> None:
     path = tmp_path / "unrelated.sqlite3"
     unrelated = sqlite3.connect(path)
@@ -121,6 +157,150 @@ def test_unrelated_sqlite_schema_is_rejected_before_ledger_mutation(tmp_path) ->
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0
     finally:
         check.close()
+
+
+def test_foreign_sqlite_rejection_preserves_delete_mode_bytes_and_sidecar_absence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "foreign-delete.sqlite3"
+    foreign = sqlite3.connect(path)
+    try:
+        foreign.execute("CREATE TABLE foreign_state (value TEXT NOT NULL)")
+        foreign.execute("INSERT INTO foreign_state VALUES ('preserve me')")
+        foreign.commit()
+        assert foreign.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    finally:
+        foreign.close()
+    original = path.read_bytes()
+    original_mode = stat.S_IMODE(path.stat().st_mode)
+
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+        SQLiteStore(path)
+
+    assert path.read_bytes() == original
+    assert stat.S_IMODE(path.stat().st_mode) == original_mode
+    assert not Path(f"{path}-wal").exists()
+    assert not Path(f"{path}-shm").exists()
+    check = sqlite3.connect(path)
+    try:
+        assert check.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert check.execute("SELECT value FROM foreign_state").fetchone()[0] == "preserve me"
+    finally:
+        check.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows foreign-file DACL regression")
+def test_foreign_sqlite_rejection_does_not_change_windows_dacl(tmp_path: Path) -> None:
+    path = tmp_path / "foreign.sqlite3"
+    foreign = sqlite3.connect(path)
+    foreign.execute("CREATE TABLE foreign_state (value TEXT NOT NULL)")
+    foreign.commit()
+    foreign.close()
+    icacls = Path(os.environ["SYSTEMROOT"]) / "System32" / "icacls.exe"
+    subprocess.run(  # noqa: S603 - absolute Windows system executable
+        (str(icacls), str(path), "/grant", "*S-1-1-0:F", "/Q"),
+        check=True,
+        capture_output=True,
+    )
+    before = tmp_path / "before-acl.txt"
+    after = tmp_path / "after-acl.txt"
+    subprocess.run(  # noqa: S603 - absolute Windows system executable
+        (str(icacls), str(path), "/save", str(before), "/Q"),
+        check=True,
+        capture_output=True,
+    )
+
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+        SQLiteStore(path)
+
+    subprocess.run(  # noqa: S603 - absolute Windows system executable
+        (str(icacls), str(path), "/save", str(after), "/Q"),
+        check=True,
+        capture_output=True,
+    )
+    assert after.read_text(encoding="utf-16-le") == before.read_text(encoding="utf-16-le")
+
+
+def test_existing_database_preflight_uses_immutable_read_only_uri(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "foreign.sqlite3"
+    foreign = sqlite3.connect(path)
+    foreign.execute("CREATE TABLE foreign_state (value TEXT NOT NULL)")
+    foreign.commit()
+    foreign.close()
+    original_connect = sqlite_storage.sqlite3.connect
+    opened: list[str] = []
+
+    def track_connect(database: object, *args: object, **kwargs: object):
+        opened.append(str(database))
+        return original_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite_storage.sqlite3, "connect", track_connect)
+
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+        SQLiteStore(path)
+
+    assert opened == [f"{path.as_uri()}?mode=ro&immutable=1"]
+
+
+def test_unmarked_rookery_with_wal_sidecar_fails_without_sidecar_mutation(tmp_path: Path) -> None:
+    path = tmp_path / "state" / "rookery.sqlite3"
+    with SQLiteStore(path):
+        pass
+    markerless = sqlite3.connect(path)
+    try:
+        assert markerless.execute("PRAGMA journal_mode = DELETE").fetchone()[0] == "delete"
+        markerless.execute("PRAGMA application_id = 0")
+    finally:
+        markerless.close()
+    wal = Path(f"{path}-wal")
+    wal.write_bytes(b"untrusted wal sentinel")
+    database_bytes = path.read_bytes()
+    wal_bytes = wal.read_bytes()
+
+    with pytest.raises(sqlite3.DatabaseError, match="WAL sidecars cannot be adopted"):
+        SQLiteStore(path)
+
+    assert path.read_bytes() == database_bytes
+    assert wal.read_bytes() == wal_bytes
+    assert not Path(f"{path}-shm").exists()
+
+
+def test_database_identity_change_before_write_open_fails_without_wal_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "state" / "rookery.sqlite3"
+    with SQLiteStore(path):
+        pass
+    calls = 0
+    original_verify = sqlite_storage.RegularFileGuard.verify
+    original_connect = sqlite_storage.sqlite3.connect
+
+    def changed_identity(guard: sqlite_storage.RegularFileGuard) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise OSError("Rookery state file identity changed while guarded")
+        original_verify(guard)
+
+    def reject_write_open(database: object, *args: object, **kwargs: object):
+        if "mode=rw" in str(database):
+            pytest.fail("write-capable open ran after database identity changed")
+        return original_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite_storage.RegularFileGuard, "verify", changed_identity)
+    monkeypatch.setattr(sqlite_storage.sqlite3, "connect", reject_write_open)
+    monkeypatch.setattr(
+        SQLiteStore,
+        "_enable_wal_mode",
+        lambda _store: pytest.fail("WAL transition ran after database identity changed"),
+    )
+
+    with pytest.raises(OSError, match="identity changed while guarded"):
+        SQLiteStore(path)
 
 
 def test_unrelated_view_only_schema_is_not_treated_as_empty(tmp_path) -> None:
@@ -462,6 +642,319 @@ def test_online_backup_captures_live_wal_and_never_overwrites(tmp_path) -> None:
     assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
 
 
+def test_backup_rejects_foreign_sqlite_before_destination_creation(tmp_path: Path) -> None:
+    source = tmp_path / "foreign.sqlite3"
+    destination = tmp_path / "backups" / "state.sqlite3"
+    foreign = sqlite3.connect(source)
+    try:
+        foreign.execute("CREATE TABLE foreign_state (value TEXT NOT NULL)")
+        foreign.execute("INSERT INTO foreign_state VALUES ('preserve me')")
+        foreign.commit()
+        assert foreign.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    finally:
+        foreign.close()
+    original = source.read_bytes()
+
+    with pytest.raises(RuntimeError, match="recognized Rookery store"):
+        backup_sqlite_database(source, destination)
+
+    assert source.read_bytes() == original
+    assert not destination.parent.exists()
+    assert not Path(f"{source}-wal").exists()
+    assert not Path(f"{source}-shm").exists()
+
+
+def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path) -> None:
+    source = tmp_path / "state" / "rookery.sqlite3"
+    destination = tmp_path / "backups" / "rookery.sqlite3"
+    with SQLiteStore(source):
+        pass
+    markerless = sqlite3.connect(source)
+    try:
+        assert markerless.execute("PRAGMA journal_mode = DELETE").fetchone()[0] == "delete"
+        markerless.execute("PRAGMA application_id = 0")
+    finally:
+        markerless.close()
+
+    backup_sqlite_database(source, destination)
+
+    check = sqlite3.connect(destination)
+    try:
+        assert check.execute("PRAGMA application_id").fetchone()[0] == 0
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+    finally:
+        check.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership and mode regression")
+def test_state_database_sidecars_and_backups_are_posix_private(tmp_path: Path) -> None:
+    state_directory = tmp_path / "state"
+    state_directory.mkdir(mode=0o777)
+    state_directory.chmod(0o777)
+    database = state_directory / "rookery.sqlite3"
+    backup_directory = tmp_path / "backups"
+    backup_directory.mkdir(mode=0o777)
+    backup_directory.chmod(0o777)
+    destination = backup_directory / "rookery.sqlite3"
+
+    with SQLiteStore(database) as store:
+        store._connection.execute("PRAGMA wal_autocheckpoint = 0")
+        SystemBootstrapService(store).create_system(
+            display_name="private",
+            system_kind="databricks.workspace",
+            now=NOW,
+        )
+        assert Path(f"{database}-wal").is_file()
+        assert Path(f"{database}-shm").is_file()
+        for directory in (state_directory,):
+            assert directory.stat().st_mode & 0o777 == 0o700
+        for path in (database, Path(f"{database}-wal"), Path(f"{database}-shm")):
+            assert path.stat().st_mode & 0o777 == 0o600
+
+        backup_sqlite_database(database, destination)
+
+    assert backup_directory.stat().st_mode & 0o777 == 0o700
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ownership and DACL regression")
+def test_state_database_sidecars_and_backups_replace_permissive_windows_security(
+    tmp_path: Path,
+) -> None:
+    state_directory = tmp_path / "state"
+    database = state_directory / "rookery.sqlite3"
+    with SQLiteStore(database):
+        pass
+    backup_directory = tmp_path / "backups"
+    backup_directory.mkdir()
+    destination = backup_directory / "rookery.sqlite3"
+    icacls = Path(os.environ["SYSTEMROOT"]) / "System32" / "icacls.exe"
+    for path in (state_directory, database, backup_directory):
+        grant = "*S-1-1-0:(OI)(CI)F" if path.is_dir() else "*S-1-1-0:F"
+        subprocess.run(  # noqa: S603 - absolute Windows system executable
+            (str(icacls), str(path), "/grant", grant, "/Q"),
+            check=True,
+            capture_output=True,
+        )
+
+    with SQLiteStore(database) as store:
+        store._connection.execute("PRAGMA wal_autocheckpoint = 0")
+        SystemBootstrapService(store).create_system(
+            display_name="private",
+            system_kind="databricks.workspace",
+            now=NOW,
+        )
+        paths = (
+            state_directory,
+            database,
+            Path(f"{database}-wal"),
+            Path(f"{database}-shm"),
+        )
+        assert all(path.exists() for path in paths)
+        backup_sqlite_database(database, destination)
+
+        powershell = (
+            Path(os.environ["SYSTEMROOT"])
+            / "System32"
+            / "WindowsPowerShell"
+            / "v1.0"
+            / "powershell.exe"
+        )
+        owner_script = (
+            "if($env:ROOKERY_ACL_TEST_DIRECTORY -eq '1'){"
+            "$acl=(New-Object System.IO.DirectoryInfo("
+            "$env:ROOKERY_ACL_TEST_PATH)).GetAccessControl()}else{"
+            "$acl=(New-Object System.IO.FileInfo("
+            "$env:ROOKERY_ACL_TEST_PATH)).GetAccessControl()};"
+            "$ownerSid=$acl.GetOwner("
+            "[System.Security.Principal.SecurityIdentifier]).Value;"
+            "$currentSid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;"
+            "if($ownerSid -ne $currentSid){throw 'Rookery path owner mismatch'}"
+        )
+        for ordinal, path in enumerate((*paths, backup_directory, destination)):
+            saved_acl = tmp_path / f"state-acl-{ordinal}.txt"
+            subprocess.run(  # noqa: S603 - absolute Windows system executable
+                (str(icacls), str(path), "/save", str(saved_acl), "/Q"),
+                check=True,
+                capture_output=True,
+            )
+            sddl = saved_acl.read_text(encoding="utf-16-le")
+            assert "D:P" in sddl
+            assert ";;;WD)" not in sddl
+            owner_environment = dict(os.environ)
+            owner_environment["ROOKERY_ACL_TEST_PATH"] = str(path)
+            owner_environment["ROOKERY_ACL_TEST_DIRECTORY"] = str(int(path.is_dir()))
+            owner_result = subprocess.run(  # noqa: S603 - absolute Windows system executable
+                (
+                    str(powershell),
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    owner_script,
+                ),
+                check=False,
+                capture_output=True,
+                env=owner_environment,
+                text=True,
+            )
+            assert owner_result.returncode == 0, owner_result.stderr
+
+
+def test_database_hard_links_are_rejected_before_open(tmp_path: Path) -> None:
+    database = tmp_path / "state" / "rookery.sqlite3"
+    with SQLiteStore(database):
+        pass
+    alias = tmp_path / "state" / "alias.sqlite3"
+    os.link(database, alias)
+
+    with pytest.raises(OSError, match="hard links"):
+        SQLiteStore(database)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows no-delete-share guard regression")
+def test_windows_file_guard_blocks_path_replacement(tmp_path: Path) -> None:
+    guarded = tmp_path / "guarded.sqlite3"
+    replacement = tmp_path / "replacement.sqlite3"
+    guarded.write_bytes(b"guarded")
+    replacement.write_bytes(b"replacement")
+
+    with sqlite_storage.RegularFileGuard(guarded) as guard:
+        with pytest.raises(OSError):
+            os.replace(replacement, guarded)
+        guard.verify()
+
+    assert guarded.read_bytes() == b"guarded"
+    assert replacement.read_bytes() == b"replacement"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file-identity replacement regression")
+def test_posix_file_guard_detects_path_replacement(tmp_path: Path) -> None:
+    guarded = tmp_path / "guarded.sqlite3"
+    replacement = tmp_path / "replacement.sqlite3"
+    guarded.write_bytes(b"guarded")
+    replacement.write_bytes(b"replacement")
+
+    with sqlite_storage.RegularFileGuard(guarded) as guard:
+        os.replace(replacement, guarded)
+        with pytest.raises(OSError, match="identity changed"):
+            guard.verify()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows no-delete-share guard regression")
+def test_windows_directory_guard_blocks_path_replacement(tmp_path: Path) -> None:
+    guarded = tmp_path / "guarded"
+    replacement = tmp_path / "replacement"
+    guarded.mkdir()
+    replacement.mkdir()
+
+    with sqlite_storage.PrivateDirectoryGuard(guarded) as guard:
+        with pytest.raises(OSError):
+            os.replace(replacement, guarded)
+        guard.verify()
+
+    assert guarded.is_dir()
+    assert replacement.is_dir()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-identity replacement regression")
+def test_posix_directory_guard_detects_path_replacement(tmp_path: Path) -> None:
+    guarded = tmp_path / "guarded"
+    replacement = tmp_path / "replacement"
+    guarded.mkdir()
+    replacement.mkdir()
+
+    with sqlite_storage.PrivateDirectoryGuard(guarded) as guard:
+        os.replace(replacement, guarded)
+        with pytest.raises(OSError, match="identity changed"):
+            guard.verify()
+
+
+def test_database_in_git_worktree_root_is_rejected_before_creation(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    database = tmp_path / "rookery.sqlite3"
+
+    with pytest.raises(OSError, match="dedicated private directory"):
+        SQLiteStore(database)
+
+    assert not database.exists()
+
+
+def test_backup_destination_directory_redirect_is_rejected(tmp_path: Path) -> None:
+    source = tmp_path / "state" / "rookery.sqlite3"
+    with SQLiteStore(source):
+        pass
+    redirected = tmp_path / "redirected"
+    redirected.mkdir()
+    link = tmp_path / "backup-link"
+    try:
+        link.symlink_to(redirected, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    with pytest.raises(OSError, match="filesystem redirect"):
+        backup_sqlite_database(source, link / "backup.sqlite3")
+
+    assert list(redirected.iterdir()) == []
+
+
+def test_database_directory_redirect_is_rejected_before_creation(tmp_path: Path) -> None:
+    redirected = tmp_path / "redirected"
+    redirected.mkdir()
+    link = tmp_path / "state-link"
+    try:
+        link.symlink_to(redirected, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    with pytest.raises(OSError, match="filesystem redirect"):
+        SQLiteStore(link / "rookery.sqlite3")
+
+    assert list(redirected.iterdir()) == []
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+def test_database_sidecar_redirect_is_rejected_before_wal_open(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    database = tmp_path / "state" / "rookery.sqlite3"
+    with SQLiteStore(database):
+        pass
+    unrelated = tmp_path / f"unrelated{suffix}"
+    unrelated.write_bytes(b"preserve unrelated sidecar target")
+    sidecar = Path(f"{database}{suffix}")
+    try:
+        sidecar.symlink_to(unrelated)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+
+    with pytest.raises(OSError, match="filesystem redirect"):
+        SQLiteStore(database)
+
+    assert unrelated.read_bytes() == b"preserve unrelated sidecar target"
+    assert sidecar.is_symlink()
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+def test_database_sidecar_hard_link_is_rejected_before_wal_open(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    database = tmp_path / "state" / "rookery.sqlite3"
+    with SQLiteStore(database):
+        pass
+    unrelated = tmp_path / f"unrelated{suffix}"
+    unrelated.write_bytes(b"preserve unrelated hard-linked sidecar")
+    sidecar = Path(f"{database}{suffix}")
+    os.link(unrelated, sidecar)
+
+    with pytest.raises(OSError, match="hard links"):
+        SQLiteStore(database)
+
+    assert unrelated.read_bytes() == b"preserve unrelated hard-linked sidecar"
+    assert sidecar.read_bytes() == b"preserve unrelated hard-linked sidecar"
+
+
 def test_backup_publication_race_preserves_competing_file(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -477,6 +970,56 @@ def test_backup_publication_race_preserves_competing_file(
     monkeypatch.setattr(sqlite_storage.os, "link", lose_publication_race)
 
     with pytest.raises(FileExistsError, match="destination appeared"):
+        backup_sqlite_database(source, destination)
+
+    assert destination.read_bytes() == b"competing backup"
+    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+
+
+def test_backup_post_link_replacement_is_not_reported_or_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "state" / "rookery.sqlite3"
+    destination = tmp_path / "backups" / "rookery.sqlite3"
+    with SQLiteStore(source):
+        pass
+    original_link = sqlite_storage.os.link
+
+    def replace_after_link(temporary: Path, published: Path) -> None:
+        original_link(temporary, published)
+        published.unlink()
+        published.write_bytes(b"competing backup")
+
+    monkeypatch.setattr(sqlite_storage.os, "link", replace_after_link)
+
+    with pytest.raises(OSError):
+        backup_sqlite_database(source, destination)
+
+    assert destination.read_bytes() == b"competing backup"
+    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX guarded-hardening replacement regression")
+def test_backup_guarded_hardening_rejects_and_preserves_post_link_competitor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "state" / "rookery.sqlite3"
+    destination = tmp_path / "backups" / "rookery.sqlite3"
+    with SQLiteStore(source):
+        pass
+    original_harden = sqlite_storage.RegularFileGuard.harden
+
+    def replace_before_harden(guard: sqlite_storage.RegularFileGuard) -> None:
+        if guard.path == destination:
+            destination.unlink()
+            destination.write_bytes(b"competing backup")
+        original_harden(guard)
+
+    monkeypatch.setattr(sqlite_storage.RegularFileGuard, "harden", replace_before_harden)
+
+    with pytest.raises(OSError, match="identity changed"):
         backup_sqlite_database(source, destination)
 
     assert destination.read_bytes() == b"competing backup"

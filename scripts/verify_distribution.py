@@ -199,7 +199,7 @@ def smoke_installed_wheel(
                 text=True,
                 timeout=30,
             )
-        if not config.is_file() or not (Path(temporary) / "rookery.sqlite3").is_file():
+        if not config.is_file() or not (Path(temporary) / ".local" / "rookery.sqlite3").is_file():
             raise RuntimeError("installed CLI could not complete checkout-free initialization")
 
 

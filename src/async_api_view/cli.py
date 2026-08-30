@@ -21,7 +21,7 @@ from async_api_view.storage import backup_sqlite_database
 logger = logging.getLogger(__name__)
 
 _EXAMPLE_CONFIG = """[app]
-database_path = "./rookery.sqlite3"
+database_path = "./.local/rookery.sqlite3"
 host = "127.0.0.1"
 port = 8765
 worker_poll_seconds = 1.0

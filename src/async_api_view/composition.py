@@ -1166,7 +1166,6 @@ def build_runtime(
     )
     if len(set(config_ids)) != len(config_ids):
         raise ConfigError("Databricks system IDs must be unique")
-    settings.app.database_path.parent.mkdir(parents=True, exist_ok=True)
     store = SQLiteStore(settings.app.database_path)
     try:
         return _compose_runtime(settings, store=store, runner=runner)

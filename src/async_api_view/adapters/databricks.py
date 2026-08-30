@@ -54,6 +54,7 @@ from async_api_view.contracts import (
     canonical_json_bytes,
     canonical_observation_batch_bytes,
 )
+from async_api_view.local_files import prepare_private_directory
 
 DATABRICKS_ADAPTER_KEY = "databricks"
 DATABRICKS_ADAPTER_VERSION = "1"
@@ -485,147 +486,6 @@ def _controlled_cli_environment() -> dict[str, str]:
     return environment
 
 
-def _harden_windows_directory_acl(path: Path) -> None:
-    """Replace a Windows directory DACL with one inheritable current-user grant."""
-
-    if os.name != "nt":
-        return
-
-    import ctypes
-    from ctypes import wintypes
-
-    class SidAndAttributes(ctypes.Structure):
-        _fields_ = (("sid", wintypes.LPVOID), ("attributes", wintypes.DWORD))
-
-    class TokenUser(ctypes.Structure):
-        _fields_ = (("user", SidAndAttributes),)
-
-    token = wintypes.HANDLE()
-    required = wintypes.DWORD()
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-    advapi32.OpenProcessToken.argtypes = (
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        ctypes.POINTER(wintypes.HANDLE),
-    )
-    advapi32.OpenProcessToken.restype = wintypes.BOOL
-    advapi32.GetTokenInformation.argtypes = (
-        wintypes.HANDLE,
-        ctypes.c_int,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD),
-    )
-    advapi32.GetTokenInformation.restype = wintypes.BOOL
-    advapi32.GetLengthSid.argtypes = (wintypes.LPVOID,)
-    advapi32.GetLengthSid.restype = wintypes.DWORD
-    advapi32.InitializeAcl.argtypes = (wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD)
-    advapi32.InitializeAcl.restype = wintypes.BOOL
-    advapi32.AddAccessAllowedAceEx.argtypes = (
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-    )
-    advapi32.AddAccessAllowedAceEx.restype = wintypes.BOOL
-    advapi32.SetNamedSecurityInfoW.argtypes = (
-        wintypes.LPWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.LPVOID,
-        wintypes.LPVOID,
-        wintypes.LPVOID,
-    )
-    advapi32.SetNamedSecurityInfoW.restype = wintypes.DWORD
-    advapi32.GetNamedSecurityInfoW.argtypes = (
-        wintypes.LPWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(wintypes.LPVOID),
-        ctypes.POINTER(wintypes.LPVOID),
-        ctypes.POINTER(wintypes.LPVOID),
-        ctypes.POINTER(wintypes.LPVOID),
-        ctypes.POINTER(wintypes.LPVOID),
-    )
-    advapi32.GetNamedSecurityInfoW.restype = wintypes.DWORD
-    advapi32.EqualSid.argtypes = (wintypes.LPVOID, wintypes.LPVOID)
-    advapi32.EqualSid.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    kernel32.LocalFree.argtypes = (wintypes.HLOCAL,)
-    kernel32.LocalFree.restype = wintypes.HLOCAL
-
-    def last_error(message: str) -> OSError:
-        code = ctypes.get_last_error()
-        return OSError(code, f"{message}: {ctypes.FormatError(code)}")
-
-    if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
-        raise last_error("could not open the current process token")
-    try:
-        advapi32.GetTokenInformation(token, 1, None, 0, ctypes.byref(required))
-        if required.value == 0:
-            raise last_error("could not size the current user token")
-        token_buffer = ctypes.create_string_buffer(required.value)
-        if not advapi32.GetTokenInformation(
-            token, 1, token_buffer, required.value, ctypes.byref(required)
-        ):
-            raise last_error("could not read the current user token")
-        user_sid = ctypes.cast(token_buffer, ctypes.POINTER(TokenUser)).contents.user.sid
-        sid_length = advapi32.GetLengthSid(user_sid)
-        if sid_length == 0:
-            raise last_error("could not size the current user SID")
-
-        acl_size = 8 + 8 + sid_length
-        acl_buffer = ctypes.create_string_buffer(acl_size)
-        acl = ctypes.cast(acl_buffer, wintypes.LPVOID)
-        if not advapi32.InitializeAcl(acl, acl_size, 2):
-            raise last_error("could not initialize the Rookery directory ACL")
-        if not advapi32.AddAccessAllowedAceEx(acl, 2, 0x3, 0x001F01FF, user_sid):
-            raise last_error("could not grant the current user access to the Rookery directory")
-        result = advapi32.SetNamedSecurityInfoW(
-            str(path),
-            1,
-            0x80000005,
-            user_sid,
-            None,
-            acl,
-            None,
-        )
-        if result != 0:
-            raise OSError(
-                result, f"could not protect the Rookery directory: {ctypes.FormatError(result)}"
-            )
-
-        owner_sid = wintypes.LPVOID()
-        security_descriptor = wintypes.LPVOID()
-        result = advapi32.GetNamedSecurityInfoW(
-            str(path),
-            1,
-            0x00000001,
-            ctypes.byref(owner_sid),
-            None,
-            None,
-            None,
-            ctypes.byref(security_descriptor),
-        )
-        if result != 0:
-            raise OSError(
-                result,
-                f"could not verify the Rookery directory owner: {ctypes.FormatError(result)}",
-            )
-        try:
-            if not advapi32.EqualSid(owner_sid, user_sid):
-                raise OSError("Rookery directory owner does not match the current user")
-        finally:
-            kernel32.LocalFree(security_descriptor)
-    finally:
-        kernel32.CloseHandle(token)
-
-
 def _trusted_cli_work_root(*, home: Path | None = None) -> Path:
     """Create a private work root without a CLI-recognized bundle ancestor."""
 
@@ -634,22 +494,11 @@ def _trusted_cli_work_root(*, home: Path | None = None) -> Path:
         state_root = resolved_home / ".rookery"
         if state_root.is_symlink() or state_root.is_junction():
             raise CliUnavailable("Rookery state directory cannot be a filesystem redirect")
-        state_root.mkdir(mode=0o700, exist_ok=True)
-        if os.name == "nt":
-            _harden_windows_directory_acl(state_root)
-        else:
-            state_root.chmod(0o700)
+        state_root = prepare_private_directory(state_root)
         requested_root = state_root / "cli-work"
         if requested_root.is_symlink() or requested_root.is_junction():
             raise CliUnavailable("Rookery CLI work directory cannot be a filesystem redirect")
-        requested_root.mkdir(mode=0o700, exist_ok=True)
-        resolved_root = requested_root.resolve(strict=True)
-        if not resolved_root.is_dir() or resolved_root != requested_root:
-            raise CliUnavailable("Rookery CLI work directory is not a dedicated user directory")
-        if os.name == "nt":
-            _harden_windows_directory_acl(resolved_root)
-        else:
-            resolved_root.chmod(0o700)
+        resolved_root = prepare_private_directory(requested_root)
         for directory in (resolved_root, *resolved_root.parents):
             if any((directory / filename).exists() for filename in _BUNDLE_CONFIG_FILENAMES):
                 raise CliUnavailable(

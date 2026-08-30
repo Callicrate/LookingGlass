@@ -21,6 +21,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from functools import cache
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -79,6 +80,14 @@ from async_api_view.contracts._validation import (
 )
 from async_api_view.contracts.defaults import V1_TYPE_DEFINITION_BY_KEY
 from async_api_view.core import decide_refresh, resolve_refresh_interval, scope_covers
+from async_api_view.local_files import (
+    PrivateDirectoryGuard,
+    RegularFileGuard,
+    absolute_local_path,
+    harden_private_file,
+    prepare_private_directory,
+    regular_file_identity,
+)
 
 from .models import (
     ActionActivityRecord,
@@ -348,44 +357,234 @@ def _binding_revision(
     return hashlib.sha256(material.encode()).hexdigest()
 
 
+class _DatabaseKind(Enum):
+    EMPTY = "empty"
+    MARKERLESS = "markerless"
+    MARKED = "marked"
+
+
+def _kind_for_application_id(application_id: int) -> _DatabaseKind:
+    return _DatabaseKind.MARKED if application_id == _APPLICATION_ID else _DatabaseKind.MARKERLESS
+
+
+def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind:
+    """Reject foreign or incompatible SQLite state without mutating it."""
+
+    application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
+    if application_id not in {0, _APPLICATION_ID}:
+        raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
+    schema_objects = tuple(
+        (row["name"], row["type"])
+        for row in connection.execute(
+            """
+            SELECT name, type FROM sqlite_schema
+            WHERE name NOT LIKE 'sqlite_%'
+            """
+        ).fetchall()
+    )
+    if not schema_objects:
+        if application_id == _APPLICATION_ID:
+            raise sqlite3.DatabaseError("Rookery database schema is missing")
+        return _DatabaseKind.EMPTY
+    tables = {name for name, object_type in schema_objects if object_type == "table"}
+    if not tables or "schema_migrations" not in tables:
+        raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
+    ledger_columns = tuple(
+        row["name"]
+        for row in connection.execute(
+            "SELECT name FROM pragma_table_info('schema_migrations') ORDER BY cid"
+        ).fetchall()
+    )
+    if ledger_columns != ("version", "applied_at"):
+        raise sqlite3.DatabaseError("Rookery migration ledger is incompatible")
+    versions = tuple(
+        row["version"]
+        for row in connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    )
+    known_versions = tuple(migration.stem for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")))
+    if any(version not in known_versions for version in versions):
+        raise sqlite3.DatabaseError("Rookery migration ledger contains an unknown version")
+    if not versions:
+        if tables != {"schema_migrations"}:
+            raise sqlite3.DatabaseError("Rookery database schema is incomplete")
+        return _kind_for_application_id(application_id)
+    if versions[0] != "0001_initial":
+        raise sqlite3.DatabaseError("Rookery initial migration is not recorded")
+    initial_schema = dict(_initial_schema_signature())
+    if not set(initial_schema).issubset(tables):
+        raise sqlite3.DatabaseError("Rookery initial database schema is incomplete")
+    for table_name, expected_signature in initial_schema.items():
+        actual_signature = {
+            (
+                row["name"],
+                row["type"].upper(),
+                int(row["notnull"]),
+                int(row["pk"]),
+            )
+            for row in connection.execute(
+                "SELECT * FROM pragma_table_info(?)",
+                (table_name,),
+            )
+        }
+        if not expected_signature.issubset(actual_signature):
+            raise sqlite3.DatabaseError(f"Rookery {table_name} schema is incompatible")
+    return _kind_for_application_id(application_id)
+
+
+def _preflight_existing_database(path: Path) -> tuple[RegularFileGuard, _DatabaseKind]:
+    """Validate one existing database without opening or changing WAL state."""
+
+    guard = RegularFileGuard(path)
+    try:
+        source_uri = f"{path.as_uri()}?mode=ro&immutable=1"
+        with closing(sqlite3.connect(source_uri, uri=True)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only = ON")
+            kind = _validate_database_identity(connection)
+        if kind is not _DatabaseKind.MARKED and any(
+            os.path.lexists(sidecar) for sidecar in (Path(f"{path}-wal"), Path(f"{path}-shm"))
+        ):
+            raise sqlite3.DatabaseError(
+                "unmarked Rookery databases with WAL sidecars cannot be adopted safely"
+            )
+        guard.verify()
+        return guard, kind
+    except BaseException:
+        guard.close()
+        raise
+
+
+def _prepare_state_directory(path: Path) -> Path:
+    """Reserve one dedicated private directory without restricting a Git worktree root."""
+
+    if os.path.lexists(path / ".git"):
+        raise OSError("Rookery state and backup files require a dedicated private directory")
+    return prepare_private_directory(path)
+
+
+def _create_or_preflight_database(path: Path) -> tuple[RegularFileGuard, _DatabaseKind]:
+    if os.path.lexists(path):
+        return _preflight_existing_database(path)
+    _prepare_state_directory(path.parent)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return _preflight_existing_database(path)
+    else:
+        os.close(descriptor)
+    harden_private_file(path)
+    return RegularFileGuard(path), _DatabaseKind.EMPTY
+
+
+def _unlink_if_identity(path: Path, identity: tuple[int, int]) -> None:
+    if not os.path.lexists(path):
+        return
+    try:
+        matches = regular_file_identity(path, expected_links=None) == identity
+    except OSError:
+        return
+    if matches:
+        path.unlink()
+
+
 def backup_sqlite_database(source_path: str | Path, destination_path: str | Path) -> Path:
     """Publish one validated online SQLite snapshot without overwriting a path."""
 
-    source = Path(source_path).resolve(strict=True)
-    if not source.is_file():
-        raise ValueError("backup source must be a SQLite file")
-    destination = Path(destination_path).resolve(strict=False)
-    if destination == source:
-        raise ValueError("backup destination must differ from the source database")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if os.path.lexists(destination):
-        raise FileExistsError(f"backup destination already exists: {destination}")
-
-    with tempfile.NamedTemporaryFile(
-        prefix=".rookery-backup-",
-        suffix=".sqlite3.tmp",
-        dir=destination.parent,
-        delete=False,
-    ) as temporary:
-        temporary_path = Path(temporary.name)
+    source = absolute_local_path(source_path)
     try:
+        source_guard, source_kind = _preflight_existing_database(source)
+        if source_kind is _DatabaseKind.EMPTY:
+            source_guard.close()
+            raise sqlite3.DatabaseError("Rookery backup source is not initialized")
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            "could not create a consistent SQLite backup from a recognized Rookery store"
+        ) from exc
+    source_directory_guard: PrivateDirectoryGuard | None = None
+    destination_directory_guard: PrivateDirectoryGuard | None = None
+    try:
+        source_directory = _prepare_state_directory(source.parent)
+        source_directory_guard = PrivateDirectoryGuard(source_directory)
+        harden_private_file(source)
+        for sidecar in (Path(f"{source}-wal"), Path(f"{source}-shm")):
+            if os.path.lexists(sidecar):
+                harden_private_file(sidecar)
+        source_directory_guard.verify()
+        source_guard.verify()
+
+        destination = absolute_local_path(destination_path)
+        if destination == source:
+            raise ValueError("backup destination must differ from the source database")
+        if os.path.lexists(destination):
+            raise FileExistsError(f"backup destination already exists: {destination}")
+
         source_uri = f"{source.as_uri()}?mode=ro"
-        with (
-            closing(sqlite3.connect(source_uri, uri=True)) as source_connection,
-            closing(sqlite3.connect(temporary_path)) as destination_connection,
-        ):
+        with closing(sqlite3.connect(source_uri, uri=True)) as source_connection:
+            source_connection.row_factory = sqlite3.Row
             source_connection.execute("PRAGMA query_only = ON")
             source_connection.execute("PRAGMA busy_timeout = 5000")
-            source_connection.backup(destination_connection)
-            integrity = destination_connection.execute("PRAGMA integrity_check").fetchone()
-            if integrity is None or integrity[0] != "ok":
-                raise RuntimeError("backup failed its SQLite integrity check")
-        os.link(temporary_path, destination)
+            if _validate_database_identity(source_connection) is not source_kind:
+                raise OSError("Rookery backup source changed after immutable preflight")
+            source_guard.verify()
+
+            destination_directory = _prepare_state_directory(destination.parent)
+            destination_directory_guard = PrivateDirectoryGuard(destination_directory)
+            with tempfile.NamedTemporaryFile(
+                prefix=".rookery-backup-",
+                suffix=".sqlite3.tmp",
+                dir=destination.parent,
+                delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+            harden_private_file(temporary_path)
+            temporary_guard = RegularFileGuard(temporary_path)
+            temporary_identity = temporary_guard.identity
+            link_created = False
+            published = False
+            try:
+                with closing(sqlite3.connect(temporary_path)) as destination_connection:
+                    source_connection.backup(destination_connection)
+                    source_guard.verify()
+                    integrity = destination_connection.execute("PRAGMA integrity_check").fetchone()
+                    if integrity is None or integrity[0] != "ok":
+                        raise RuntimeError("backup failed its SQLite integrity check")
+                    destination_connection.row_factory = sqlite3.Row
+                    if _validate_database_identity(destination_connection) is not source_kind:
+                        raise RuntimeError("backup changed the Rookery database identity")
+                harden_private_file(temporary_path)
+                temporary_guard.verify()
+                destination_directory_guard.verify()
+                source_guard.verify()
+                os.link(temporary_path, destination)
+                link_created = True
+                temporary_guard.verify(expected_links=2)
+                if regular_file_identity(destination, expected_links=2) != temporary_identity:
+                    raise OSError("backup destination does not match the validated snapshot")
+                temporary_guard.close()
+                temporary_path.unlink()
+                with RegularFileGuard(destination) as destination_guard:
+                    if destination_guard.identity != temporary_identity:
+                        raise OSError("backup destination changed during publication")
+                    destination_guard.harden()
+                    destination_guard.verify()
+                    published = True
+                    return destination
+            finally:
+                temporary_guard.close()
+                _unlink_if_identity(temporary_path, temporary_identity)
+                if link_created and not published:
+                    _unlink_if_identity(destination, temporary_identity)
     except sqlite3.Error as exc:
         raise RuntimeError("could not create a consistent SQLite backup") from exc
     finally:
-        temporary_path.unlink(missing_ok=True)
-    return destination
+        if destination_directory_guard is not None:
+            destination_directory_guard.close()
+        if source_directory_guard is not None:
+            source_directory_guard.close()
+        source_guard.close()
 
 
 def _utc_text(value: datetime) -> str:
@@ -556,21 +755,53 @@ class SQLiteStore:
     """
 
     def __init__(self, database_path: str | Path) -> None:
-        self.database_path = Path(database_path)
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(
-            self.database_path,
-            isolation_level=None,
-            check_same_thread=False,
-        )
+        self.database_path = absolute_local_path(database_path)
+        self._file_guard, preflight_kind = _create_or_preflight_database(self.database_path)
+        self._directory_guard: PrivateDirectoryGuard | None = None
+        try:
+            state_directory = _prepare_state_directory(self.database_path.parent)
+            self._directory_guard = PrivateDirectoryGuard(state_directory)
+            harden_private_file(self.database_path)
+            for sidecar in (
+                Path(f"{self.database_path}-wal"),
+                Path(f"{self.database_path}-shm"),
+            ):
+                if os.path.lexists(sidecar):
+                    harden_private_file(sidecar)
+            self._file_guard.verify()
+            database_uri = f"{self.database_path.as_uri()}?mode=rw"
+            connection = sqlite3.connect(
+                database_uri,
+                uri=True,
+                isolation_level=None,
+                check_same_thread=False,
+            )
+        except BaseException:
+            self._file_guard.close()
+            if self._directory_guard is not None:
+                self._directory_guard.close()
+            raise
+        self._connection = connection
         self._connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         try:
             with self._lock:
-                self._connection.execute("PRAGMA foreign_keys = ON")
                 self._connection.execute("PRAGMA busy_timeout = 5000")
-                self._enable_wal_mode()
+                live_kind = _validate_database_identity(self._connection)
+                if live_kind is not preflight_kind and live_kind is not _DatabaseKind.MARKED:
+                    raise OSError("Rookery database identity changed after immutable preflight")
+                self._file_guard.verify()
+                self._connection.execute("PRAGMA foreign_keys = ON")
                 self._connection.execute("PRAGMA synchronous = FULL")
+                if live_kind is not _DatabaseKind.MARKED:
+                    journal_mode = self._connection.execute(
+                        "PRAGMA journal_mode = DELETE"
+                    ).fetchone()
+                    if journal_mode is None or str(journal_mode[0]).lower() != "delete":
+                        raise sqlite3.DatabaseError(
+                            "unmarked Rookery database could not enter rollback journal mode"
+                        )
+                self._harden_storage_files()
             # Validation closes the same transaction that applies every migration and
             # index repair, so incompatible legacy DDL cannot retain partial cleanup.
             with self._immediate_transaction() as connection:
@@ -578,8 +809,14 @@ class SQLiteStore:
                 self._repair_required_runtime_indexes()
                 self._validate_current_schema()
                 connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
+                self._harden_storage_files()
+            self._enable_wal_mode()
+            self._harden_storage_files()
         except BaseException:
             self._connection.close()
+            self._file_guard.close()
+            if self._directory_guard is not None:
+                self._directory_guard.close()
             raise
 
     def _enable_wal_mode(self) -> None:
@@ -592,9 +829,27 @@ class SQLiteStore:
                     raise
                 time.sleep(min(0.25, 0.01 * (2**attempt)))
 
+    def _harden_storage_files(self) -> None:
+        if self._directory_guard is None:  # pragma: no cover - initialization invariant
+            raise RuntimeError("Rookery state directory is not guarded")
+        self._directory_guard.verify()
+        self._file_guard.verify()
+        harden_private_file(self.database_path)
+        for path in (
+            Path(f"{self.database_path}-wal"),
+            Path(f"{self.database_path}-shm"),
+        ):
+            if os.path.lexists(path):
+                harden_private_file(path)
+        self._file_guard.verify()
+        self._directory_guard.verify()
+
     def close(self) -> None:
         with self._lock:
             self._connection.close()
+            self._file_guard.close()
+            if self._directory_guard is not None:
+                self._directory_guard.close()
 
     def __enter__(self) -> SQLiteStore:
         return self
@@ -652,7 +907,7 @@ class SQLiteStore:
         if not self._connection.in_transaction:  # pragma: no cover - private invariant
             raise RuntimeError("schema migration requires an initialization transaction")
         with self._lock:
-            self._validate_database_identity()
+            _validate_database_identity(self._connection)
             self._connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -674,72 +929,6 @@ class SQLiteStore:
                         "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                         (migration.stem, _utc_text(_now())),
                     )
-
-    def _validate_database_identity(self) -> None:
-        application_id = int(self._connection.execute("PRAGMA application_id").fetchone()[0])
-        if application_id not in {0, _APPLICATION_ID}:
-            raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
-        schema_objects = tuple(
-            (row["name"], row["type"])
-            for row in self._connection.execute(
-                """
-                SELECT name, type FROM sqlite_schema
-                WHERE name NOT LIKE 'sqlite_%'
-                """
-            ).fetchall()
-        )
-        if not schema_objects:
-            if application_id == _APPLICATION_ID:
-                raise sqlite3.DatabaseError("Rookery database schema is missing")
-            return
-        tables = {name for name, object_type in schema_objects if object_type == "table"}
-        if not tables:
-            raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
-        if "schema_migrations" not in tables:
-            raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
-        ledger_columns = tuple(
-            row["name"]
-            for row in self._connection.execute(
-                "SELECT name FROM pragma_table_info('schema_migrations') ORDER BY cid"
-            ).fetchall()
-        )
-        if ledger_columns != ("version", "applied_at"):
-            raise sqlite3.DatabaseError("Rookery migration ledger is incompatible")
-        versions = tuple(
-            row["version"]
-            for row in self._connection.execute(
-                "SELECT version FROM schema_migrations ORDER BY version"
-            ).fetchall()
-        )
-        known_versions = tuple(
-            migration.stem for migration in sorted(_MIGRATIONS_DIR.glob("*.sql"))
-        )
-        if any(version not in known_versions for version in versions):
-            raise sqlite3.DatabaseError("Rookery migration ledger contains an unknown version")
-        if not versions:
-            if tables != {"schema_migrations"}:
-                raise sqlite3.DatabaseError("Rookery database schema is incomplete")
-            return
-        if versions[0] != "0001_initial":
-            raise sqlite3.DatabaseError("Rookery initial migration is not recorded")
-        initial_schema = dict(_initial_schema_signature())
-        if not set(initial_schema).issubset(tables):
-            raise sqlite3.DatabaseError("Rookery initial database schema is incomplete")
-        for table_name, expected_signature in initial_schema.items():
-            actual_signature = {
-                (
-                    row["name"],
-                    row["type"].upper(),
-                    int(row["notnull"]),
-                    int(row["pk"]),
-                )
-                for row in self._connection.execute(
-                    "SELECT * FROM pragma_table_info(?)",
-                    (table_name,),
-                )
-            }
-            if not expected_signature.issubset(actual_signature):
-                raise sqlite3.DatabaseError(f"Rookery {table_name} schema is incompatible")
 
     def _validate_current_schema(self) -> None:
         current_schema = dict(_current_schema_signature())

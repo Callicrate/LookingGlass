@@ -69,7 +69,9 @@ async-api-view --config '.\rookery.toml' doctor
 async-api-view --config '.\rookery.toml' serve
 ```
 
-`init-config` writes UTF-8 TOML, creates parent directories, and refuses to overwrite any existing path. The generated SQLite path is relative to the configuration file. Use `uv tool install --force '<path-to-new-wheel>'` to upgrade and `uv tool uninstall async-api-view` to remove the installed command; configuration and cached SQLite state remain operator-owned files.
+`init-config` writes UTF-8 TOML, creates parent directories, and refuses to overwrite any existing path. The generated SQLite path is `.local/rookery.sqlite3` relative to the configuration file.
+Rookery treats the database parent as a dedicated current-user state directory; do not point `database_path` at a Git worktree root or a shared directory. Existing configurations that place `rookery.sqlite3` beside the configuration file should move it into a dedicated directory and update the path before starting this version.
+Use `uv tool install --force '<path-to-new-wheel>'` to upgrade and `uv tool uninstall async-api-view` to remove the installed command; configuration and cached SQLite state remain operator-owned files.
 
 ## Source checkout setup
 
@@ -140,13 +142,18 @@ The worker rejects content actions before target resolution or CLI execution unt
 
 Pass `--config <path>` before the subcommand.
 Use `--log-level DEBUG`, `INFO`, `WARNING`, or `ERROR` when needed.
-`backup` uses SQLite's online snapshot operation, so it includes committed WAL state while `serve` is running; the completed copy is integrity-checked before it appears at the requested path.
+`backup` first proves through an immutable read-only connection that the source is a recognized Rookery database without opening or changing WAL shared state. It then uses one WAL-aware read connection for validation and SQLite's online snapshot operation, so committed WAL state is included while `serve` is running. The completed copy is identity- and integrity-checked before it appears at the requested path.
+Database, WAL, SHM, backup, and temporary snapshot files are restricted to the current user. On POSIX, dedicated directories use mode `0700` and files use `0600`; on Windows, Rookery establishes current-user ownership and a protected current-user DACL. Redirected and multiply hard-linked state files are rejected.
+The backup destination parent is also treated as a dedicated private directory and must not be a Git worktree root or shared folder.
 
 ## Recovery status
 
 `backup` creates a consistent, validated snapshot, but Rookery does not yet provide or verify a restore workflow. Treat a snapshot as protected recovery input, not as proof that end-to-end recovery has been tested.
 
 Do not replace the configured database while any Rookery process is running, and do not copy or combine `-wal` or `-shm` sidecar files from a different database state. If the primary database is damaged, stop Rookery, preserve the database and sidecars, and work only from copies until a supported restore command can validate and publish a replacement atomically. Restore tooling and regression-tested recovery remain deferred operational work.
+
+For an existing database, startup performs an immutable identity and minimum-schema preflight before opening it for writes or changing journal mode. New and markerless stores migrate and persist the `ROOK` application ID in rollback-journal mode before WAL is enabled. An unmarked database with WAL/SHM sidecars must be cleanly closed and checkpointed by its owning version before adoption.
+A foreign SQLite file is rejected without changing its bytes, permissions, journal mode, or sidecar set and without creating a backup destination.
 
 ## Verify
 

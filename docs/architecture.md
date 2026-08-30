@@ -1403,6 +1403,12 @@ The session cookie MUST be host-only so ordinary `127.0.0.1`, `localhost`, and u
 Operating-system account and terminal permissions protect this bootstrap channel; loopback location or port alone is not caller authentication.
 It MUST NOT expose a network-accessible multi-user interface without a new authentication, authorization, tenancy, and content-access design.
 
+The configured SQLite parent and each backup destination parent are dedicated current-user state directories, not shared folders or Git worktree roots.
+Rookery MUST reject redirects and multiply hard-linked state files, establish current-user ownership, and restrict directories/files to `0700`/`0600` on POSIX or protected current-user DACLs on Windows.
+Before any write-capable open, WAL transition, sidecar creation, migration, repair, or backup publication for an existing database, Rookery MUST validate its application identity and minimum schema through an immutable read-only connection that does not open WAL shared state.
+New and markerless stores MUST migrate and persist the `ROOK` application ID in rollback-journal mode before enabling WAL; an unmarked store with WAL/SHM sidecars MUST fail closed until its owning version cleanly checkpoints it.
+If that preflight identifies foreign SQLite state, startup and backup MUST leave its bytes, journal mode, and sidecar set unchanged.
+
 There is no force-refresh permission in version 1.
 Refresh and retention policy changes are ordinary attributable local configuration changes.
 Single-user operation does not weaken the remote-observation-only boundary, credential isolation, local audit, or collateral-effect requirements.

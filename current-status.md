@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 00:00 ET
+Updated: 2026-08-30 00:36 ET
 
 ## Contents
 
@@ -17,11 +17,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 453 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
+- Latest checks: 476 tests passed with 10 Windows platform/privilege skips and 480 tests passed with 6 Ubuntu/WSL platform skips; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and branch coverage pass at 88%/87% respectively.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: the high finding from `critical-reviews/20260829-221329.md` is repaired and independently cleared; two medium storage findings and one low release-engineering finding remain.
+- Active review round: the high finding and both medium storage findings from `critical-reviews/20260829-221329.md` are repaired and independently cleared; one low release-engineering finding remains.
 - Latest checkpoint: `progress/20260830-000018.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum, notifications, and all six BookStack books are available.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -56,7 +56,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Provision and verify the native Murmuration identity with authenticated forum and read-only BookStack access.
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
 - [x] Remediate the high IPv6 loopback activation-takeover finding.
-- [ ] Remediate foreign-database mutation ordering and owner-only database permissions.
+- [x] Remediate foreign-database mutation ordering and owner-only database permissions.
 - [ ] Strengthen isolated-wheel verification against the locked runtime graph.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
@@ -292,6 +292,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The final CR-01 Windows gate passes 456 tests with two intentional platform skips at 89% branch coverage; independent security re-review found no medium-or-higher residual defect.
 - The 00:00 storage checkpoint has CR-02/CR-03 implemented but not yet committed: existing database identity is preflighted read-only before WAL/write access, state and backup files are current-user restricted, redirects/hardlinks fail closed, and Git worktree roots cannot become state directories.
 - Current focused storage evidence is green at 91 Windows tests with three platform skips, 92 Ubuntu/WSL tests with two platform skips, and 174 config/Databricks/composition tests with one Windows privilege skip; independent review and the full gates remain before commit.
+- CR-02/CR-03 are now independently clear: existing state receives immutable preflight before WAL-aware use, new/markerless state persists `ROOK` before WAL, and held file/directory guards plus identity-conditional publication fence replacement races.
+- The exact final storage gates pass 476 Windows tests with ten platform/privilege skips at 88% branch coverage and 480 Ubuntu/WSL tests with six platform skips at 87% branch coverage; format, standard/security lint, lock audit, and installed compatibility are clean.
+- The real ignored database and `.local` directory now have protected single-user Windows ACLs; the no-overwrite checkpoint `.local/backups/rookery-20260830-0024-pre-storage.sqlite3` is `ROOK`, migration `0018`, integrity `ok`, and owner-only.
+- The staged VCS-aware package build passes at 84 sdist entries, 62 wheel entries, and 30 non-code runtime assets; checkout-free initialization verifies the private `.local/rookery.sqlite3` starter path. Current SHA-256 values are `C694007495288D6E2EC371E9F6BDC9275B722C5143EEF7A9C0FFF808A4CDB236` and `C01F3D77CDAAD6E061A61CE09198B6815945E7E2F6E63A0DDDCA59F9E8313FBF`.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
@@ -472,4 +476,4 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The architecture document describes deferred capabilities beyond the implemented slice; documentation must keep current behavior distinct from roadmap behavior.
 - Local browser/debug data is present under `.local/` and must remain untracked.
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
-- The fresh critical review remains actionable: foreign-database startup ordering and database-file ACL enforcement are the two remaining medium-severity findings.
+- The remaining fresh-review item is low severity: align installed-wheel smoke and audit with the locked runtime dependency graph.
