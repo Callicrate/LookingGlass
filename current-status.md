@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 15:25 ET
+Updated: 2026-08-30 15:30 ET
 
 ## Contents
 
@@ -22,7 +22,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` includes `d313b53`, the independently cleared corruption-containment implementation and regression set.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-141800.md` is closed after three high availability/queue failures and four medium detail/link/state/authority failures passed exact Windows/WSL behavior, real migration, independent-review, and clean package gates.
+- Active review round: `critical-reviews/20260830-153000.md` is testing authority/configuration read containment and the indexed cost of migration-0024 readable views without weakening refresh authorization.
 - Latest checkpoint: `progress/20260830-152435.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 14:49 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and forum readiness. Topic 40 remains at post 13 because the current candidate is not yet committed.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -65,6 +65,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close browser recovery, no-JavaScript, polling, and responsive-state review.
 - [x] Close static-contract and reachable-runtime-defect review without broad suppressions.
 - [x] Close stored-state corruption-containment and read-availability review.
+- [ ] Close authority-read containment and readable-view query-plan review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
