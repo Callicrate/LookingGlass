@@ -136,12 +136,13 @@ The worker rejects content actions before target resolution or CLI execution unt
 | `async-api-view init-config --output <path>` | Create a no-overwrite starter TOML without loading configuration or opening SQLite. |
 | `async-api-view init` | Apply SQLite migrations and idempotently register configured systems/scopes. |
 | `async-api-view doctor` | Verify the existing Databricks CLI compatibility surface. |
-| `async-api-view run-once` | Drain currently eligible local coordinator and worker activity, then stop. |
+| `async-api-view run-once [--max-cycles N]` | Process up to `N` eligible coordinator/worker cycles; exit 3 means work may remain and the command should be rerun. |
 | `async-api-view backup --output <path>` | Create a consistent standalone SQLite snapshot without overwriting an existing path. |
 | `async-api-view serve` | Run the loopback UI, coordinator, and Databricks worker in one process. |
 
 Pass `--config <path>` before the subcommand.
 Use `--log-level DEBUG`, `INFO`, `WARNING`, or `ERROR` when needed.
+`run-once` defaults to 10,000 cycles and accepts at most 1,000,000. Exit 0 means the eligible queue became idle; exit 3 is bounded incompletion, not a worker fault.
 `backup` first proves through an immutable read-only connection that the source is a recognized Rookery database without opening or changing WAL shared state. It then uses one WAL-aware read connection for validation and SQLite's online snapshot operation, so committed WAL state is included while `serve` is running. The completed copy is identity- and integrity-checked before it appears at the requested path.
 Database, WAL, SHM, backup, and temporary snapshot files are restricted to the current user. On POSIX, dedicated directories use mode `0700` and files use `0600`; on Windows, Rookery establishes current-user ownership and a protected current-user DACL. Redirected and multiply hard-linked state files are rejected.
 The backup destination parent is also treated as a dedicated private directory and must not be a Git worktree root or shared folder.

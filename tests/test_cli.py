@@ -544,3 +544,59 @@ def test_run_once_drains_work_and_closes_store(
     assert coordinator.calls == 2
     assert worker.calls == 2
     assert store.closed
+
+
+def test_run_once_reports_bounded_incompletion_and_resumes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeStore:
+        close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    class FakeCoordinator:
+        calls = 0
+
+        async def run_once(self) -> object | None:
+            self.calls += 1
+            return object() if self.calls <= 10_001 else None
+
+    class FakeWorker:
+        calls = 0
+
+        async def startup(self) -> None:
+            return None
+
+        async def run_once(self) -> bool:
+            self.calls += 1
+            return False
+
+    store = FakeStore()
+    coordinator = FakeCoordinator()
+    worker = FakeWorker()
+    runtime = SimpleNamespace(store=store, coordinator=coordinator, worker=worker)
+    settings = ProjectSettings(
+        app=AppSettings(database_path=tmp_path / "state.sqlite3"),
+        databricks_systems=(),
+    )
+    monkeypatch.setattr(cli, "_load", lambda _path: settings)
+    monkeypatch.setattr(cli, "build_runtime", lambda _settings: runtime)
+
+    assert cli.main(["run-once", "--max-cycles", "10000"]) == 3
+    assert coordinator.calls == 10_000
+    assert worker.calls == 10_000
+    assert "eligible work may remain" in caplog.text
+
+    assert cli.main(["run-once", "--max-cycles", "10000"]) == 0
+    assert coordinator.calls == 10_002
+    assert worker.calls == 10_002
+    assert store.close_calls == 2
+
+
+@pytest.mark.parametrize("value", ["0", "1000001", "not-an-integer"])
+def test_run_once_rejects_invalid_cycle_limits(value: str) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["run-once", "--max-cycles", value])

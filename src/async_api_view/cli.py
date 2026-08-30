@@ -19,6 +19,8 @@ from async_api_view.config import ConfigError, ProjectSettings, load_settings
 from async_api_view.storage import backup_sqlite_database
 
 logger = logging.getLogger(__name__)
+DEFAULT_RUN_ONCE_CYCLES = 10_000
+MAX_RUN_ONCE_CYCLES = 1_000_000
 
 _EXAMPLE_CONFIG = """[app]
 database_path = "./.local/rookery.sqlite3"
@@ -68,9 +70,18 @@ def _parser() -> argparse.ArgumentParser:
         "doctor",
         help="Check the existing Databricks CLI without querying inventory.",
     )
-    subparsers.add_parser(
+    run_once = subparsers.add_parser(
         "run-once",
-        help="Drain currently eligible local coordinator and adapter work, then stop.",
+        help="Process one bounded batch of eligible local work, then stop.",
+    )
+    run_once.add_argument(
+        "--max-cycles",
+        type=_run_once_cycle_limit,
+        default=DEFAULT_RUN_ONCE_CYCLES,
+        help=(
+            f"Maximum coordinator/worker cycles (default: {DEFAULT_RUN_ONCE_CYCLES}; "
+            "exit 3 means eligible work may remain)."
+        ),
     )
     backup = subparsers.add_parser(
         "backup",
@@ -133,15 +144,26 @@ async def _doctor(settings: ProjectSettings) -> None:
     )
 
 
-async def _run_once(runtime: ApplicationRuntime) -> None:
+def _run_once_cycle_limit(value: str) -> int:
+    try:
+        cycles = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("max cycles must be an integer") from exc
+    if cycles <= 0 or cycles > MAX_RUN_ONCE_CYCLES:
+        raise argparse.ArgumentTypeError(f"max cycles must be between 1 and {MAX_RUN_ONCE_CYCLES}")
+    return cycles
+
+
+async def _run_once(runtime: ApplicationRuntime, *, max_cycles: int) -> bool:
+    """Process a bounded batch and report whether the eligible queue became idle."""
+
     await runtime.worker.startup()
-    for _ in range(10_000):
+    for _ in range(max_cycles):
         coordinated = await runtime.coordinator.run_once()
         worked = await runtime.worker.run_once()
         if coordinated is None and not worked:
-            break
-    else:
-        raise RuntimeError("run-once exceeded its bounded work limit")
+            return True
+    return False
 
 
 def _show_browser_activation(
@@ -268,9 +290,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "run-once":
             runtime = build_runtime(settings)
             try:
-                asyncio.run(_run_once(runtime))
+                drained = asyncio.run(_run_once(runtime, max_cycles=args.max_cycles))
             finally:
                 runtime.store.close()
+            if not drained:
+                logger.warning(
+                    "run-once reached --max-cycles=%s; eligible work may remain; rerun "
+                    "run-once to continue",
+                    args.max_cycles,
+                )
+                return 3
         elif args.command == "backup":
             destination = backup_sqlite_database(settings.app.database_path, args.output)
             logger.info("Created consistent SQLite backup at %s", destination)
