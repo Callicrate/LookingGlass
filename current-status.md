@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 17:00 ET
+Updated: 2026-08-30 17:53 ET
 
 ## Contents
 
@@ -17,14 +17,14 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 667 passed / 8 platform skips; Ubuntu/WSL 669 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained builds, exact distribution verification, and installed-wheel smoke pass on both.
-- Coverage: Windows 90.02% statements / 76.48% branch-only / 86.74% combined; Ubuntu/WSL 87.49% / 75.27% / 84.53%.
+- Latest checks: Windows 676 passed / 8 platform skips; Ubuntu/WSL 678 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained builds, exact distribution verification, and installed-wheel smoke pass on both.
+- Coverage: Windows 90.00% statements / 76.48% branch-only / 86.72% combined; Ubuntu/WSL 87.51% / 75.29% / 84.54%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` includes `56d3a41`, the independently cleared configuration-repair/generation-fencing implementation.
+- Version control: local `main` includes `205d835`, the independently cleared migration-byte provenance and legacy-adoption implementation.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-170000.md` is testing whether applied migration versions bind to exact bytes across source, installed wheels, legacy adoption, rollback, backup, and reopen.
-- Latest checkpoint: `progress/20260830-162005.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 16:16 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and forum readiness. Topic 40 remains at post 13 pending clean closure evidence.
+- Latest review round: `critical-reviews/20260830-170000.md` is closed with no remaining finding after testing exact migration bytes across source, installed wheels, legacy adoption, rollback, backup, and reopen.
+- Latest checkpoint: `progress/20260830-172526.md`.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 17:22 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and forum readiness. Topic 40 remains at post 13 pending clean closure evidence.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -67,7 +67,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close stored-state corruption-containment and read-availability review.
 - [x] Close authority-read containment and readable-view query-plan review.
 - [x] Close desired-configuration repair and restart-atomicity review.
-- [ ] Close migration byte-provenance and ledger-immutability review.
+- [x] Close migration byte-provenance and ledger-immutability review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
@@ -552,7 +552,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Verified authority now uses a non-secret normalized workspace-host digest, double-checks each mapped invocation around execution, and separates legacy/unverified cache; focused re-review is clear.
 - `serve` owns both listeners and one database-scoped nonblocking OS lock before runtime construction; independent review cleared cleanup, path identity, same-port, and alternate-port behavior.
 - Immutable preflight rejects unexpected executable schema while partial migrations and forced index repair remain valid; queue claims promote one strict-priority bounded batch and both slices are independently clear.
-- Web list paths now use canonical forward keyset cursors, immutable object IDs when unfiltered, indexed name-prefix keys when filtered, and no exact totals/deep offsets; final residual review is pending.
+- Web list paths now use canonical forward keyset cursors, immutable object IDs when unfiltered, indexed name-prefix keys when filtered, and no exact totals/deep offsets; the later residual review cleared the slice.
 - The 04:18 Murmuration Tend pass reconfirmed `project-a3c5f71ec6d12b` as write-ready with healthy authenticated forum access and topic 40 intact at three native posts; the pass stayed read-only because the implementation candidate is not yet committed.
 - Commit `b6cf1d1` closes verified workspace-host authority, pre-reconciliation serve ownership, exact schema allowlisting, priority-aware one-batch promotion, and canonical weakly-consistent forward cursors; every slice received focused independent closure.
 - The real database was backed up to `.local/backups/rookery-20260830-042550-pre-0019.sqlite3`, then migrated to `0019_web_cursor_indexes`; both source and backup are `ROOK`, integrity `ok`, and foreign-key clean. The verified-authority reconciliation leaves three historical systems with exactly one enabled.
