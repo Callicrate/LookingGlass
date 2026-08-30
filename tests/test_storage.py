@@ -916,17 +916,17 @@ def test_database_in_git_worktree_root_is_rejected_before_creation(tmp_path: Pat
     assert not database.exists()
 
 
-def test_backup_destination_directory_redirect_is_rejected(tmp_path: Path) -> None:
+def test_backup_destination_directory_redirect_is_rejected(
+    tmp_path: Path,
+    create_directory_redirect,
+) -> None:
     source = tmp_path / "state" / "rookery.sqlite3"
     with SQLiteStore(source):
         pass
     redirected = tmp_path / "redirected"
     redirected.mkdir()
     link = tmp_path / "backup-link"
-    try:
-        link.symlink_to(redirected, target_is_directory=True)
-    except OSError as exc:
-        pytest.skip(f"directory symlinks unavailable: {exc}")
+    create_directory_redirect(link, redirected)
 
     with pytest.raises(OSError, match="filesystem redirect"):
         backup_sqlite_database(source, link / "backup.sqlite3")
@@ -934,14 +934,14 @@ def test_backup_destination_directory_redirect_is_rejected(tmp_path: Path) -> No
     assert list(redirected.iterdir()) == []
 
 
-def test_database_directory_redirect_is_rejected_before_creation(tmp_path: Path) -> None:
+def test_database_directory_redirect_is_rejected_before_creation(
+    tmp_path: Path,
+    create_directory_redirect,
+) -> None:
     redirected = tmp_path / "redirected"
     redirected.mkdir()
     link = tmp_path / "state-link"
-    try:
-        link.symlink_to(redirected, target_is_directory=True)
-    except OSError as exc:
-        pytest.skip(f"directory symlinks unavailable: {exc}")
+    create_directory_redirect(link, redirected)
 
     with pytest.raises(OSError, match="filesystem redirect"):
         SQLiteStore(link / "rookery.sqlite3")

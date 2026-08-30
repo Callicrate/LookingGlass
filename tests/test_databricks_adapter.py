@@ -487,15 +487,15 @@ def test_cli_work_root_replaces_permissive_windows_security(tmp_path: Path) -> N
         assert owner_result.returncode == 0, owner_result.stderr
 
 
-def test_cli_work_root_rejects_redirected_state_directory(tmp_path: Path) -> None:
+def test_cli_work_root_rejects_redirected_state_directory(
+    tmp_path: Path,
+    create_directory_redirect,
+) -> None:
     home = tmp_path / "home"
     redirected = home / "redirected"
     home.mkdir()
     redirected.mkdir()
-    try:
-        (home / ".rookery").symlink_to(redirected, target_is_directory=True)
-    except OSError as exc:
-        pytest.skip(f"directory symlinks unavailable: {exc}")
+    create_directory_redirect(home / ".rookery", redirected)
 
     with pytest.raises(CliUnavailable, match="filesystem redirect"):
         databricks_adapter._trusted_cli_work_root(home=home)

@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 01:24 ET
+Updated: 2026-08-30 01:28 ET
 
 ## Contents
 
@@ -17,7 +17,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 488 tests passed with 11 Windows platform/privilege skips and 493 tests passed with 6 Ubuntu/WSL platform skips; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and branch coverage pass at 88%/87% respectively.
+- Latest checks: 491 tests passed with 8 Windows platform/privilege skips and 493 tests passed with 6 Ubuntu/WSL platform skips; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and branch coverage pass at 88%/87% respectively.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
@@ -61,6 +61,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Make bounded `run-once` incompletion explicit and resumable.
 - [x] Add file and directory durability barriers before backup success.
 - [x] Document pre-migration backup, unsupported downgrade, and uncompacted growth.
+- [x] Replace privileged Windows directory-symlink skips with real junction regressions.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -483,6 +484,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Upgrade guidance now requires a stopped pre-migration checkpoint, states that in-place downgrade is unsupported, and warns that durable history plus backups are not automatically pruned.
 - The real post-durability checkpoint `.local/backups/rookery-20260830-0118-post-durability.sqlite3` is owner-only, `ROOK`, migration `0018`, integrity `ok`, and foreign-key clean.
 - Final recovery verification passes at 488/11 on Windows and 493/6 on Ubuntu/WSL with 88%/87% branch coverage; the VCS-aware distribution passes at 86 sdist entries, 62 wheel entries, and 30 non-code runtime assets. Current Windows archive SHA-256 values are `370E2B27976D44F5CB58C302254CFBCF0F7A3E1AEF5FCA4C0A5CFE8A3CB577E0` and `C8FD9EE8B1C1D9B395C0CC15726FD16912A44682B4C728E547665A12FBBFDD44`.
+- NTFS junctions now exercise all three Windows directory-reparse rejection paths without symlink privilege; the full Windows suite rises to 491 passes while skips fall from 11 to 8.
 
 ## Risks / watch list
 
