@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 17:58 ET
+Updated: 2026-08-30 18:41 ET
 
 ## Contents
 
@@ -17,13 +17,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: Windows 676 passed / 8 platform skips; Ubuntu/WSL 678 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained builds, exact distribution verification, and installed-wheel smoke pass on both.
-- Coverage: Windows 90.00% statements / 76.48% branch-only / 86.72% combined; Ubuntu/WSL 87.51% / 75.29% / 84.54%.
+- Latest checks: Windows 687 passed / 8 platform skips; Ubuntu/WSL 689 passed / 6 platform skips. Format, standard/security/performance lint, lock/audit, constrained builds, exact distribution verification, and installed-wheel smoke pass on both.
+- Coverage: Windows 89.99% statements / 76.43% branch-only / 86.71% combined; Ubuntu/WSL 87.52% / 75.24% / 84.55%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
-- Version control: local `main` includes `205d835`, the independently cleared migration-byte provenance and legacy-adoption implementation.
+- Version control: local `main` includes `3558b9a`, the independently cleared operator failure-recovery implementation.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-175800.md` is testing operator-facing CLI/browser failure recovery, redaction, exit classification, and installed-help parity.
-- Latest checkpoint: `progress/20260830-172526.md`.
+- Latest review round: `critical-reviews/20260830-175800.md` is closed with no remaining finding after operator CLI/browser recovery, redaction, exit, stream, startup, and installed-help review.
+- Latest checkpoint: `progress/20260830-182251.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 17:55 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and published the clean closure as topic 40 post 14.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -68,7 +68,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close authority-read containment and readable-view query-plan review.
 - [x] Close desired-configuration repair and restart-atomicity review.
 - [x] Close migration byte-provenance and ledger-immutability review.
-- [ ] Close operator failure-recovery and error-surface review.
+- [x] Close operator failure-recovery and error-surface review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
