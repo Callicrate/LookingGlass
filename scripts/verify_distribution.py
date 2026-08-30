@@ -49,24 +49,32 @@ def expected_runtime_assets(source_root: Path = Path("src")) -> frozenset[str]:
 def verify_wheel_runtime_assets(
     wheel_archive: Path,
     expected_assets: frozenset[str],
+    source_root: Path = Path("src"),
 ) -> int:
     with ZipFile(wheel_archive) as archive:
         wheel_names = set(archive.namelist())
-    actual_assets = {
-        name
-        for name in wheel_names
-        if any(
-            name == directory.as_posix() or name.startswith(f"{directory.as_posix()}/")
-            for directory in RUNTIME_ASSET_DIRECTORIES
-        )
-    }
-    missing = expected_assets - actual_assets
-    unexpected = actual_assets - expected_assets
-    if missing or unexpected:
-        raise RuntimeError(
-            "wheel runtime asset manifest mismatch: "
-            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
-        )
+        actual_assets = {
+            name
+            for name in wheel_names
+            if any(
+                name == directory.as_posix() or name.startswith(f"{directory.as_posix()}/")
+                for directory in RUNTIME_ASSET_DIRECTORIES
+            )
+        }
+        missing = expected_assets - actual_assets
+        unexpected = actual_assets - expected_assets
+        if missing or unexpected:
+            raise RuntimeError(
+                "wheel runtime asset manifest mismatch: "
+                f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+            )
+        mismatched = [
+            name
+            for name in sorted(expected_assets)
+            if archive.read(name) != (source_root / name).read_bytes()
+        ]
+        if mismatched:
+            raise RuntimeError(f"wheel runtime asset content mismatch: {mismatched}")
     return len(wheel_names)
 
 

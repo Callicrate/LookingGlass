@@ -45,3 +45,25 @@ def test_runtime_manifest_rejects_a_missing_declared_directory(tmp_path) -> None
 
     with pytest.raises(RuntimeError, match=r"web[\\/]static"):
         expected_runtime_assets(source_root)
+
+
+def test_wheel_asset_verification_rejects_stale_content(tmp_path) -> None:
+    source_root = tmp_path / "src"
+    expected: set[str] = set()
+    for relative_directory in (
+        "async_api_view/storage/migrations",
+        "async_api_view/web/templates",
+        "async_api_view/web/static",
+    ):
+        directory = source_root / relative_directory
+        directory.mkdir(parents=True)
+        asset = directory / "asset.txt"
+        asset.write_text("current", encoding="utf-8")
+        expected.add(asset.relative_to(source_root).as_posix())
+    archive_path = tmp_path / "stale.whl"
+    with ZipFile(archive_path, "w") as archive:
+        for name in expected:
+            archive.writestr(name, b"stale")
+
+    with pytest.raises(RuntimeError, match="content mismatch"):
+        verify_wheel_runtime_assets(archive_path, frozenset(expected), source_root)
