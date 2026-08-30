@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 20:44 ET
+Updated: 2026-08-29 21:00 ET
 
 ## Goal
 
@@ -12,8 +12,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: 453 tests passed with one complementary platform-specific skip on both Windows and Ubuntu/WSL; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and the branch-coverage gate passed at 89%/88% respectively.
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
-- Active review round: final documentation truth, bounded Retry-After behavior, and CI determinism are independently clear; no finding is currently open and final convergence is active.
-- Next progress report due: 2026-08-29 21:10 ET.
+- Active review round: final documentation truth, bounded Retry-After behavior, CI determinism, and exact-current convergence are independently clear; no finding is open and the 22:00 handoff is active.
+- Next progress report due: final handoff at 2026-08-29 22:00 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 20:09 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 21:10 ET.
+- [ ] Tend Murmuration about hourly; the 21:00 pass remained read-only because the native project profile is not provisioned, and the final pass is due at 22:00 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -266,6 +266,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Arbitrary-length numeric and overflow-prone date inputs fail closed without unsafe integer/date conversion; independent re-review is clear at exact 452-test Windows/Ubuntu parity.
 - Bounded guidance that reaches or exceeds the action deadline now disables automatic retry instead of leaving the action in `retry_wait` until a predictably rejected dispatch; exact cross-platform parity is 453 passed plus one complementary platform skip.
 - A final CI-determinism audit found no medium-or-higher issue and identified one unbounded mocked process-creation wait; it now times out, surfaces an already-failed task's original error, and cancels/drains a hung task.
+- The 21:00 Murmuration tend again found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
