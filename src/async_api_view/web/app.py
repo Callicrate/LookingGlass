@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import re
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, quote, urlsplit
@@ -52,6 +53,13 @@ SECURITY_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "X-Permitted-Cross-Domain-Policies": "none",
 }
+logger = logging.getLogger(__name__)
+
+
+def _secure_response(response: Response) -> Response:
+    for name, value in SECURITY_HEADERS.items():
+        response.headers[name] = value
+    return response
 
 
 def _intent_id(value: str) -> str:
@@ -361,14 +369,33 @@ def create_app(
             heading=headings.get(exc.status_code, "Request failed"),
             message=message,
             retry_path=retry_path,
+            home_path="/",
+            home_label="Return to dashboard",
         )
         return HTMLResponse(content, status_code=exc.status_code, headers=exc.headers)
 
+    @app.exception_handler(Exception)
+    async def unexpected_exception_response(request: Request, _exc: Exception) -> Response:
+        logger.error("Unhandled local request failure")
+        if request.url.path.startswith("/api/"):
+            return _secure_response(
+                JSONResponse(
+                    {"detail": "Local state services are unavailable"},
+                    status_code=500,
+                )
+            )
+        content = templates.get_template("error.html").render(
+            status_code=500,
+            heading="Local request failed",
+            message="Rookery could not complete this local request.",
+            retry_path=request.url.path if request.method in {"GET", "HEAD"} else None,
+            home_path="/",
+            home_label="Return to dashboard",
+        )
+        return _secure_response(HTMLResponse(content, status_code=500))
+
     async def secure_responses(request: Request, call_next):  # type: ignore[no-untyped-def]
-        response = await call_next(request)
-        for name, value in SECURITY_HEADERS.items():
-            response.headers[name] = value
-        return response
+        return _secure_response(await call_next(request))
 
     async def authorize_local(request: Request, call_next):  # type: ignore[no-untyped-def]
         public = request.url.path == "/favicon.ico" or request.url.path.startswith("/static/")
@@ -380,12 +407,34 @@ def create_app(
         if public or bootstrap:
             return await call_next(request)
         cookie_token = request.cookies.get(SESSION_COOKIE)
-        session = app.state.local_authorizer.authenticate(cookie_token)
+        try:
+            session = app.state.local_authorizer.authenticate(cookie_token)
+        except Exception:
+            logger.error("Local browser authorization failed")
+            if request.url.path.startswith("/api/"):
+                return JSONResponse(
+                    {"detail": "Local browser authorization is unavailable"},
+                    status_code=500,
+                )
+            content = templates.get_template("error.html").render(
+                status_code=500,
+                heading="Local access failed",
+                message=(
+                    "Open the activation page or restart the same Rookery serve command, "
+                    "preserving its configuration and options."
+                ),
+                retry_path="/bootstrap",
+                home_path=None,
+                home_label=None,
+            )
+            return HTMLResponse(content, status_code=500)
         if session is None:
             if not request.url.path.startswith("/api/"):
                 content = templates.get_template("bootstrap.html").render(
                     error=(
-                        "Browser access is no longer valid. Restart Rookery to issue a new link."
+                        "Browser access is no longer valid. Stop and rerun the same "
+                        "async-api-view serve command, preserving --config and other options, "
+                        "to issue a new link."
                         if cookie_token is not None
                         else None
                     )

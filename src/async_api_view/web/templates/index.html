@@ -26,14 +26,21 @@
     <section class="snapshot-banner" aria-label="Snapshot trust boundary">
       <div class="snapshot-mark" aria-hidden="true">●</div>
       <div>
+        {% if view.disconnected %}
+        <strong>Cached snapshot unavailable</strong>
+        <p>Rookery could not read local cached facts. No inventory or clear-state conclusion is shown.</p>
+        {% else %}
         <strong>Local cached snapshot</strong>
         <p>Facts stay readable while remote systems are unavailable. Refreshes are explicit and observation-only.</p>
+        {% endif %}
       </div>
+      {% if not view.disconnected %}
       <dl class="snapshot-stats">
         <div><dt>Systems</dt><dd>{{ view.systems|length }}</dd></div>
         <div><dt>Objects shown</dt><dd>{{ view.objects|length }}</dd></div>
         <div><dt>Refresh options</dt><dd>{{ view.refresh_options|length }}</dd></div>
       </dl>
+      {% endif %}
     </section>
     {% if view.error %}
     <section class="notice notice--error" role="alert">
@@ -47,6 +54,7 @@
       <span>{{ view.refresh_error|display if view.refresh_error else 'The refresh worker is unavailable.' }} Cached snapshot loaded.</span>
     </section>
     {% endif %}
+    {% if not view.disconnected %}
     {% if view.integrity_warning %}
     <section class="notice notice--warning" role="status">
       <strong>Some cached records were isolated</strong>
@@ -221,7 +229,8 @@
       <div class="empty-state"><strong>Refresh unavailable</strong><p>{{ view.refresh_empty_reason|display }}</p></div>
       {% endif %}
     </section>
+    {% endif %}
   </main>
-  <footer>Cached knowledge remains visible when a remote system or worker is unavailable. Cursor pages are weakly consistent while refreshes commit; return to the first page to include concurrent changes.</footer>
+  <footer>{% if view.disconnected %}No cached-state conclusion is available until the local snapshot can be loaded.{% else %}Cached knowledge remains visible when a remote system or worker is unavailable. Cursor pages are weakly consistent while refreshes commit; return to the first page to include concurrent changes.{% endif %}</footer>
 </body>
 </html>

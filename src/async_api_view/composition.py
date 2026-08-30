@@ -1287,7 +1287,7 @@ class ApplicationRuntime:
                 occurred_at=datetime.now(UTC),
             )
         except Exception:
-            logger.exception("Could not persist the redacted %s outage event", component)
+            logger.error("Could not persist the redacted %s outage event", component)
 
     def _record_component_recovery(self, component: str) -> None:
         if component in self._component_errors:

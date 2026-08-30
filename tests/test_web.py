@@ -424,7 +424,8 @@ def test_expired_browser_session_is_denied_and_cookie_is_cleared() -> None:
 
     assert denied.status_code == 403
     assert "Unlock this browser" in denied.text
-    assert "Restart Rookery" in denied.text
+    assert "async-api-view serve" in denied.text
+    assert "--config" in denied.text
     assert "Max-Age=0" in denied.headers["set-cookie"]
     assert denied_mutation.status_code == 403
     assert backend.dashboard_queries == []
@@ -452,7 +453,8 @@ def test_expired_browser_post_renders_recovery_shell() -> None:
     assert denied.status_code == 403
     assert denied.headers["content-type"].startswith("text/html")
     assert "Unlock this browser" in denied.text
-    assert "Restart Rookery" in denied.text
+    assert "async-api-view serve" in denied.text
+    assert "--config" in denied.text
     assert "Max-Age=0" in denied.headers["set-cookie"]
     assert backend.submitted == []
 
@@ -943,7 +945,24 @@ def test_dashboard_recovers_to_disconnected_error_without_leaking_exception() ->
     assert response.status_code == 200
     assert "Disconnected" in response.text
     assert "Try again" in response.text
+    assert "Cached snapshot unavailable" in response.text
+    assert "No alertable failures recorded" not in response.text
+    assert "No systems configured" not in response.text
+    assert "No cached objects" not in response.text
+    assert "Refresh unavailable" not in response.text
     assert "secret profile token" not in response.text
+
+
+def test_default_dashboard_does_not_present_unloaded_state_as_empty() -> None:
+    app = create_app(allowed_hosts=("testserver",))
+
+    response = authenticated_client(app).get("/")
+
+    assert response.status_code == 200
+    assert "Cached snapshot unavailable" in response.text
+    assert "No alertable failures recorded" not in response.text
+    assert "No systems configured" not in response.text
+    assert "No cached objects" not in response.text
 
 
 def test_dashboard_distinguishes_worker_degradation_from_local_disconnection() -> None:
@@ -1646,6 +1665,44 @@ def test_security_headers_are_applied_to_html_json_and_errors() -> None:
         assert response.headers["x-frame-options"] == "DENY"
         assert response.headers["referrer-policy"] == "no-referrer"
         assert "default-src 'self'" in response.headers["content-security-policy"]
+
+
+def test_unexpected_authorization_failure_uses_closed_secure_error_shell(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FailingAuthorizer(LocalCallerAuthorizer):
+        def authenticate(self, cookie_token: str | None):
+            raise RuntimeError("token=opaque\n\x1b[31m C:\\Users\\person\\session")
+
+    app = create_app(
+        FakeBackend(),
+        allowed_hosts=("testserver",),
+        authorizer=FailingAuthorizer(),
+    )
+    client = TestClient(
+        app,
+        base_url="https://testserver",
+        raise_server_exceptions=False,
+    )
+
+    response = client.get("/")
+    api_response = client.get("/api/intents/intent-1")
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("text/html")
+    assert "<title>Local access failed · Rookery</title>" in response.text
+    assert 'role="alert"' in response.text
+    assert 'href="/bootstrap"' in response.text
+    assert "Return to dashboard" not in response.text
+    assert client.get("/bootstrap").status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert "default-src 'self'" in response.headers["content-security-policy"]
+    assert api_response.status_code == 500
+    assert api_response.json() == {"detail": "Local browser authorization is unavailable"}
+    assert api_response.headers["cache-control"] == "no-store"
+    assert "opaque" not in response.text + api_response.text + caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_favicon_is_served_without_browser_log_noise() -> None:

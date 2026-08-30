@@ -140,13 +140,19 @@ _LOCAL_SETTING = re.compile(
     r"(?i)((?:databricks_cli_path|config(?:_file)?|config_path)\s*[:=]\s*)[^,;]+"
 )
 _JSON_SECRET = re.compile(
-    r'(?i)("(?:token|password|secret|client_secret|access[_-]?(?:key|token)|'
-    r'refresh[_-]?token|api[_-]?key)"\s*:\s*")[^"]*'
+    r"(?i)([\"']?(?:(?:[a-z0-9]+[_-])*(?:token|password|secret|authorization|"
+    r"access[_-]?key|private[_-]?key|api[_-]?key))[\"']?\s*:\s*)"
+    r'(?:"[^,}\]\r\n]*"|\'[^,}\]\r\n]*\'|[^,}\]\s]+)'
+)
+_STANDALONE_SECRET = re.compile(
+    r"(?i)\b(?:gh[pousr]_[a-z0-9_]{20,}|dapi[a-z0-9]{32,}|"
+    r"AKIA[0-9A-Z]{16}|eyJ[a-z0-9_-]{20,}\.[a-z0-9_-]{20,}\.[a-z0-9_-]{10,})\b"
 )
 _WINDOWS_PATH = re.compile(r"(?i)\b[a-z]:[\\/][^,;\r\n]*")
+_WINDOWS_ROOT_PATH = re.compile(r"(?i)\\root\\[^,;\r\n]*")
 _UNC_PATH = re.compile(r"\\\\[^\\\s,;]+\\[^\r\n,;]*")
-_POSIX_PATH = re.compile(r"(?i)/(?:users|home|etc|var|tmp|private|mnt)/[^\s\"',;]*")
-_CONTROL = re.compile(r"[\x00-\x1f\x7f\x1b]")
+_POSIX_PATH = re.compile(r"(?i)/(?:users|home|etc|var|tmp|private|mnt|root)(?:/[^\s\"',;]*)?")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 _BLOCKED_VALUE = re.compile(r"(^-|[\r\n\x00])")
 _RETRY_AFTER_SECONDS = re.compile(r"(?i)\bretry[-_ ]?after\b[\"']?\s*[:=]\s*[\"']?(\d+)\b")
 _RETRY_AFTER_HEADER = re.compile(r"(?im)^\s*retry-after\s*:\s*([^\r\n]{1,128})")
@@ -620,13 +626,16 @@ def _enforce_binding_target(
 def redact_diagnostic(value: bytes | str, *, limit: int = 2048) -> str:
     """Return bounded diagnostic text suitable for lifecycle persistence."""
     text = value.decode("utf-8", "replace") if isinstance(value, bytes) else value
+    text = text.replace(r"\"", '"').replace(r"\'", "'")
     text = _CONTROL.sub(" ", text)
     text = _BEARER_SECRET.sub("Bearer [redacted]", text)
     text = _PROFILE_OUTPUT.sub(r"\1[redacted]", text)
-    text = _JSON_SECRET.sub(r"\1[redacted]", text)
+    text = _JSON_SECRET.sub(r'\1"[redacted]"', text)
     text = _SECRET.sub(r"\1[redacted]", text)
+    text = _STANDALONE_SECRET.sub("[redacted-token]", text)
     text = _LOCAL_SETTING.sub(r"\1[local-path]", text)
     text = _WINDOWS_PATH.sub("[local-path]", text)
+    text = _WINDOWS_ROOT_PATH.sub("[local-path]", text)
     text = _UNC_PATH.sub("[local-path]", text)
     text = _POSIX_PATH.sub("[local-path]", text)
     return " ".join(text.split())[:limit]

@@ -1,3 +1,5 @@
+import json
+import logging
 import secrets
 import select
 import socket
@@ -54,7 +56,7 @@ def test_init_config_creates_loadable_template_without_overwrite(tmp_path: Path)
     refused = cli.main(["init-config", "--output", str(output)])
 
     assert created == 0
-    assert refused == 2
+    assert refused == 1
     assert original.startswith(b"[app]\n")
     assert output.read_bytes() == original
     assert output.read_text(encoding="utf-8") == Path("config.example.toml").read_text(
@@ -74,14 +76,14 @@ def test_placeholder_authority_fails_before_database_creation(
 
     result = cli.main(["--config", str(config), "init"])
 
-    assert result == 2
+    assert result == 1
     assert "fingerprint-profile" in caplog.text
     assert not (tmp_path / ".local" / "rookery.sqlite3").exists()
     for command in ("authority-list", "authority-retire", "authority-unretire"):
         argv = ["--config", str(config), command]
         if command != "authority-list":
             argv.extend(("--system-id", "11111111-1111-4111-8111-111111111111"))
-        assert cli.main(argv) == 2
+        assert cli.main(argv) == 1
         assert not (tmp_path / ".local" / "rookery.sqlite3").exists()
 
 
@@ -96,7 +98,7 @@ def test_racing_init_config_writers_publish_one_complete_template(tmp_path: Path
             )
         )
 
-    assert sorted(results) == [0, 2]
+    assert sorted(results) == [0, 1]
     assert output.read_text(encoding="utf-8") == Path("config.example.toml").read_text(
         encoding="utf-8"
     )
@@ -118,7 +120,7 @@ def test_export_docs_is_checkout_current_and_never_overwrites(tmp_path: Path) ->
     refused = cli.main(["export-docs", "--output", str(output)])
 
     assert created == 0
-    assert refused == 2
+    assert refused == 1
     assert original == Path("docs/architecture.md").read_bytes()
     assert output.read_bytes() == original
 
@@ -149,7 +151,81 @@ def test_fingerprint_profile_prints_only_digest_without_loading_project(
 def test_init_rejects_missing_config(tmp_path: Path) -> None:
     result = cli.main(["--config", str(tmp_path / "missing.toml"), "init"])
 
-    assert result == 2
+    assert result == 1
+
+
+def test_cli_sanitizes_expected_operator_error_text(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hostile_path = tmp_path / "missing\n\x1b[31m\u202etoken=opaque.toml"
+
+    result = cli.main(["--config", str(hostile_path), "init"])
+
+    assert result == 1
+    assert "opaque" not in caplog.text
+    assert "\x1b" not in caplog.text
+    assert "\u202e" not in caplog.text
+    assert str(tmp_path) not in caplog.text
+    assert "[local-path]" in caplog.text
+
+
+def test_doctor_interrupt_is_a_controlled_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = ProjectSettings(
+        app=AppSettings(database_path=tmp_path / "state.sqlite3"),
+        databricks_systems=(),
+    )
+
+    async def interrupted(_settings: ProjectSettings) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_load", lambda _path: settings)
+    monkeypatch.setattr(cli, "_doctor", interrupted)
+
+    assert cli.main(["doctor"]) == 130
+    assert "Rookery command interrupted" in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_usage_error_sanitizes_hostile_argument(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["--log-level", "\x1b[31m\u202etoken=opaque", "init"])
+
+    captured = capsys.readouterr()
+    assert raised.value.code == 2
+    assert captured.out == ""
+    assert "usage: async-api-view" in captured.err
+    assert "opaque" not in captured.err
+    assert "\x1b" not in captured.err
+    assert "\u202e" not in captured.err
+    assert "[redacted]" in captured.err
+
+    with pytest.raises(SystemExit):
+        cli.main(["--log-level", "/root/synthetic-user/state.sqlite3", "init"])
+    assert "/root/" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "secret_value",
+    [
+        "ghp_FAKESTANDALONETOKEN123456789",
+        '{"DATABRICKS_TOKEN":"FAKE_JSON_SECRET"}',
+        "{'DATABRICKS_TOKEN':'FAKE_SINGLE_SECRET'}",
+        "/root/synthetic-user/FAKE_state.sqlite3",
+    ],
+)
+def test_cli_redacts_standalone_and_prefixed_json_secrets(
+    secret_value: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    assert cli.main(["--config", secret_value, "init"]) == 1
+    assert "FAKE" not in caplog.text
 
 
 def test_init_rejects_invalid_profile_before_database_creation(tmp_path: Path) -> None:
@@ -168,7 +244,7 @@ workspace_root = "/"
         encoding="utf-8",
     )
 
-    assert cli.main(["--config", str(config), "init"]) == 2
+    assert cli.main(["--config", str(config), "init"]) == 1
     assert not database.exists()
 
 
@@ -201,7 +277,7 @@ def test_database_commands_fail_cleanly_on_incompatible_sqlite_state(
         argv.append("--allow-redirected-activation")
     result = cli.main(argv)
 
-    assert result == 2
+    assert result == 1
     assert "local SQLite state could not be opened or updated" in caplog.text
     moved = database.with_suffix(".moved")
     database.rename(moved)
@@ -233,7 +309,7 @@ def test_database_commands_reject_foreign_sqlite_without_mutation_or_sidecars(
     if command == "serve":
         argv.append("--allow-redirected-activation")
 
-    assert cli.main(argv) == 2
+    assert cli.main(argv) == 1
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -263,14 +339,17 @@ def test_backup_command_creates_snapshot_and_refuses_overwrite(tmp_path: Path) -
     refused = cli.main(["--config", str(config), "backup", "--output", str(output)])
 
     assert created == 0
-    assert refused == 2
+    assert refused == 1
     assert output.is_file()
     with sqlite3.connect(output) as snapshot:
         assert snapshot.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
 def test_serve_closes_runtime_store_when_server_start_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     class FakeStore:
         def __init__(self) -> None:
@@ -306,23 +385,25 @@ def test_serve_closes_runtime_store_when_server_start_fails(
         lambda _port, *, backlog: listeners,
     )
 
-    def fail_server(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("port unavailable")
+    def fail_server(server: cli._RookeryServer, **_kwargs: object) -> None:
+        assert server.config.access_log is False
+        logging.getLogger("uvicorn.error").error(
+            "Traceback (most recent call last):\ntoken=opaque C:\\Users\\person\\app.py"
+        )
+        raise SystemExit(3)
 
     monkeypatch.setattr(cli.uvicorn.Server, "run", fail_server)
 
     result = cli.main(["serve", "--allow-redirected-activation"])
 
-    assert result == 2
+    assert result == 1
     assert store.closed
     captured = capsys.readouterr()
-    expected_url = (
-        f"http://{runtime.local_authorizer.browser_host}:{settings.app.port}"
-        f"/bootstrap#{bootstrap_token}"
-    )
-    assert expected_url in captured.out
-    assert "valid once for 10 minutes" in captured.out
+    assert captured.out == ""
     assert bootstrap_token not in captured.err
+    assert "opaque" not in caplog.text
+    assert "Traceback" not in caplog.text
+    assert "Rookery application startup failed" in caplog.text
     assert all(listener.closed for listener in listeners)
 
 
@@ -465,7 +546,7 @@ def test_serve_fails_before_activation_disclosure_when_ipv6_port_is_occupied(
 
         result = cli.main(["serve", "--allow-redirected-activation"])
 
-        assert result == 2
+        assert result == 1
         assert not store.closed
         captured = capsys.readouterr()
         assert captured.out == ""
@@ -543,7 +624,7 @@ workspace_root = "/"
             ]
         )
 
-    assert result == 2
+    assert result == 1
     assert all(listener.closed for listener in listeners)
     with sqlite3.connect(database) as connection:
         after = tuple(
@@ -596,7 +677,7 @@ workspace_root = "/"
     with ExclusiveFileLock(cli._serve_lock_path(database)):
         result = cli.main(argv)
 
-    assert result == 2
+    assert result == 1
     with sqlite3.connect(database) as connection:
         after = tuple(connection.execute("SELECT system_id, enabled FROM systems").fetchall())
     assert after == before
@@ -604,7 +685,7 @@ workspace_root = "/"
 
 def test_authority_retire_and_unretire_preserve_cache_and_require_reinit(
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     database = tmp_path / "private" / "state.sqlite3"
     config = tmp_path / "config.toml"
@@ -628,9 +709,10 @@ workspace_root = "/"
         system_id = connection.execute("SELECT system_id FROM systems").fetchone()[0]
         object_count = connection.execute("SELECT COUNT(*) FROM remote_objects").fetchone()[0]
 
-    caplog.set_level("INFO")
     assert cli.main(["--config", str(config), "authority-list"]) == 0
-    assert system_id in caplog.text
+    listed = capsys.readouterr()
+    assert system_id in listed.out
+    assert listed.err == ""
     assert cli.main(["--config", str(config), "authority-retire", "--system-id", system_id]) == 0
     assert cli.main(["--config", str(config), "init"]) == 0
     with sqlite3.connect(database) as connection:
@@ -662,9 +744,47 @@ workspace_root = "/"
         )
 
 
+def test_authority_list_uses_readable_state_and_stdout(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database = tmp_path / "private" / "state.sqlite3"
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f"""
+[app]
+database_path = "{database.as_posix()}"
+
+[[databricks]]
+id = "workspace"
+name = "workspace"
+profile = "PROFILE"
+authority_fingerprint = "{"1" * 64}"
+workspace_root = "/"
+""",
+        encoding="utf-8",
+    )
+    assert cli.main(["--config", str(config), "init"]) == 0
+    with sqlite3.connect(database) as connection:
+        system_id = connection.execute("SELECT system_id FROM systems").fetchone()[0]
+        connection.execute(
+            "UPDATE connection_bindings SET non_secret_settings_json = ?",
+            (json.dumps({"workspace_root": "/", "authority_fingerprint": 1}),),
+        )
+        connection.commit()
+
+    assert cli.main(["--log-level", "WARNING", "--config", str(config), "authority-list"]) == 0
+
+    captured = capsys.readouterr()
+    assert system_id in captured.out
+    assert "legacy-unverified" in captured.out
+    assert captured.err == ""
+    assert "Traceback" not in captured.out
+
+
 def test_local_recovery_commands_survive_invalid_remote_configuration(
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     database = tmp_path / "private" / "state.sqlite3"
     config = tmp_path / "config.toml"
@@ -697,14 +817,12 @@ name = "semantically-invalid"
 """,
         encoding="utf-8",
     )
-    caplog.set_level("INFO")
-
     assert cli.main(["--config", str(config), "backup", "--output", str(backup)]) == 0
     assert cli.main(["--config", str(config), "authority-list"]) == 0
-    assert system_id in caplog.text
+    assert system_id in capsys.readouterr().out
     assert cli.main(["--config", str(config), "authority-retire", "--system-id", system_id]) == 0
     assert cli.main(["--config", str(config), "authority-unretire", "--system-id", system_id]) == 0
-    assert cli.main(["--config", str(config), "init"]) == 2
+    assert cli.main(["--config", str(config), "init"]) == 1
 
     with sqlite3.connect(backup) as backup_connection:
         assert backup_connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -750,7 +868,7 @@ def test_serve_refuses_to_disclose_activation_to_redirected_stdout(
     result = cli.main(["serve"])
 
     captured = capsys.readouterr()
-    assert result == 2
+    assert result == 1
     assert captured.out == ""
     assert "--allow-redirected-activation" in caplog.text
     assert "/bootstrap#" not in captured.err + caplog.text
@@ -790,7 +908,7 @@ workspace_root = "{root}"
     write_root("/New")
     monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False)
 
-    assert cli.main(["--config", str(config), "serve"]) == 2
+    assert cli.main(["--config", str(config), "serve"]) == 1
 
     with sqlite3.connect(database) as after_connection:
         after = tuple(

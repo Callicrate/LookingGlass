@@ -24,7 +24,7 @@
       <p>{{ message|e }}</p>
       <nav class="error-actions" aria-label="Recovery options">
         {% if retry_path %}<a class="button-link" href="{{ retry_path|e }}">Try again</a>{% endif %}
-        <a href="/">Return to dashboard</a>
+        {% if home_path %}<a href="{{ home_path|e }}">{{ home_label|e }}</a>{% endif %}
       </nav>
     </section>
   </main>

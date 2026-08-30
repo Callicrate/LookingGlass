@@ -825,9 +825,11 @@ def _utc_text(value: datetime) -> str:
     return require_utc(value, "timestamp").isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _dt(value: str | None) -> datetime | None:
+def _dt(value: object) -> datetime | None:
     if value is None:
         return None
+    if not isinstance(value, str):
+        raise ValueError("stored timestamp must be text")
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return require_utc(parsed, "stored timestamp")
 
@@ -2347,15 +2349,15 @@ class SQLiteStore:
                                COALESCE(action.completed_at, action.started_at,
                                         action.record_created_at)
                            )
-                           FROM adapter_actions AS action
+                           FROM readable_action_activity_recency AS action
                            WHERE action.system_id = system.system_id
                        ) AS last_activity_at
                 FROM systems AS system
                 LEFT JOIN retired_system_authorities AS retired
                     ON retired.system_id = system.system_id
-                LEFT JOIN configured_system_identities AS identity
+                LEFT JOIN readable_configured_system_identities AS identity
                     ON identity.system_id = system.system_id
-                LEFT JOIN connection_bindings AS binding
+                LEFT JOIN readable_connection_bindings AS binding
                     ON binding.system_id = system.system_id
                 WHERE system.system_kind = 'databricks.workspace'
                 ORDER BY system.enabled DESC, system.display_name, system.system_id
@@ -2461,7 +2463,6 @@ class SQLiteStore:
         now: datetime | None = None,
     ) -> None:
         system_id = require_uuid(system_id, "system_id")
-        timestamp = _utc_text(now or _now())
         with self._immediate_transaction() as connection:
             system = connection.execute(
                 "SELECT system_kind FROM systems WHERE system_id = ?",
@@ -2469,6 +2470,62 @@ class SQLiteStore:
             ).fetchone()
             if system is None or system["system_kind"] != "databricks.workspace":
                 raise ValueError("unknown Databricks authority")
+            requested_time = require_utc(now or self._current_time(), "authority retirement time")
+            floor_text = connection.execute(
+                """
+                SELECT MAX(value) FROM (
+                    SELECT rookery_canonicalize_timestamp(record_created_at) AS value
+                    FROM systems WHERE system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(record_updated_at)
+                    FROM systems WHERE system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(record_created_at)
+                    FROM connection_bindings WHERE system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(record_updated_at)
+                    FROM connection_bindings WHERE system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(capability.record_created_at)
+                    FROM capability_bindings AS capability
+                    JOIN connection_bindings AS binding
+                      ON binding.binding_id = capability.connection_binding_id
+                    WHERE binding.system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(capability.record_updated_at)
+                    FROM capability_bindings AS capability
+                    JOIN connection_bindings AS binding
+                      ON binding.binding_id = capability.connection_binding_id
+                    WHERE binding.system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(record_created_at)
+                    FROM configured_scopes WHERE system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(record_updated_at)
+                    FROM configured_scopes WHERE system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(record_created_at)
+                    FROM adapter_actions WHERE system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(started_at)
+                    FROM adapter_actions WHERE system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(completed_at)
+                    FROM adapter_actions WHERE system_id = ?
+                    UNION ALL
+                    SELECT rookery_canonicalize_timestamp(retired_at)
+                    FROM retired_system_authorities WHERE system_id = ?
+                )
+                """,
+                (system_id,) * 12,
+            ).fetchone()[0]
+            floor_time = _dt(floor_text)
+            effective_time = (
+                floor_time
+                if floor_time is not None and floor_time > requested_time
+                else requested_time
+            )
+            timestamp = _utc_text(effective_time)
             if retired:
                 connection.execute(
                     """
@@ -6127,7 +6184,7 @@ class SQLiteStore:
                        binding.secret_reference AS binding_secret_reference,
                        capability.enabled AS capability_enabled,
                        capability.operation_class
-                FROM adapter_actions AS action
+                           FROM readable_action_activity_recency AS action
                 JOIN systems AS system ON system.system_id = action.system_id
                 JOIN connection_bindings AS binding
                   ON binding.binding_id = action.connection_binding_id

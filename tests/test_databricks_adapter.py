@@ -2288,8 +2288,14 @@ def test_sanitized_fixture_covers_registered_capabilities() -> None:
 def test_redaction_and_import_boundary() -> None:
     diagnostic = redact_diagnostic(
         "token=not-for-storage --profile local\nAuthorization: Bearer abc "
+        "C1\x85 bidi\u202eevil "
         "bearer lowercase-secret "
         '"client_secret":"json-secret" access_token=token-value '  # pragma: allowlist secret
+        '"DATABRICKS_TOKEN":"prefixed-json-secret" '
+        "{'DATABRICKS_TOKEN':'single-json-secret'} "
+        r"{\"DATABRICKS_TOKEN\":\"escaped-json-secret\"} "
+        "ghp_FAKESTANDALONETOKEN123456789 "
+        "/root/synthetic-user/state.sqlite3 "
         "refresh_token=refresh-value api_key=api-value \\\\server\\share\\config "
         "/home/person/.databrickscfg "
         "Config: C:\\Users\\person\\.databrickscfg, "
@@ -2303,12 +2309,19 @@ def test_redaction_and_import_boundary() -> None:
         and "token-value" not in diagnostic
         and "refresh-value" not in diagnostic
         and "api-value" not in diagnostic
+        and "prefixed-json-secret" not in diagnostic
+        and "single-json-secret" not in diagnostic
+        and "escaped-json-secret" not in diagnostic
+        and "FAKESTANDALONETOKEN" not in diagnostic
+        and "/root/" not in diagnostic
         and "--profile local" not in diagnostic
         and "Users" not in diagnostic
         and "Program Files" not in diagnostic
         and "databricks.exe" not in diagnostic
         and "/home/person" not in diagnostic
         and "server\\share" not in diagnostic
+        and "\x85" not in diagnostic
+        and "\u202e" not in diagnostic
     )
     source = Path("src/async_api_view/adapters/databricks.py").read_text(encoding="utf-8")
     assert "async_api_view.storage" not in source

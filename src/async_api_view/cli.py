@@ -9,14 +9,18 @@ import os
 import socket
 import sqlite3
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from importlib.resources import files
 from pathlib import Path
+from typing import NoReturn
 
 import uvicorn
 
 from async_api_view.adapters import CliRunner
-from async_api_view.adapters.databricks import databricks_profile_authority_fingerprint
+from async_api_view.adapters.databricks import (
+    databricks_profile_authority_fingerprint,
+    redact_diagnostic,
+)
 from async_api_view.composition import ApplicationRuntime, build_runtime
 from async_api_view.config import (
     AppSettings,
@@ -32,6 +36,54 @@ logger = logging.getLogger(__name__)
 DEFAULT_RUN_ONCE_CYCLES = 10_000
 MAX_RUN_ONCE_CYCLES = 1_000_000
 _UVICORN_BACKLOG = 2_048
+EXIT_FAILURE = 1
+EXIT_BOUNDED_INCOMPLETE = 3
+EXIT_INTERRUPTED = 130
+
+
+def _operator_diagnostic(value: object, *, limit: int = 1024) -> str:
+    """Return bounded terminal-safe text for all dynamic CLI log fields."""
+
+    return redact_diagnostic(str(value), limit=limit)
+
+
+class _OperatorArgumentParser(argparse.ArgumentParser):
+    """Keep argparse usage failures on the same bounded diagnostic boundary."""
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: error: {_operator_diagnostic(message)}\n")
+
+
+class _SanitizedUvicornFilter(logging.Filter):
+    """Remove dependency tracebacks from the closed operator log boundary."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if (
+            record.exc_info is not None
+            or "Traceback (most recent call last)" in message
+            or "Exception in 'lifespan' protocol" in message
+        ):
+            record.msg = "Rookery application component failed"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+        return True
+
+
+class _RookeryServer(uvicorn.Server):
+    """Disclose browser activation only after application startup succeeds."""
+
+    def __init__(self, config: uvicorn.Config, *, on_started: Callable[[], None]) -> None:
+        super().__init__(config)
+        self._on_started = on_started
+
+    async def startup(self, sockets: list[socket.socket] | None = None) -> None:
+        await super().startup(sockets=sockets)
+        if not self.should_exit:
+            self._on_started()
+
 
 _EXAMPLE_CONFIG = """[app]
 database_path = "./.local/rookery.sqlite3"
@@ -51,7 +103,7 @@ workspace_root = "/"
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _OperatorArgumentParser(
         prog="async-api-view",
         description=(
             "Rookery local state viewer and refresher, distributed as the "
@@ -171,7 +223,7 @@ def _initialize(settings: ProjectSettings) -> None:
         logger.info(
             "Initialized %s configured Databricks system(s) in %s",
             len(settings.databricks_systems),
-            settings.app.database_path,
+            _operator_diagnostic(settings.app.database_path),
         )
     finally:
         runtime.store.close()
@@ -181,7 +233,7 @@ def _initialize_config(output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8", newline="\n") as stream:
         stream.write(_EXAMPLE_CONFIG)
-    logger.info("Created starter configuration at %s", output.resolve())
+    logger.info("Created starter configuration at %s", _operator_diagnostic(output.resolve()))
 
 
 def _architecture_text() -> str:
@@ -196,7 +248,10 @@ def _export_docs(output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8", newline="\n") as stream:
         stream.write(_architecture_text())
-    logger.info("Exported the Rookery architecture contract to %s", output.resolve())
+    logger.info(
+        "Exported the Rookery architecture contract to %s",
+        _operator_diagnostic(output.resolve()),
+    )
 
 
 async def _doctor(settings: ProjectSettings) -> None:
@@ -217,6 +272,7 @@ def _authority_list(settings: AppSettings) -> None:
     if not os.path.lexists(settings.database_path):
         raise RuntimeError("authority inventory requires an initialized Rookery database")
     with SQLiteStore(settings.database_path) as store:
+        lines: list[str] = []
         for authority in store.list_authorities():
             fingerprint = (
                 authority.authority_fingerprint[:12]
@@ -226,16 +282,19 @@ def _authority_list(settings: AppSettings) -> None:
             status = (
                 "retired" if authority.retired else "enabled" if authority.enabled else "paused"
             )
-            logger.info(
-                "Authority %s | %s | %s | config=%s | root=%s | fingerprint=%s | last=%s",
-                authority.system_id,
-                authority.display_name,
-                status,
-                authority.config_id or "legacy",
-                authority.workspace_root or "unknown",
-                fingerprint,
-                authority.last_activity_at.isoformat() if authority.last_activity_at else "none",
+            last_activity = (
+                authority.last_activity_at.isoformat() if authority.last_activity_at else "none"
             )
+            lines.append(
+                "Authority "
+                f"{authority.system_id} | {_operator_diagnostic(authority.display_name)} | "
+                f"{status} | config={_operator_diagnostic(authority.config_id or 'legacy')} | "
+                f"root={_operator_diagnostic(authority.workspace_root or 'unknown')} | "
+                f"fingerprint={fingerprint} | "
+                f"last={last_activity}\n"
+            )
+    sys.stdout.writelines(lines)
+    sys.stdout.flush()
 
 
 def _set_authority_retired(
@@ -366,18 +425,32 @@ def _serve_loopback(
         host=settings.app.host,
         port=settings.app.port,
         log_level=log_level.lower(),
+        access_log=False,
     )
     logger.info(
         "Reserved dashboard listeners on 127.0.0.1:%s and [::1]:%s",
         settings.app.port,
         settings.app.port,
     )
-    _show_browser_activation(
-        runtime,
-        settings,
-        allow_redirected=allow_redirected,
+    server = _RookeryServer(
+        config,
+        on_started=lambda: _show_browser_activation(
+            runtime,
+            settings,
+            allow_redirected=allow_redirected,
+        ),
     )
-    uvicorn.Server(config).run(sockets=listeners)
+    error_logger = logging.getLogger("uvicorn.error")
+    diagnostic_filter = _SanitizedUvicornFilter()
+    error_logger.addFilter(diagnostic_filter)
+    try:
+        server.run(sockets=listeners)
+    except SystemExit as exc:
+        if exc.code == 3:
+            raise RuntimeError("Rookery application startup failed") from None
+        raise
+    finally:
+        error_logger.removeFilter(diagnostic_filter)
 
 
 def _serve_lock_path(database_path: Path) -> Path:
@@ -445,10 +518,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "run-once to continue",
                     args.max_cycles,
                 )
-                return 3
+                return EXIT_BOUNDED_INCOMPLETE
         elif args.command == "backup":
             destination = backup_sqlite_database(app_settings.database_path, args.output)
-            logger.info("Created consistent SQLite backup at %s", destination)
+            logger.info(
+                "Created consistent SQLite backup at %s",
+                _operator_diagnostic(destination),
+            )
         elif args.command == "serve":
             listeners = _reserve_loopback_sockets(
                 settings.app.port,
@@ -472,10 +548,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     listener.close()
         else:  # pragma: no cover - argparse owns the command vocabulary
             raise RuntimeError(f"unsupported command {args.command}")
+    except KeyboardInterrupt:
+        logger.warning("Rookery command interrupted")
+        return EXIT_INTERRUPTED
     except sqlite3.Error:
         logger.error("local SQLite state could not be opened or updated")
-        return 2
+        return EXIT_FAILURE
     except (ConfigError, RuntimeError, ValueError, OSError) as exc:
-        logger.error("%s", exc)
-        return 2
+        logger.error("%s", _operator_diagnostic(exc))
+        return EXIT_FAILURE
     return 0

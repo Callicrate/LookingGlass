@@ -1977,6 +1977,9 @@ async def test_retired_authority_preserves_cache_blocks_reenable_and_cancels_wor
     admitted = await runtime.coordinator.run_once()
     assert admitted is not None and admitted.action_id is not None
     object_ids = {item.object_id for item in runtime.store.list_objects()}
+    authority_before = next(
+        item for item in runtime.store.list_authorities() if item.system_id == option.system_id
+    )
 
     runtime.store.set_authority_retired(
         option.system_id,
@@ -1986,10 +1989,17 @@ async def test_retired_authority_preserves_cache_blocks_reenable_and_cancels_wor
 
     assert runtime.store.get_stored_action(admitted.action_id).state.value == "cancelled"  # type: ignore[union-attr]
     assert runtime.store.list_intent_scopes(intent_id)[0].state.value == "cancelled"
+    runtime.store._connection.execute(
+        "UPDATE adapter_actions SET completed_at = ? WHERE action_id = ?",
+        (sqlite3.Binary(b"malformed"), admitted.action_id),
+    )
     authority = next(
         item for item in runtime.store.list_authorities() if item.system_id == option.system_id
     )
     assert authority.retired and not authority.enabled
+    assert authority.config_id == authority_before.config_id
+    assert authority.workspace_root == authority_before.workspace_root
+    assert authority.authority_fingerprint == authority_before.authority_fingerprint
     assert {item.object_id for item in runtime.store.list_objects()} == object_ids
     runtime.store.close()
 
@@ -2385,6 +2395,29 @@ async def test_coordinator_failure_is_durable_and_recovers_automatically(tmp_pat
     assert dashboard.alerts[0].summary == coordinator_events[0].redacted_summary
 
     await runtime.stop()
+
+
+def test_background_failure_log_omits_persistence_exception_detail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+
+    def fail_persistence(**_kwargs: object) -> None:
+        raise RuntimeError("token=opaque\n\x1b[31m C:\\Users\\person\\state.sqlite3")
+
+    monkeypatch.setattr(runtime.store, "record_runtime_failure", fail_persistence)
+    try:
+        runtime._record_background_failure("worker", RuntimeError("synthetic failure"))
+    finally:
+        runtime.store.close()
+
+    assert "Could not persist the redacted worker outage event" in caplog.text
+    assert "opaque" not in caplog.text
+    assert "Traceback" not in caplog.text
+    assert "Users" not in caplog.text
+    assert "\x1b" not in caplog.text
 
 
 @pytest.mark.anyio

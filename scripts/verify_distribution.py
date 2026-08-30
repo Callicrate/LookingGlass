@@ -849,10 +849,12 @@ def smoke_installed_wheel(
                 "init-config",
                 "export-docs",
                 "fingerprint-profile",
+                "init",
                 "authority-list",
                 "authority-retire",
                 "authority-unretire",
                 "doctor",
+                "run-once",
                 "backup",
                 "serve",
             )
@@ -886,7 +888,7 @@ def smoke_installed_wheel(
         )
         database = Path(temporary) / ".local" / "rookery.sqlite3"
         if (
-            rejected.returncode != 2
+            rejected.returncode != 1
             or database.exists()
             or "fingerprint-profile" not in (rejected.stdout + rejected.stderr)
         ):
