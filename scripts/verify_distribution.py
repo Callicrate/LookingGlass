@@ -1386,7 +1386,7 @@ def main() -> None:
             verified_bytes=verified_bytes,
         )
     manifest_summary = (
-        f"; manifest {manifest.relative_to(Path.cwd())}"
+        f"; manifest {manifest.as_posix()}"
         if manifest is not None
         else "; manifest deferred until clean commit"
     )
