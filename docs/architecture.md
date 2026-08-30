@@ -1245,7 +1245,8 @@ The CLI runner MUST:
 - pass the profile and JSON-output selection as separate structured arguments;
 - resolve the executable only through explicit absolute `PATH` entries and run from a fresh empty directory beneath a private per-user root whose full ancestor chain contains no CLI-recognized bundle configuration;
 - remove inherited Databricks and bundle override variables so the named profile remains authoritative while ordinary home, trust-store, proxy, and cloud SDK settings remain available;
-- bind each mapped child process to a minimal snapshot derived from the same guarded standard-configuration parse whose route fingerprint passed authority verification, containing only defaults and the selected profile, using a private temporary file and a Rookery-owned child-only `DATABRICKS_CONFIG_FILE`;
+- bind each mapped child process to a minimal snapshot derived from the same guarded standard-configuration parse whose route fingerprint passed authority verification, containing only the selected profile's own case-sensitive keys, using a private temporary file and a Rookery-owned child-only `DATABRICKS_CONFIG_FILE`;
+- treat `DEFAULT` as an ordinary explicit CLI profile rather than an inheritance source, reject the reserved `__settings__` section as a profile, and reject selected profiles that disable TLS certificate verification;
 - hold a private per-command lock while that snapshot exists, remove it before releasing the lock on ordinary exit, and perform a bounded locked recovery scan before every later command so newly crash-retained snapshots are removed only after acquiring their abandoned locks while concurrent invocations remain untouched;
 - validate the installed CLI version and required command groups at startup;
 - capture stdout, stderr, exit code, timeout, and correlation ID;
@@ -1489,7 +1490,7 @@ Canonical configuration includes:
 
 The local TOML file is desired enabled state for its Databricks resources.
 Each new entry has an explicit stable configuration ID.
-Each entry also carries the SHA-256 fingerprint of its normalized workspace route. Version 1 host-only fingerprints remain stable for profiles without additional selectors; profiles with `workspace_id`, `account_id`, `azure_workspace_resource_id`, or `azure_environment` use the version 2 host-plus-selector witness. Raw route values remain in the CLI-owned profile and are never stored in canonical state. Before every remote command, the worker reads one guarded standard-configuration snapshot, verifies that route fingerprint, minimizes the snapshot to defaults plus the selected profile, and pins the child to those bytes in a private ephemeral file. An A-to-B-to-A retarget of either the source host or a shared-host workspace selector during execution therefore cannot change the process authority.
+Each entry also carries the SHA-256 fingerprint of its normalized workspace route. Version 1 host-only fingerprints remain stable for profiles without additional selectors; profiles with `workspace_id`, `account_id`, `azure_workspace_resource_id`, or `azure_environment` use the version 2 host-plus-selector witness. Raw route values remain in the CLI-owned profile and are never stored in canonical state. Before every remote command, the worker reads one guarded standard-configuration snapshot, verifies that route fingerprint, minimizes the snapshot to the selected profile's own keys under the pinned CLI's case and inline-comment semantics, and pins the child to those bytes in a private ephemeral file. An A-to-B-to-A retarget of either the source host or a shared-host workspace selector during execution therefore cannot change the process authority, and another profile's credentials cannot enter the child snapshot.
 Legacy entries without an ID remain compatible, but adding an explicit ID/fingerprint creates a new verified authority rather than adopting cache whose remote-host witness was never recorded.
 Display-name and profile-reference changes under the same ID, authority fingerprint, and Workspace root update one local system. Credential rotation inside the same named profile preserves identity; retargeting the profile fails before dispatch because the actual host fingerprint changes.
 Removing an entry disables its system, binding, capabilities, and configured scopes without deleting cached facts.
@@ -1528,6 +1529,7 @@ Automated `uv` and GitHub Actions update proposals MUST run the complete cross-p
 - Core request, action, observation, type, facet, and capability contracts MUST have explicit versions.
 - Schema changes SHOULD be additive when possible.
 - Before an upgrade's first stateful invocation, preserve a verified pre-migration backup. In-place database downgrade is unsupported until a validated restore or down-migration path exists.
+- Local backup and authority inventory/retirement MUST validate bounded top-level and app settings but MUST NOT depend on semantically valid remote-system declarations; commands that reconcile or execute remote work retain full configuration validation.
 - A reader encountering an unsupported facet MUST preserve it as unsupported rather than delete it.
 - An action pins the exact adapter and capability version admitted.
 - Adapter upgrades SHOULD support side-by-side contract validation before activation.
