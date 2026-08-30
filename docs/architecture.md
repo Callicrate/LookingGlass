@@ -71,7 +71,7 @@ Implemented and covered by automated tests:
 - generic local-only coordination and idempotent observation ingestion;
 - closed Databricks CLI command mapping, bounded execution, error redaction, and Workspace/Unity Catalog metadata normalizers;
 - loopback operational UI with bounded inventory, containment, alert-history, action-activity, and per-action attempt pages, object facet/provenance detail, registered refresh controls, intent polling, ephemeral local-caller authorization, per-session CSRF, Origin/Host checks, stale/error states, and output escaping;
-- local configuration, initialization, doctor, one-shot worker, online backup, and serve commands;
+- local configuration, installed-document export, initialization, doctor, one-shot worker, online backup, and serve commands;
 - an end-to-end fake-CLI test covering request, admission, execution, ingestion, display, and duplicate suppression.
 
 Not yet verified or intentionally deferred:
@@ -638,6 +638,7 @@ Examples:
 
 The core trusts a coverage declaration only from a registered adapter contract.
 It does not infer cross-facet freshness from matching field names.
+The current Databricks list normalizers declare collection completeness `unknown`: every returned child is positive cached evidence, but omission does not establish absence. Object detail therefore labels containment as last-observed children rather than a complete current set. Authoritative complete reconciliation remains unavailable for multipart results until all bounded parts can commit one coverage boundary atomically.
 
 ### Manual refresh and planned automatic refresh
 
@@ -1508,7 +1509,10 @@ Adapter implementation configuration includes:
 ### Build and dependency integrity
 
 The committed `uv.lock` is the dependency authority for source-checkout verification and reproducible release smoke.
+CI installs the locked development graph without installing the local project and runs source tools with synchronization disabled, so no build backend executes before the explicitly hash-constrained build step.
 Installed-wheel verification MUST export the hash-pinned runtime-only graph from that lock, install it before the wheel, install the wheel without dependency resolution, check installed compatibility, and audit the exact installed versions.
+A verified release pair MUST bind every packaged module and asset to current source bytes, validate wheel dependency metadata and RECORD digests, and reproduce the direct wheel byte-for-byte from the sdist under the same constrained backend graph.
+A CI run that builds release candidates MUST retain the exact verified archives as immutable workflow artifacts rather than requiring a later unbound rebuild.
 A separate newest-allowed or range-resolution compatibility job MAY exist, but it MUST be labeled separately and MUST NOT substitute for locked release evidence.
 Automated `uv` and GitHub Actions update proposals MUST run the complete cross-platform gate before merge.
 
@@ -1538,6 +1542,8 @@ The current web view uses 50-object pages, bounded query text, active-plus-lates
 ## Testing and acceptance criteria
 
 ### Contract tests
+
+Coverage reporting MUST distinguish statement-only, branch-only, and combined percentages. The current CI floors are 85%, 75%, and 80% respectively; a combined result MUST NOT be labeled as branch coverage.
 
 Every adapter MUST pass a shared conformance suite proving:
 

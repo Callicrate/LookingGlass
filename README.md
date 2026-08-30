@@ -4,6 +4,9 @@ Rookery keeps a local, inspectable cache of remote-system state and refreshes it
 The installable package and compatibility CLI remain named `async-api-view`.
 The first adapter uses the existing Databricks CLI.
 
+Wheel-only operators can export the complete architecture and safety contract locally with
+`async-api-view export-docs --output rookery-architecture.md`; no source checkout or database is required.
+
 ## Contents
 
 - [First usable workflow](#first-usable-workflow)
@@ -22,7 +25,7 @@ The current runnable slice can:
 
 - register a Databricks workspace by named CLI profile;
 - filter and page through cached Workspace and Unity Catalog metadata in a loopback dashboard;
-- drill into one object's facets, provenance, current direct children, and registered refreshes;
+- drill into one object's facets, provenance, last-observed cached children, and registered refreshes;
 - browse and filter bounded pages of durable redacted operational alerts;
 - browse bounded durable action activity by state, system, or exact local action ID, then inspect its redacted attempts;
 - distinguish current, due, refreshing, and failed-last-attempt facet state while keeping cached values visible;
@@ -130,12 +133,14 @@ It never reads table/view rows, lists files inside Unity Catalog volumes, reads 
 
 Workspace content reads and retained artifacts are not part of the current executable product.
 The worker rejects content actions before target resolution or CLI execution until artifact storage, encryption, local access, and retention are implemented; parser and artifact contracts remain only as deferred implementation seams.
+List results record positive child evidence and an explicit `unknown` collection-completeness value. The object view therefore labels containment as last-observed cached children: an omitted prior child is not marked absent until a future bounded multipart contract can commit one authoritative complete boundary.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
 | `async-api-view init-config --output <path>` | Create a no-overwrite starter TOML without loading configuration or opening SQLite. |
+| `async-api-view export-docs --output <path>` | Export the packaged architecture and safety contract without loading configuration or opening SQLite. |
 | `async-api-view init` | Apply SQLite migrations and idempotently register configured systems/scopes. |
 | `async-api-view doctor` | Verify the existing Databricks CLI compatibility surface. |
 | `async-api-view run-once [--max-cycles N]` | Process up to `N` eligible coordinator/worker cycles; exit 3 means work may remain and the command should be rerun. |
@@ -162,21 +167,25 @@ Observation, action, attempt, issue, and operational-event history is currently 
 ## Verify
 
 ```powershell
-uv run ruff format --check src tests scripts
-uv run ruff check src tests scripts
-uv run ruff check src scripts --select S
-uv run coverage run -m pytest -q
-uv run coverage report
+uv sync --locked --group dev --no-install-project
+uv run --no-sync ruff format --check src tests scripts
+uv run --no-sync ruff check src tests scripts
+uv run --no-sync ruff check src scripts --select S
+uv run --no-sync coverage run -m pytest -q
+uv run --no-sync coverage report
+uv run --no-sync coverage json -o coverage-report.json
+uv run --no-sync python scripts/check_coverage.py coverage-report.json
 uv lock --check
 uv audit --locked --preview-features audit-command
 uv build --build-constraint build-constraints.txt --require-hashes
-uv run python scripts/verify_distribution.py
+uv run --no-sync python scripts/verify_distribution.py
 ```
 
 The default test suite uses fake CLI results and does not contact Databricks.
 A live smoke test requires an explicit named profile and Workspace root.
 The same formatting, lint, test, and locked-dependency checks run on Windows and Ubuntu in CI for pushes and pull requests.
-`verify_distribution.py` exports the hash-pinned runtime graph directly from the locked project, installs that graph into the private wheel environment, installs the wheel with `--no-deps`, runs compatibility and checkout-free behavior checks, and audits the exact installed versions. This keeps release smoke and vulnerability evidence on one dependency graph.
+`check_coverage.py` reports and enforces statement (85%), branch-only (75%), and combined (80%) floors separately.
+`verify_distribution.py` binds every packaged module and runtime asset to current source bytes, validates wheel metadata and RECORD digests, rebuilds the wheel from the sdist under the hash-constrained build graph, requires byte identity, installs the locked runtime graph into a private wheel environment, installs the wheel with `--no-deps`, runs checkout-free behavior checks, and audits the exact installed versions. This keeps release smoke and vulnerability evidence on one dependency graph.
 Dependabot opens weekly update proposals for both the `uv` lock and pinned GitHub Actions; proposals must pass the same gates.
 
 ## Project structure
@@ -192,4 +201,4 @@ Dependabot opens weekly update proposals for both the `uv` lock and pinned GitHu
 
 ## Documentation
 
-See the [architecture specification](docs/architecture.md) for schema, freshness, queue, worker, failure, security, and phased-delivery contracts.
+Source checkouts and sdists include the [architecture specification](docs/architecture.md) for schema, freshness, queue, worker, failure, security, and phased-delivery contracts. Wheel-only installs expose the same bytes through `export-docs`.
