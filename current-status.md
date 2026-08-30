@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 09:04 ET
+Updated: 2026-08-30 09:59 ET
 
 ## Contents
 
@@ -22,9 +22,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-090125.md` reproduces two medium standalone-offline and post-start runtime-health defects. Both fixes are independently clear; final supply-chain review is running.
-- Latest checkpoint: `progress/20260830-090422.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 and 8 record earlier closures, and post 9 records certified-execution/store-clock closure under that exact identity.
+- Active review round: `critical-reviews/20260830-090125.md` now records eight medium standalone/runtime/supply-chain defects. All have candidates; final hash/manifest/fresh-upgrade re-review is running.
+- Latest checkpoint: `progress/20260830-095908.md`.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 through 9 record committed closures, and the operational 09:48 pass stayed read-only while release review remains uncommitted.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -71,6 +71,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] State the package-index/cache requirement without claiming an offline standalone bundle.
 - [x] Propagate post-start global CLI certification loss to runtime health and refresh controls.
 - [ ] Close standalone dependency/supply-chain review.
+- [x] Bind standalone dependency versions and bytes to the locked hash-bearing runtime graph.
+- [x] Bind CI artifact identity and checksum manifests to a completely clean source commit.
+- [x] Require official certified CLI bytes before compatibility execution.
+- [x] Replace in-place upgrades with fresh relocatable environments and rollback-safe swaps.
 - [x] Attribute every visible fact/action/alert/refresh to one unique authority.
 - [x] Distinguish historical/paused cache from unsupported capability.
 - [x] Reject placeholder authority before durable state creation.
@@ -573,6 +577,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Fresh release/runtime review `critical-reviews/20260830-090125.md` reproduced two medium defects: incomplete offline prerequisites and healthy UI state after post-start certification loss.
 - Standalone docs now require an index, populated cache, or reviewed wheelhouse and explicitly deny a self-contained offline bundle claim.
 - Worker-global certification/runtime failures now record the action then reach supervision, disabling controls and retrying doctor; profile-local configuration failures remain action-scoped. Independent re-review is clear.
+- Hash-required private-environment install, corrupt-hash rejection, clean commit manifests, official CLI origin, and fresh sibling upgrades with prior-only hook removal pass on Windows and WSL; final supply-chain re-review is running.
+- Current exact gates pass at 598/8 on Windows and 600/6 on Ubuntu/WSL. The release candidate now contains 90 sdist entries, 66 wheel entries, 34 installed assets, and a lock-derived constraints artifact; commit manifest publication waits for a clean commit by design.
 
 ## Risks / watch list
 
