@@ -40,7 +40,7 @@ The current runnable slice can:
 - Windows PowerShell for the commands below.
 - Python 3.12.
 - [`uv`](https://docs.astral.sh/uv/).
-- Databricks CLI 0.298 or newer on `PATH`.
+- Certified Databricks CLI 0.298.0 on `PATH`. Other releases require an explicit Rookery compatibility review before use.
 - An existing, valid named Databricks CLI profile.
 
 Check available profiles without printing credential values:
@@ -57,16 +57,16 @@ async-api-view fingerprint-profile --profile 'YOUR_PROFILE'
 
 Rookery checks that fingerprint again before every remote command. Retargeting the same profile name, including changing a `workspace_id` behind a shared unified host, therefore fails before dispatch until configuration explicitly names the new authority, which creates or restores a separate cache.
 
-Rookery resolves the CLI only from explicit absolute `PATH` entries, launches it from a fresh empty directory beneath a private per-user root, and rejects that root if any ancestor contains a bundle configuration recognized by the supported CLI contract. It removes inherited `DATABRICKS_*` and `BUNDLE_*` variables so ambient authentication or bundle settings cannot override the named profile. Configure the profile in the standard Databricks configuration location; ambient-only credentials and `DATABRICKS_CONFIG_FILE` overrides are intentionally ignored. For each mapped command, Rookery derives a minimal verified snapshot containing only the selected profile's own keys, writes it to that command's private temporary directory, and supplies it through a child-only `DATABRICKS_CONFIG_FILE`; changing the source profile after verification cannot retarget that process. `DEFAULT` is an ordinary profile and never supplies inherited credentials to another profile. Profiles that enable `skip_verify` are rejected before fingerprinting or dispatch. A held per-command lock protects active snapshots, normal exit removes them before releasing the lock, and every later command performs a bounded locked scan that removes crash-retained snapshots without touching live invocations.
+Rookery resolves the CLI only from explicit absolute `PATH` entries, launches it from a fresh empty directory beneath a private per-user root, and rejects that root if any ancestor contains a bundle configuration recognized by the supported CLI contract. It removes inherited `DATABRICKS_*` and `BUNDLE_*` variables so ambient authentication or bundle settings cannot override the named profile. Configure the profile in the standard Databricks configuration location; ambient-only credentials and `DATABRICKS_CONFIG_FILE` overrides are intentionally ignored. For each mapped command, Rookery derives a minimal verified snapshot containing only the selected profile's own keys, writes it to that command's private temporary directory, and supplies it through a child-only `DATABRICKS_CONFIG_FILE`; changing the source profile after verification cannot retarget that process. `DEFAULT` is an ordinary profile and never supplies inherited credentials to another profile. Profiles that enable `skip_verify` are rejected before fingerprinting or dispatch. Each CLI runs in an owned process group on POSIX or kill-on-close Job Object on Windows, so timeout, cancellation, output overflow, and normal cleanup terminate supported auth helpers and other descendants before releasing local work. A held per-command lock protects active snapshots, normal exit removes them before releasing the lock, and every later command performs a bounded locked scan that removes crash-retained snapshots without touching live invocations.
 
-`doctor` verifies only the installed CLI version and required command groups. It does not query workspace inventory or verify that the selected profile exists or can authenticate; the first mapped refresh performs that live check.
+`doctor` verifies the exact certified CLI version plus every reachable leaf command's usage and required profile/output/format flags. It records a full executable identity and SHA-256 witness; every mapped dispatch verifies that witness and reruns certification before execution if the CLI path changes. It does not query workspace inventory or verify that the selected profile exists or can authenticate; the first mapped refresh performs that live check.
 
 ## Standalone wheel install
 
 This path needs the wheel, Python 3.12, `uv`, and the Databricks CLI, but no source checkout or `config.example.toml`.
 
 ```powershell
-uv tool install 'C:\path\to\async_api_view-0.1.0-py3-none-any.whl'
+uv tool install --python 3.12 'C:\path\to\async_api_view-0.1.0-py3-none-any.whl'
 New-Item -ItemType Directory -Path '.\rookery' -Force
 Set-Location -LiteralPath '.\rookery'
 async-api-view init-config --output '.\rookery.toml'
@@ -83,7 +83,7 @@ async-api-view --config '.\rookery.toml' serve
 `init-config` writes UTF-8 TOML, creates parent directories, and refuses to overwrite any existing path. The generated SQLite path is `.local/rookery.sqlite3` relative to the configuration file.
 Rookery treats the database parent as a dedicated current-user state directory; do not point `database_path` at a Git worktree root or a shared directory. Existing configurations that place `rookery.sqlite3` beside the configuration file should move it into a dedicated directory and update the path before starting this version.
 Before upgrading, stop `serve` and use the currently installed version to create a no-overwrite backup in a dedicated private directory. Verify that command succeeds before replacing the package.
-Use `uv tool install --force '<path-to-new-wheel>'` to upgrade and `uv tool uninstall async-api-view` to remove the installed command; configuration and cached SQLite state remain operator-owned files.
+Use `uv tool install --python 3.12 --force '<path-to-new-wheel>'` to upgrade and `uv tool uninstall async-api-view` to remove the installed command; configuration and cached SQLite state remain operator-owned files. Keep `--python 3.12` on every reinstall so the tool environment cannot drift outside the package and CI interpreter contract.
 The first later `init`, `run-once`, or `serve` invocation automatically applies pending migrations. In-place downgrade is unsupported because an older binary rejects migration-ledger versions it does not know. Keep the pre-upgrade backup until the upgraded version has passed local validation; restore remains a separate unsupported workflow.
 
 ## Source checkout setup
@@ -200,7 +200,7 @@ The default test suite uses fake CLI results and does not contact Databricks.
 A live smoke test requires an explicit named profile and Workspace root.
 The same formatting, lint, test, and locked-dependency checks run on Windows and Ubuntu in CI for pushes and pull requests.
 `check_coverage.py` reports and enforces statement (85%), branch-only (75%), and combined (80%) floors separately.
-`verify_distribution.py` binds every packaged module and runtime asset to current source bytes, validates wheel metadata and RECORD digests, rebuilds the wheel from the sdist under the hash-constrained build graph, requires byte identity, installs the locked runtime graph into a private wheel environment, installs the wheel with `--no-deps`, runs checkout-free behavior checks, and audits the exact installed versions. This keeps release smoke and vulnerability evidence on one dependency graph.
+`verify_distribution.py` binds every packaged module and runtime asset to current source bytes, validates wheel metadata and RECORD digests, rebuilds the wheel from the sdist under the hash-constrained build graph, requires byte identity, installs the locked runtime graph into a private wheel environment, installs the wheel with `--no-deps`, runs checkout-free behavior checks, and audits the exact installed versions. It separately exercises the documented disposable `uv tool install --python 3.12` and Python-pinned force-upgrade path so tool interpreter drift cannot hide behind the locked wheel smoke. This keeps release smoke and vulnerability evidence on one dependency graph.
 Dependabot opens weekly update proposals for both the `uv` lock and pinned GitHub Actions; proposals must pass the same gates.
 
 ## Project structure

@@ -1227,8 +1227,9 @@ Version 1 MUST NOT:
 Jobs, clusters, pipelines, warehouses, serving endpoints, and other Databricks surfaces are outside the initial inventory.
 Their canonical types remain available for later adapter capabilities.
 
-The installed Databricks CLI on the design host exposes the relevant `workspace`, `catalogs`, `schemas`, `tables`, and `volumes` metadata command groups, structured JSON output, and named profiles.
-The adapter MUST verify the available command and output contract at runtime or startup rather than assuming one globally fixed CLI version.
+The certified Databricks CLI 0.298.0 exposes the relevant `workspace`, `catalogs`, `schemas`, `tables`, and `volumes` metadata commands, structured JSON output, and named profiles.
+The adapter MUST accept only releases that passed the complete offline Rookery compatibility harness. Startup verifies the exact certified version and every reachable leaf command's usage plus required profile/output/format flags. A newer release is a review candidate, not automatically compatible.
+Successful certification binds the executable's file identity, size, high-resolution modification time, and SHA-256 digest. Every mapped dispatch rechecks that witness; changed bytes invalidate certification and must pass the complete doctor contract before any profile snapshot or mapped process starts.
 
 #### CLI-backed worker boundary
 
@@ -1248,6 +1249,7 @@ The CLI runner MUST:
 - bind each mapped child process to a minimal snapshot derived from the same guarded standard-configuration parse whose route fingerprint passed authority verification, containing only the selected profile's own case-sensitive keys, using a private temporary file and a Rookery-owned child-only `DATABRICKS_CONFIG_FILE`;
 - treat `DEFAULT` as an ordinary explicit CLI profile rather than an inheritance source, reject the reserved `__settings__` section as a profile, and reject selected profiles that disable TLS certificate verification;
 - hold a private per-command lock while that snapshot exists, remove it before releasing the lock on ordinary exit, and perform a bounded locked recovery scan before every later command so newly crash-retained snapshots are removed only after acquiring their abandoned locks while concurrent invocations remain untouched;
+- own the complete CLI process tree through a dedicated POSIX process group or Windows kill-on-close Job Object, terminate descendants on timeout, cancellation, output overflow, and cleanup, and bound process/reader draining before releasing the snapshot or runtime lock;
 - validate the installed CLI version and required command groups at startup;
 - capture stdout, stderr, exit code, timeout, and correlation ID;
 - parse only the expected JSON contract for the pinned capability version;
