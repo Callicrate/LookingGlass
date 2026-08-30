@@ -167,6 +167,6 @@ footer { padding: 16px 24px 28px; color: var(--muted); text-align: center; font-
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .pulse { animation: breathe 2s ease-in-out infinite; }
+  .pulse:not(.pulse--disconnected):not(.pulse--final) { animation: breathe 2s ease-in-out infinite; }
   @keyframes breathe { 50% { opacity: 0.35; } }
 }

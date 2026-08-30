@@ -1511,14 +1511,15 @@ def test_refresh_rejects_wrong_content_type_and_oversize_body() -> None:
 
 
 def test_first_party_script_avoids_dangerous_dom_sinks() -> None:
-    script = (
+    script_path = (
         __import__("pathlib").Path(__file__).parents[1]
         / "src"
         / "async_api_view"
         / "web"
         / "static"
         / "app.js"
-    ).read_text(encoding="utf-8")
+    )
+    script = script_path.read_text(encoding="utf-8")
 
     assert "textContent" in script
     assert "element.textContent !== resolved" in script
@@ -1526,5 +1527,7 @@ def test_first_party_script_avoids_dangerous_dom_sinks() -> None:
     assert "window.location.reload()" in script
     assert 'setPollState("Final state", "final")' in script
     assert '"disconnected",' in script
+    style = script_path.with_name("style.css").read_text(encoding="utf-8")
+    assert ".pulse:not(.pulse--disconnected):not(.pulse--final)" in style
     for sink in ("innerHTML", "outerHTML", "document.write", "eval(", "new Function"):
         assert sink not in script
