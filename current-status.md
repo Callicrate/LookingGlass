@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-29 20:07 ET
+Updated: 2026-08-29 20:09 ET
 
 ## Goal
 
@@ -13,7 +13,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 6 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Active review round: failure observability/secrecy is independently clear after separating stale lease fences from lifecycle persistence outages and hardening storage redaction; no finding is currently open.
-- Next progress report due: 2026-08-29 20:16 ET.
+- Next progress report due: 2026-08-29 21:10 ET.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
@@ -43,7 +43,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Prevent older complete collection omissions from overwriting newer relationships.
 - [x] Make Databricks compatibility checks reap their subprocess on cancellation.
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
-- [ ] Tend Murmuration about hourly; the 19:16 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 20:16 ET.
+- [ ] Tend Murmuration about hourly; the 20:09 pass remained read-only because the native project profile is not provisioned, and the next pass is due around 21:10 ET.
 - [x] Commit bounded durable action activity with alert links and truthful dashboard labeling.
 - [x] Prevent the browser session cookie from reaching ordinary loopback services on other ports.
 - [x] Persist bounded retry delays instead of immediately repeating transient CLI failures.
@@ -258,6 +258,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The lifecycle port now distinguishes expected `ActionLeaseLost` fencing from `LifecyclePersistenceFailure`; attempt, completion, timed heartbeat, and multipart heartbeat storage faults reach runtime supervision, degrade refresh health, and emit one redacted idempotent outage event.
 - Real SQLite heartbeat fencing now rejects exact expiry and raises the domain fence rather than creating a false outage; record/complete and heartbeat persistence regressions are independently clear.
 - Storage defense-in-depth redaction now covers prefixed environment/JSON secret keys plus C0/C1 and bidi controls before durable attempts/events; exact cross-platform parity is 449 passed plus one complementary platform skip.
+- The 20:09 Murmuration tend again found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
 - The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
