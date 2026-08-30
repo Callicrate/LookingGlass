@@ -106,6 +106,7 @@ from .models import (
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 _APPLICATION_ID = 0x524F4F4B  # ASCII "ROOK"
 _DEFAULT_LEASE = timedelta(seconds=60)
+_SQLITE_STARTUP_BUSY_TIMEOUT_MS = 5_000
 _SQLITE_BUSY_TIMEOUT_MS = 250
 _MAX_JSON_BYTES = 1_048_576
 _MAX_DIAGNOSTIC_LENGTH = 1_024
@@ -803,7 +804,7 @@ class SQLiteStore:
         self._lock = threading.RLock()
         try:
             with self._lock:
-                self._connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+                self._connection.execute(f"PRAGMA busy_timeout = {_SQLITE_STARTUP_BUSY_TIMEOUT_MS}")
                 live_kind = _validate_database_identity(self._connection)
                 if live_kind is not preflight_kind and live_kind is not _DatabaseKind.MARKED:
                     raise OSError("Rookery database identity changed after immutable preflight")
@@ -830,6 +831,8 @@ class SQLiteStore:
                 self._harden_storage_files()
             self._enable_wal_mode()
             self._harden_storage_files()
+            with self._lock:
+                self._connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
         except BaseException:
             self._connection.close()
             self._file_guard.close()
