@@ -131,6 +131,8 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 3px s
 .intent-summary h2 { font: 0.9rem ui-monospace, monospace; }
 .poll-state { display: flex; align-items: center; gap: 8px; min-width: 245px; color: var(--muted); }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.pulse--disconnected { background: var(--danger); animation: none; }
+.pulse--final { background: var(--muted); animation: none; }
 footer { padding: 16px 24px 28px; color: var(--muted); text-align: center; font-size: 0.78rem; }
 
 @media (max-width: 700px) {

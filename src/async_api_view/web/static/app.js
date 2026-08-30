@@ -16,13 +16,22 @@
 
   const pollUrl = page.dataset.pollUrl;
   const pollState = document.querySelector("[data-poll-state]");
+  const pulse = document.querySelector(".pulse");
   const updatedAt = document.querySelector("[data-updated-at]");
   const errorBox = document.querySelector("[data-intent-error]");
   let timer = null;
   let failures = 0;
 
   const setText = (element, value, fallback = "Unknown") => {
-    if (element) element.textContent = value || fallback;
+    const resolved = value || fallback;
+    if (element && element.textContent !== resolved) element.textContent = resolved;
+  };
+
+  const setPollState = (text, state = "active") => {
+    setText(pollState, text);
+    if (!pulse) return;
+    pulse.classList.toggle("pulse--disconnected", state === "disconnected");
+    pulse.classList.toggle("pulse--final", state === "final");
   };
 
   const updateScope = (scope, index) => {
@@ -62,14 +71,17 @@
       setText(errorBox, payload.error, "");
       errorBox.classList.toggle("is-hidden", !payload.error);
       if (payload.terminal) {
-        setText(pollState, "Final state");
+        setPollState("Final state", "final");
         return;
       }
-      setText(pollState, "Status current · checking every 3 seconds");
+      setPollState("Status current · checking every 3 seconds");
       timer = window.setTimeout(poll, 3000);
     } catch (_error) {
       failures += 1;
-      setText(pollState, "Disconnected · retrying while cached status stays visible");
+      setPollState(
+        "Disconnected · retrying while cached status stays visible",
+        "disconnected",
+      );
       const delay = Math.min(15000, 3000 * (2 ** Math.min(failures, 2)));
       timer = window.setTimeout(poll, delay);
     }
