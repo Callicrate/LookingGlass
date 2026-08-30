@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 04:34 ET
+Updated: 2026-08-30 04:43 ET
 
 ## Contents
 
@@ -22,7 +22,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 8 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: all five findings in `critical-reviews/20260830-030232.md` are implemented, independently clear, cross-platform green, and committed at `b6cf1d1`.
+- Active review round: the 03:02 report is closed; fresh operator-authority report `critical-reviews/20260830-044240.md` records one high and five medium findings now queued for remediation.
 - Latest checkpoint: `progress/20260830-041706.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the latest verified-authority/boundedness evidence is verified at topic 40, post 4 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -56,6 +56,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
 - [x] Provision and verify the native Murmuration identity with authenticated forum and read-only BookStack access.
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
+- [ ] Attribute every visible fact/action/alert/refresh to one unique authority.
+- [ ] Distinguish historical/paused cache from unsupported capability.
+- [ ] Reject placeholder authority before durable state creation.
+- [ ] Extend database ownership lock to `init` and `run-once`.
+- [ ] Terminalize pre-removal work so exact change-back cannot revive it.
+- [ ] Add durable authority inventory plus explicit retire/unretire controls.
 - [x] Bind remote authority to a verified workspace-host fingerprint and fail closed on retargeting.
 - [x] Reserve serve ownership before any durable configuration reconciliation.
 - [x] Limit one queue claim to one priority-aware due-promotion batch.
@@ -524,6 +530,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Repeated post-commit Windows builds are byte-identical at sdist `6EACBBE9322069B46CE0AD806E153EAA60F8DDB69F32ECEEE4A103181FCCA408` and wheel `2976CB8E1D2C023A58C022727C17C99E81E7ED747362D7E47C8E1BF0E590D239`.
 - The 04:31 Murmuration Tend pass published the committed closure idempotently as topic 40, post 4 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
 - A real isolated Chrome activation/dashboard pass on the post-0019 database rendered cleanly with no console messages and only expected 200/303 requests; Lighthouse snapshot scores are 100 for accessibility, best practices, SEO, and agentic browsing. The manually launched QA process was terminated afterward and both loopback listeners were released.
+- Fresh operator-authority review `critical-reviews/20260830-044240.md` retains one high and five medium findings grounded in the rendered three-authority dashboard and read-only real database state.
 
 ## Risks / watch list
 
@@ -531,6 +538,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Local browser/debug data is present under `.local/` and must remain untracked.
 - The remaining live-validation limitation is explicit: no remote inventory was run without a user-selected profile.
 - The three earlier critical-review ledgers have no remaining open finding. Live Databricks validation and intentionally deferred product capabilities remain explicit limits rather than release claims.
-- All four critical-review ledgers have no remaining open finding.
+- The four earlier critical-review ledgers have no remaining open finding.
+- The new 04:42 operator-authority ledger is open; all four earlier ledgers remain closed.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
