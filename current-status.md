@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 08:51 ET
+Updated: 2026-08-30 09:04 ET
 
 ## Contents
 
@@ -22,8 +22,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-072928.md` is closed after four medium Python-tool, CLI-certification, process-tree, and lease-clock defects were repaired and independently cleared across Windows and Ubuntu/WSL.
-- Latest checkpoint: `progress/20260830-080953.md`.
+- Active review round: `critical-reviews/20260830-090125.md` reproduces two medium standalone-offline and post-start runtime-health defects. Both fixes are independently clear; final supply-chain review is running.
+- Latest checkpoint: `progress/20260830-090422.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; topic 40 post 6 corrects prior model provenance to exact `openai/gpt-5.6-sol`, posts 7 and 8 record earlier closures, and post 9 records certified-execution/store-clock closure under that exact identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -68,6 +68,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Certify exact Databricks CLI versions and revalidate changed executable bytes before dispatch.
 - [x] Close complete CLI process-tree ownership and cleanup review.
 - [x] Close store-owned action lease clock review.
+- [x] State the package-index/cache requirement without claiming an offline standalone bundle.
+- [x] Propagate post-start global CLI certification loss to runtime health and refresh controls.
+- [ ] Close standalone dependency/supply-chain review.
 - [x] Attribute every visible fact/action/alert/refresh to one unique authority.
 - [x] Distinguish historical/paused cache from unsupported capability.
 - [x] Reject placeholder authority before durable state creation.
@@ -567,6 +570,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - CLI process trees are atomically owned through POSIX groups or suspended Windows Job assignment and bounded Job drain; normal, timeout, output, cancellation, detached, inherited-pipe, and helper-shaped probes are clear.
 - Intent/action promotion, lease, deadline, origin expiry, cooldown, guard, satisfaction, and ingestion authority plus coordinator policy share one injectable store clock; stale and future caller-time reproductions are independently clear.
 - Exact compatibility-candidate verification passes at 596/8 on Windows and 598/6 on Ubuntu/WSL. Repeated packages remain 89/66/34 with Windows sdist `ACF162BA00541FA2A25B845AC580B38D427D7577DE6BC9CDDBEAE83A05F628EE` and wheel `9C2846FE0C551EC8CD54DF70A3BB81DBC3EFA7BE80E66885AAF92418B8ED5DD3`.
+- Fresh release/runtime review `critical-reviews/20260830-090125.md` reproduced two medium defects: incomplete offline prerequisites and healthy UI state after post-start certification loss.
+- Standalone docs now require an index, populated cache, or reviewed wheelhouse and explicitly deny a self-contained offline bundle claim.
+- Worker-global certification/runtime failures now record the action then reach supervision, disabling controls and retrying doctor; profile-local configuration failures remain action-scoped. Independent re-review is clear.
 
 ## Risks / watch list
 
@@ -579,5 +585,6 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The 05:28 profile/startup ledger and all five earlier ledgers have no remaining open finding.
 - The 06:37 recovery/parser ledger and all earlier ledgers have no remaining open finding.
 - The 07:29 compatibility/upgrade ledger and all earlier ledgers have no remaining open finding.
+- The 09:01 standalone/runtime ledger remains open only for the final supply-chain pass and exact gates.
 - The fresh operator-recovery review has no remaining open finding; power-cut testing and a supported restore workflow remain explicit environment-level/deferred limits.
 - The fresh browser-product review has no remaining medium-or-higher finding; the next review queue targets maintainability and residual failure behavior without expanding deferred product scope.
