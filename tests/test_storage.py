@@ -81,6 +81,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0016_projection_received_order",
             "0017_queue_claim_order",
             "0018_action_state_projections",
+            "0019_web_cursor_indexes",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -102,6 +103,42 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
         assert not any("TEMP B-TREE" in row[3] for row in child_plan)
 
 
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "CREATE TABLE unexpected_state (value TEXT)",
+        "CREATE INDEX unexpected_system_name ON systems(display_name)",
+        "CREATE VIEW unexpected_systems AS SELECT * FROM systems",
+        """
+        CREATE TRIGGER suppress_runtime_events
+        AFTER INSERT ON operational_events
+        BEGIN
+            DELETE FROM operational_events
+            WHERE idempotency_key = NEW.idempotency_key;
+        END
+        """,
+    ],
+)
+def test_unexpected_schema_objects_fail_immutable_preflight_without_mutation(
+    tmp_path: Path,
+    statement: str,
+) -> None:
+    path = tmp_path / "unexpected-schema.sqlite3"
+    with SQLiteStore(path):
+        pass
+    with sqlite3.connect(path) as connection:
+        connection.execute(statement)
+        connection.commit()
+    original = path.read_bytes()
+    sidecars = {suffix: Path(f"{path}{suffix}").exists() for suffix in ("-wal", "-shm")}
+
+    with pytest.raises(sqlite3.DatabaseError, match=r"schema object|schema objects"):
+        SQLiteStore(path)
+
+    assert path.read_bytes() == original
+    assert {suffix: Path(f"{path}{suffix}").exists() for suffix in ("-wal", "-shm")} == sidecars
+
+
 def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_path) -> None:
     path = tmp_path / "state" / "rookery.sqlite3"
     path.parent.mkdir()
@@ -110,7 +147,7 @@ def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_
     with SQLiteStore(path) as store:
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
         )
 
 
@@ -125,7 +162,7 @@ def test_new_database_is_migrated_and_marked_before_wal_activation(
         assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
         )
         original(store)
 
@@ -420,7 +457,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -458,7 +495,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -493,7 +530,7 @@ def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_pa
 
     check = sqlite3.connect(path)
     try:
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -682,7 +719,7 @@ def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path)
     check = sqlite3.connect(destination)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 18
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 19
     finally:
         check.close()
 
@@ -1538,6 +1575,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0016_projection_received_order",
         "0017_queue_claim_order",
         "0018_action_state_projections",
+        "0019_web_cursor_indexes",
     )
     assert versions == (expected,) * workers
 
@@ -1679,6 +1717,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0016_projection_received_order",
             "0017_queue_claim_order",
             "0018_action_state_projections",
+            "0019_web_cursor_indexes",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":
@@ -1746,7 +1785,9 @@ def test_object_page_search_escapes_wildcards_and_bounds_results(tmp_path) -> No
         seeded = SystemBootstrapService(store).configure_databricks_workspace(
             display_name="local", profile="DEFAULT", workspace_root="/", now=NOW
         )
-        for index, name in enumerate(("100% real", "under_score", "back\\slash", "ordinary")):
+        for index, name in enumerate(
+            ("100% real", "under_score", "back\\slash", "ordinary", "other")
+        ):
             store.upsert_object(
                 RemoteObject(
                     object_id=uuid4(),
@@ -1762,12 +1803,71 @@ def test_object_page_search_escapes_wildcards_and_bounds_results(tmp_path) -> No
                 )
             )
 
-        assert store.count_objects(query="%") == 1
+        assert store.count_objects(query="100%") == 1
         assert [
-            item.display_name for item in store.list_objects_page(offset=0, limit=10, query="_")
+            item.display_name
+            for item in store.list_objects_page(offset=0, limit=10, query="under_")
         ] == ["under_score"]
-        assert store.count_objects(query="\\") == 1
+        assert store.count_objects(query="back\\") == 1
         assert len(store.list_objects_page(offset=1, limit=2)) == 2
+        first = store.list_objects_after(
+            after_name=None,
+            after_id=None,
+            limit=3,
+        )
+        second = store.list_objects_after(
+            after_name=None,
+            after_id=first[-1].object_id,
+            limit=10,
+        )
+        assert len(first) == 3
+        assert len({item.object_id for item in (*first, *second)}) == 6
+        plan = store._connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT * FROM remote_objects
+            WHERE object_id > ?
+            ORDER BY object_id
+            LIMIT ?
+            """,
+            (first[-1].object_id, 10),
+        ).fetchall()
+        assert any("sqlite_autoindex_remote_objects_1" in row[3] for row in plan)
+        assert not any("TEMP B-TREE" in row[3] for row in plan)
+        filtered_first = store.list_objects_after(
+            after_name=None,
+            after_id=None,
+            limit=1,
+            query="o",
+        )
+        filtered_second = store.list_objects_after(
+            after_name=filtered_first[-1].display_name,
+            after_id=filtered_first[-1].object_id,
+            limit=2,
+            query="o",
+        )
+        assert [item.display_name for item in (*filtered_first, *filtered_second)] == [
+            "ordinary",
+            "other",
+        ]
+        filtered_plan = store._connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT * FROM remote_objects
+            WHERE display_name LIKE ? ESCAPE '\' COLLATE NOCASE
+              AND (display_name COLLATE NOCASE, object_id) > (? COLLATE NOCASE, ?)
+            ORDER BY display_name COLLATE NOCASE, object_id
+            LIMIT ?
+            """,
+            (
+                "o%",
+                filtered_first[-1].display_name,
+                filtered_first[-1].object_id,
+                2,
+            ),
+        ).fetchall()
+        assert any("ix_remote_objects_display_cursor" in row[3] for row in filtered_plan)
+        assert not any("TEMP B-TREE" in row[3] for row in filtered_plan)
 
 
 def test_invalid_bootstrap_capability_does_not_leave_partial_state(tmp_path) -> None:
@@ -2308,7 +2408,7 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
         assert "do-not-persist" not in (attempts[0].redacted_diagnostic or "")
         assert reopened.list_operational_events()[0].attempt_id == first_attempt.attempt_id
         with pytest.raises(ValueError, match="attempt limit"):
-            reopened.list_action_attempts(action.action_id, limit=101)
+            reopened.list_action_attempts(action.action_id, limit=102)
         assert (
             run(
                 reopened.lease_next(
@@ -2333,6 +2433,101 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
             )
         )
         assert reopened.get_stored_action(action.action_id).retry_at is None
+
+
+def test_due_action_backlog_promotes_only_one_bounded_batch(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "action-backlog.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+        capability_key="databricks.workspace.children.read",
+    )
+    seed = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.children.read",
+        capability_version="1",
+        target=scope.target,
+        requested_scopes=(scope,),
+    )
+    run(store.enqueue(seed))
+    now_text = NOW.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    store._connection.execute(
+        """
+        WITH RECURSIVE item(number) AS (
+            VALUES(1)
+            UNION ALL
+            SELECT number + 1 FROM item WHERE number < 1500
+        )
+        INSERT INTO adapter_actions (
+            action_id, correlation_id, system_id, connection_binding_id,
+            adapter_key, adapter_version, capability_key, capability_version,
+            target_kind, target_id, deadline, contract_version, dedupe_key,
+            state, retry_at, record_created_at
+        )
+        SELECT printf('00000000-0000-4000-8000-%012d', number),
+               printf('10000000-0000-4000-8000-%012d', number),
+               seed.system_id, seed.connection_binding_id, seed.adapter_key,
+               seed.adapter_version, seed.capability_key, seed.capability_version,
+               seed.target_kind, seed.target_id, seed.deadline, seed.contract_version,
+               printf('due-action-%06d', number), 'retry_wait', ?,
+               printf('2000-01-01T00:00:00.%06dZ', number)
+        FROM item
+        CROSS JOIN adapter_actions AS seed
+        WHERE seed.action_id = ?
+        """,
+        (now_text, seed.action_id),
+    )
+    store._connection.execute(
+        """
+        WITH RECURSIVE item(number) AS (
+            VALUES(1)
+            UNION ALL
+            SELECT number + 1 FROM item WHERE number < 1500
+        )
+        INSERT INTO adapter_action_scopes (
+            action_id, system_id, target_kind, target_id, object_type, facet,
+            capability_key, coverage, field_mask_json
+        )
+        SELECT printf('00000000-0000-4000-8000-%012d', number),
+               scope.system_id, scope.target_kind, scope.target_id,
+               scope.object_type, scope.facet, scope.capability_key,
+               scope.coverage, scope.field_mask_json
+        FROM item
+        CROSS JOIN adapter_action_scopes AS scope
+        WHERE scope.action_id = ?
+        """,
+        (seed.action_id,),
+    )
+    progress_callbacks = 0
+
+    def count_vm_steps() -> int:
+        nonlocal progress_callbacks
+        progress_callbacks += 1
+        return 0
+
+    store._connection.set_progress_handler(count_vm_steps, 100)
+    try:
+        lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+    finally:
+        store._connection.set_progress_handler(None, 0)
+
+    assert lease is not None and lease.action.action_id.startswith("00000000-")
+    assert dict(
+        store._connection.execute(
+            "SELECT state, COUNT(*) FROM adapter_actions GROUP BY state"
+        ).fetchall()
+    ) == {"leased": 1, "ready": 1_000, "retry_wait": 500}
+    assert progress_callbacks < 120_000
 
 
 @pytest.mark.parametrize(
@@ -2804,6 +2999,18 @@ def test_action_activity_pages_filters_and_uses_recency_indexes(tmp_path) -> Non
         action_ids[2],
         action_ids[1],
     ]
+    first_cursor_page = store.list_action_activity_after(
+        after_created_at=None,
+        after_action_id=None,
+        limit=2,
+    )
+    assert [item.action_id for item in first_cursor_page] == [action_ids[2], action_ids[1]]
+    second_cursor_page = store.list_action_activity_after(
+        after_created_at=first_cursor_page[-1].created_at,
+        after_action_id=first_cursor_page[-1].action_id,
+        limit=2,
+    )
+    assert [item.action_id for item in second_cursor_page] == [action_ids[0]]
     assert all(
         item.state == "failed"
         for item in store.list_action_activity_page(offset=0, limit=10, state="failed")
@@ -2937,6 +3144,17 @@ def test_runtime_failure_is_bounded_and_diagnostics_redact_json_and_home_paths(t
     assert store.count_alertable_events(event_type="queue.coordinator.failed") == 1
     assert store.count_alertable_events(severity="error") == 2
     assert len(store.list_alertable_events_page(offset=0, limit=10)) == 2
+    first_cursor_page = store.list_alertable_events_after(
+        after_occurred_at=None,
+        after_event_id=None,
+        limit=1,
+    )
+    assert first_cursor_page == (later,)
+    assert store.list_alertable_events_after(
+        after_occurred_at=later.occurred_at,
+        after_event_id=later.event_id,
+        limit=2,
+    ) == (event,)
     with pytest.raises(ValueError, match="offset"):
         store.list_alertable_events_page(offset=-1, limit=10)
     with pytest.raises(ValueError, match="limit"):

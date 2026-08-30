@@ -10,4 +10,5 @@ cli_output_limit_bytes = 8388608
 id = "primary-workspace"
 name = "primary-workspace"
 profile = "YOUR_PROFILE"
+authority_fingerprint = "0000000000000000000000000000000000000000000000000000000000000000"
 workspace_root = "/"

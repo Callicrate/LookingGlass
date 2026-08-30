@@ -10,6 +10,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import configparser
+import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -22,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from async_api_view.contracts import (
@@ -54,7 +58,7 @@ from async_api_view.contracts import (
     canonical_json_bytes,
     canonical_observation_batch_bytes,
 )
-from async_api_view.local_files import prepare_private_directory
+from async_api_view.local_files import RegularFileGuard, prepare_private_directory
 
 DATABRICKS_ADAPTER_KEY = "databricks"
 DATABRICKS_ADAPTER_VERSION = "1"
@@ -71,6 +75,7 @@ MAX_TABLE_COLUMNS = 1_000
 MAX_JSON_DEPTH = 32
 MAX_INGESTION_BATCH_BYTES = 1_000_000
 MAX_INGESTION_BATCH_UNITS = 250
+MAX_DATABRICKS_CONFIG_BYTES = 1024 * 1024
 _BUNDLE_CONFIG_FILENAMES = (
     "databricks.yml",
     "databricks.yaml",
@@ -192,6 +197,7 @@ class TargetResolver(Protocol):
 class CliInvocation:
     capability_key: str
     argv: tuple[str, ...]
+    authority_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +268,99 @@ def _profile(settings: Mapping[str, Any]) -> str:
     if not isinstance(value, str) or _PROFILE.fullmatch(value) is None:
         raise CommandRejected("binding requires a safe named CLI profile")
     return value
+
+
+def _authority_fingerprint(settings: Mapping[str, Any]) -> str:
+    value = settings.get("authority_fingerprint")
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise CommandRejected("binding requires a valid workspace authority fingerprint")
+    return value
+
+
+def _normalized_workspace_host(value: object) -> str:
+    if not isinstance(value, str) or any(character.isspace() for character in value):
+        raise CliUnavailable("Databricks profile has no workspace authority")
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except ValueError:
+        raise CliUnavailable("Databricks profile workspace authority is invalid") from None
+    if (
+        parsed.scheme.casefold() != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise CliUnavailable("Databricks profile workspace authority is invalid")
+    raw_hostname = parsed.hostname.rstrip(".")
+    try:
+        address = ipaddress.ip_address(raw_hostname)
+    except ValueError:
+        try:
+            hostname = raw_hostname.encode("idna").decode("ascii").casefold()
+        except UnicodeError:
+            raise CliUnavailable("Databricks profile workspace authority is invalid") from None
+        labels = hostname.split(".")
+        if len(hostname) > 253 or any(
+            re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) is None for label in labels
+        ):
+            raise CliUnavailable("Databricks profile workspace authority is invalid") from None
+    else:
+        hostname = address.compressed.casefold()
+        if address.version == 6:
+            hostname = f"[{hostname}]"
+    normalized_port = None if port == 443 else port
+    return f"https://{hostname}" + (f":{normalized_port}" if normalized_port is not None else "")
+
+
+def workspace_authority_fingerprint(host: object) -> str:
+    """Return the non-reversible v1 fingerprint for one normalized workspace host."""
+
+    normalized = _normalized_workspace_host(host)
+    return hashlib.sha256(f"databricks-workspace-host-v1\0{normalized}".encode()).hexdigest()
+
+
+def databricks_profile_authority_fingerprint(
+    profile: str,
+    *,
+    config_file: Path | None = None,
+) -> str:
+    """Read only the bounded host witness from one standard Databricks CLI profile."""
+
+    if _PROFILE.fullmatch(profile) is None:
+        raise CliUnavailable("Databricks profile name is invalid")
+    path = (config_file or (Path.home() / ".databrickscfg")).absolute()
+    try:
+        with RegularFileGuard(path) as guard:
+            if path.stat().st_size > MAX_DATABRICKS_CONFIG_BYTES:
+                raise CliUnavailable("Databricks profile configuration exceeds the size limit")
+            payload = path.read_text(encoding="utf-8-sig")
+            guard.verify()
+    except CliUnavailable:
+        raise
+    except (OSError, UnicodeError):
+        raise CliUnavailable("Databricks profile configuration is unavailable") from None
+    parser = configparser.ConfigParser(interpolation=None, strict=True)
+    invalid_configuration = False
+    try:
+        parser.read_string(payload)
+        if profile == "DEFAULT":
+            host = parser.defaults().get("host")
+        elif parser.has_section(profile):
+            host = parser.get(profile, "host", raw=True, fallback=None)
+        else:
+            host = None
+    except configparser.Error:
+        invalid_configuration = True
+        host = None
+    if invalid_configuration:
+        raise CliUnavailable("Databricks profile configuration is invalid")
+    if host is None:
+        raise CliUnavailable("Databricks profile has no workspace authority")
+    return workspace_authority_fingerprint(host)
 
 
 def _enforce_binding_target(
@@ -531,6 +630,7 @@ class CliRunner:
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         stdout_cap: int = DEFAULT_STDOUT_CAP,
         stderr_cap: int = DEFAULT_STDERR_CAP,
+        profile_config_path: Path | None = None,
     ) -> None:
         if timeout_seconds <= 0 or stdout_cap <= 0 or stderr_cap <= 0:
             raise ValueError("runner limits must be positive")
@@ -538,7 +638,20 @@ class CliRunner:
         self.timeout_seconds = timeout_seconds
         self.stdout_cap = stdout_cap
         self.stderr_cap = stderr_cap
+        self.profile_config_path = profile_config_path
         self._resolved_executable: str | None = None
+
+    def verify_profile_authority(self, *, profile: str, expected_fingerprint: str) -> None:
+        """Fail before dispatch if the named profile no longer selects this workspace."""
+
+        actual = databricks_profile_authority_fingerprint(
+            profile,
+            config_file=self.profile_config_path,
+        )
+        if actual != expected_fingerprint:
+            raise CommandRejected(
+                "Databricks profile authority does not match the configured workspace"
+            )
 
     def resolve_executable(self) -> str:
         if self._resolved_executable is None:
@@ -616,12 +729,26 @@ class CliRunner:
         if invocation.argv[0] != self.executable:
             raise CommandRejected("invocation does not use configured executable")
         _validate_observation_invocation(invocation)
+        if (
+            invocation.authority_fingerprint is None
+            or re.fullmatch(r"[0-9a-f]{64}", invocation.authority_fingerprint) is None
+        ):
+            raise CommandRejected("Databricks invocation requires an authority fingerprint")
+        profile = invocation.argv[-3]
+        self.verify_profile_authority(
+            profile=profile,
+            expected_fingerprint=invocation.authority_fingerprint,
+        )
         executable = self.resolve_executable()
         argv = (executable, *invocation.argv[1:])
         execution = await self._execute(
             argv,
             correlation_id=str(correlation_id),
             timeout_message="Databricks CLI timed out",
+        )
+        self.verify_profile_authority(
+            profile=profile,
+            expected_fingerprint=invocation.authority_fingerprint,
         )
         if execution.exit_code != 0:
             retry_after, retry_after_out_of_bounds = _downstream_retry_after(execution.stderr)
@@ -1723,6 +1850,11 @@ class DatabricksWorker:
             return
         try:
             binding = await self._binding(action)
+            profile = _profile(binding.non_secret_settings)
+            self.runner.verify_profile_authority(
+                profile=profile,
+                expected_fingerprint=_authority_fingerprint(binding.non_secret_settings),
+            )
             if action.capability_key == "databricks.workspace.content.read":
                 raise ContentPolicyError(
                     "Workspace content persistence is unavailable in this worker"
@@ -1731,9 +1863,13 @@ class DatabricksWorker:
             target = _enforce_binding_target(action.capability_key, binding, target)
             invocation = DatabricksCommandRegistry.build(
                 capability_key=action.capability_key,
-                profile=_profile(binding.non_secret_settings),
+                profile=profile,
                 target=target,
                 executable=self.runner.executable,
+            )
+            invocation = replace(
+                invocation,
+                authority_fingerprint=_authority_fingerprint(binding.non_secret_settings),
             )
         except LifecyclePersistenceFailure:
             raise

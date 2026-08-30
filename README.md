@@ -24,9 +24,9 @@ Wheel-only operators can export the complete architecture and safety contract lo
 The current runnable slice can:
 
 - register a Databricks workspace by named CLI profile;
-- filter and page through cached Workspace and Unity Catalog metadata in a loopback dashboard;
+- filter by cached-name prefix and move through metadata with bounded forward cursors; restart at the first page to include concurrent refresh commits;
 - drill into one object's facets, provenance, last-observed cached children, and registered refreshes;
-- browse and filter bounded pages of durable redacted operational alerts;
+- browse and filter forward-cursor pages of durable redacted operational alerts without full-history counts;
 - browse bounded durable action activity by state, system, or exact local action ID, then inspect its redacted attempts;
 - distinguish current, due, refreshing, and failed-last-attempt facet state while keeping cached values visible;
 - submit a generic refresh request;
@@ -48,6 +48,14 @@ Check available profiles without printing credential values:
 ```powershell
 databricks auth profiles
 ```
+
+Generate the non-secret fingerprint of the profile's normalized workspace host, then copy the digest into `authority_fingerprint`:
+
+```powershell
+async-api-view fingerprint-profile --profile 'YOUR_PROFILE'
+```
+
+Rookery checks that fingerprint again before every remote command. Retargeting the same profile name or selecting a profile for another workspace therefore fails before dispatch until configuration explicitly names the new authority, which creates or restores a separate cache.
 
 Rookery resolves the CLI only from explicit absolute `PATH` entries, launches it from a fresh empty directory beneath a private per-user root, and rejects that root if any ancestor contains a bundle configuration recognized by the supported CLI contract. It removes inherited `DATABRICKS_*` and `BUNDLE_*` variables so ambient authentication or bundle settings cannot override the named profile. Configure the profile in the standard Databricks configuration location; ambient-only credentials and `DATABRICKS_CONFIG_FILE` overrides are intentionally ignored.
 
@@ -86,10 +94,10 @@ Copy-Item -LiteralPath '.\config.example.toml' -Destination '.\config.local.toml
 ```
 
 Edit `config.local.toml` and replace `YOUR_PROFILE` with the intended named profile.
-The file stores only the profile name and configured Workspace root, not Databricks credentials or host secrets.
-Keep each `databricks.id` stable when renaming a display name or rotating its profile.
-Legacy entries without `id` remain supported; add the ID before changing the name, profile, or root so startup can adopt the existing cached identity.
-Removing an entry disables its refresh authority but preserves cached facts; changing `workspace_root` creates a new authority boundary and pauses the predecessor.
+The file stores only the profile name, SHA-256 authority fingerprint, and configured Workspace root, not Databricks credentials or raw host.
+Keep each `databricks.id` and `authority_fingerprint` stable when renaming a display name or changing to another profile for the same verified workspace. Rotate credentials inside the same named profile normally.
+Legacy entries without `id` remain supported, but adding an explicit ID/fingerprint creates a new verified authority rather than silently blessing legacy cache whose remote host was never recorded.
+Removing an entry disables its refresh authority but preserves cached facts; changing `authority_fingerprint` or `workspace_root` creates a new authority boundary and pauses the predecessor. Returning to the prior fingerprint/root re-enables that authority's original cache.
 
 ```powershell
 uv sync --locked --group dev
@@ -111,6 +119,7 @@ Open that complete link, including its `#` fragment, within ten minutes.
 The browser removes the fragment before exchanging it, so the capability does not enter HTTP request targets, redirects, or access logs.
 The link uses a process-unique, high-entropy `rookery-….localhost` hostname.
 Before printing that link, Rookery reserves and listens on both `127.0.0.1` and `::1` at the configured port; startup fails without disclosing the capability if either loopback address is unavailable.
+It also acquires one private database-scoped serve lock before applying desired configuration. A second `serve`, including one configured on another port, fails without rotating profiles or disabling resources used by the running instance.
 The configured bind host remains restricted to `127.0.0.1` or `localhost` for compatibility, but it cannot weaken this dual-stack reservation.
 The resulting session cookie is scoped to that unique host, process-local, `HttpOnly`, and `SameSite=Strict`, so ordinary `127.0.0.1` and `localhost` services do not receive it.
 If the link expires, was already used by another browser profile, or the browser session is lost, restart `serve` to rotate it.
@@ -141,6 +150,7 @@ List results record positive child evidence and an explicit `unknown` collection
 |---|---|
 | `async-api-view init-config --output <path>` | Create a no-overwrite starter TOML without loading configuration or opening SQLite. |
 | `async-api-view export-docs --output <path>` | Export the packaged architecture and safety contract without loading configuration or opening SQLite. |
+| `async-api-view fingerprint-profile --profile <name>` | Print the non-secret SHA-256 workspace-host authority fingerprint for a standard CLI profile. |
 | `async-api-view init` | Apply SQLite migrations and idempotently register configured systems/scopes. |
 | `async-api-view doctor` | Verify the existing Databricks CLI compatibility surface. |
 | `async-api-view run-once [--max-cycles N]` | Process up to `N` eligible coordinator/worker cycles; exit 3 means work may remain and the command should be rerun. |

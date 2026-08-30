@@ -41,6 +41,7 @@ workspace_root = "/Shared"
     assert settings.databricks_systems[0].config_id == "workspace"
     assert settings.databricks_systems[0].profile == "TEST_PROFILE"
     assert settings.databricks_systems[0].workspace_root == "/Shared"
+    assert settings.databricks_systems[0].authority_fingerprint == "0" * 64
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "127.0.0.2", "192.168.1.25", "::1", "example.com"])
@@ -99,6 +100,7 @@ def test_programmatic_app_settings_share_toml_safety_contract(
         ({"name": ""}, "name"),
         ({"workspace_root": "relative"}, "absolute Workspace path"),
         ({"config_id": "bad;id"}, "letters"),
+        ({"authority_fingerprint": "not-a-digest"}, "SHA-256"),
     ],
 )
 def test_programmatic_databricks_settings_share_toml_safety_contract(
@@ -123,10 +125,12 @@ def test_programmatic_databricks_settings_normalize_identity_and_root() -> None:
         profile="TEST_PROFILE",
         workspace_root="/Shared/",
         config_id="WorkSpace",
+        authority_fingerprint="A" * 64,
     )
 
     assert settings.workspace_root == "/Shared"
     assert settings.config_id == "workspace"
+    assert settings.authority_fingerprint == "a" * 64
 
 
 def test_programmatic_project_settings_reject_duplicate_names_and_ids(tmp_path: Path) -> None:
@@ -142,6 +146,14 @@ def test_programmatic_project_settings_reject_duplicate_names_and_ids(tmp_path: 
         ProjectSettings(
             app,
             (first, DatabricksSystemSettings("secondary", "TWO", "/Two", "PRIMARY")),
+        )
+    with pytest.raises(ConfigError, match="authorities must be unique"):
+        ProjectSettings(
+            app,
+            (
+                first,
+                DatabricksSystemSettings("secondary", "TWO", "/One", "secondary"),
+            ),
         )
 
 

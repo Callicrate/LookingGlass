@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import FastAPI
 
@@ -541,22 +544,55 @@ class SQLiteWebBackend:
         )
 
     @staticmethod
-    def _page_url(query: DashboardQuery, page: int) -> str:
+    def _cursor(values: tuple[str, ...]) -> str:
+        encoded = json.dumps(values, ensure_ascii=True, separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(encoded).rstrip(b"=").decode("ascii")
+
+    @staticmethod
+    def _cursor_values(value: str, *, count: int) -> tuple[str, ...]:
+        if not value:
+            return ()
+        try:
+            padding = "=" * (-len(value) % 4)
+            decoded = base64.b64decode(value + padding, altchars=b"-_", validate=True)
+            payload = json.loads(decoded)
+        except (binascii.Error, UnicodeError, json.JSONDecodeError, ValueError):
+            raise ValueError("invalid page cursor") from None
+        if (
+            not isinstance(payload, list)
+            or len(payload) != count
+            or not all(isinstance(item, str) and len(item) <= 512 for item in payload)
+        ):
+            raise ValueError("invalid page cursor")
+        return tuple(payload)
+
+    @staticmethod
+    def _cursor_time(value: str) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("invalid page cursor") from None
+        if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+            raise ValueError("invalid page cursor")
+        return parsed.astimezone(UTC)
+
+    @staticmethod
+    def _page_url(query: DashboardQuery, cursor: str) -> str:
         parameters: dict[str, str | int] = {}
         if query.object_query:
             parameters["q"] = query.object_query
-        if page > 1:
-            parameters["page"] = page
+        if cursor:
+            parameters["after"] = cursor
         encoded = urlencode(parameters)
         return f"/?{encoded}" if encoded else "/"
 
     @staticmethod
-    def _object_page_url(object_id: str, query: ObjectDetailQuery, page: int) -> str:
+    def _object_page_url(object_id: str, query: ObjectDetailQuery, cursor: str) -> str:
         parameters: dict[str, str | int] = {}
         if query.object_type:
             parameters["type"] = query.object_type
-        if page > 1:
-            parameters["page"] = page
+        if cursor:
+            parameters["after"] = cursor
         encoded = urlencode(parameters)
         base = f"/objects/{object_id}"
         return f"{base}?{encoded}" if encoded else base
@@ -566,17 +602,26 @@ class SQLiteWebBackend:
         worker_available, worker_error = self._worker_status()
         systems = self._store.list_systems()
         system_names = {system.system_id: system.display_name for system in systems}
-        object_total = self._store.count_objects(query=query.object_query)
-        object_page_count = max(
-            1, (object_total + query.object_page_size - 1) // query.object_page_size
+        object_cursor = self._cursor_values(
+            query.cursor,
+            count=2 if query.object_query else 1,
         )
-        object_page = min(query.object_page, object_page_count)
-        object_offset = (object_page - 1) * query.object_page_size
-        objects = self._store.list_objects_page(
-            offset=object_offset,
-            limit=query.object_page_size,
+        after_name: str | None = None
+        after_id: str | None = None
+        if object_cursor:
+            if query.object_query:
+                after_name, after_id = object_cursor
+            else:
+                after_id = object_cursor[0]
+            after_id = str(UUID(after_id))
+        object_rows = self._store.list_objects_after(
+            after_name=after_name,
+            after_id=after_id,
+            limit=query.object_page_size + 1,
             query=query.object_query,
         )
+        has_more_objects = len(object_rows) > query.object_page_size
+        objects = object_rows[: query.object_page_size]
         actions = self._store.list_latest_system_activity()
         latest_facet_actions = {
             (record.system_id, record.object_id, record.facet): record
@@ -639,33 +684,42 @@ class SQLiteWebBackend:
             error=None,
             refresh_unavailable=not worker_available,
             refresh_error=worker_error,
-            object_total=object_total,
-            object_page=object_page,
-            object_page_count=object_page_count,
-            object_page_start=object_offset + 1 if objects else 0,
-            object_page_end=object_offset + len(objects),
+            object_total=len(objects),
+            object_page=1,
+            object_page_count=2 if has_more_objects else 1,
+            object_page_start=1 if objects else 0,
+            object_page_end=len(objects),
             object_query=query.object_query,
-            previous_page_url=(self._page_url(query, object_page - 1) if object_page > 1 else None),
+            previous_page_url=(self._page_url(query, "") if query.cursor else None),
             next_page_url=(
-                self._page_url(query, object_page + 1) if object_page < object_page_count else None
+                self._page_url(
+                    query,
+                    self._cursor(
+                        (objects[-1].display_name, str(objects[-1].object_id))
+                        if query.object_query
+                        else (str(objects[-1].object_id),)
+                    ),
+                )
+                if has_more_objects and objects
+                else None
             ),
             alerts=alerts,
         )
 
     @staticmethod
-    def _alert_page_url(query: AlertHistoryQuery, page: int) -> str:
+    def _alert_page_url(query: AlertHistoryQuery, cursor: str) -> str:
         parameters: dict[str, str | int] = {}
         if query.event_type:
             parameters["type"] = query.event_type
         if query.severity:
             parameters["severity"] = query.severity
-        if page > 1:
-            parameters["page"] = page
+        if cursor:
+            parameters["after"] = cursor
         encoded = urlencode(parameters)
         return f"/alerts?{encoded}" if encoded else "/alerts"
 
     @staticmethod
-    def _action_page_url(query: ActionHistoryQuery, page: int) -> str:
+    def _action_page_url(query: ActionHistoryQuery, cursor: str) -> str:
         parameters: dict[str, str | int] = {}
         if query.state:
             parameters["state"] = query.state
@@ -673,8 +727,8 @@ class SQLiteWebBackend:
             parameters["system"] = query.system_id
         if query.action_id:
             parameters["action"] = query.action_id
-        if page > 1:
-            parameters["page"] = page
+        if cursor:
+            parameters["after"] = cursor
         encoded = urlencode(parameters)
         return f"/actions?{encoded}" if encoded else "/actions"
 
@@ -683,42 +737,55 @@ class SQLiteWebBackend:
         system_id = query.system_id or None
         state = query.state or None
         action_id = query.action_id or None
-        total = self._store.count_action_activity(
+        action_cursor = self._cursor_values(query.cursor, count=2)
+        after_created_at: datetime | None = None
+        after_action_id: str | None = None
+        if action_cursor:
+            after_created_at = self._cursor_time(action_cursor[0])
+            after_action_id = str(UUID(action_cursor[1]))
+        systems = self._store.list_systems()
+        system_names = {system.system_id: system.display_name for system in systems}
+        action_rows = self._store.list_action_activity_after(
+            after_created_at=after_created_at,
+            after_action_id=after_action_id,
+            limit=query.page_size + 1,
             system_id=system_id,
             state=state,
             action_id=action_id,
         )
-        page_count = max(1, (total + query.page_size - 1) // query.page_size)
-        page = min(query.page, page_count)
-        offset = (page - 1) * query.page_size
-        systems = self._store.list_systems()
-        system_names = {system.system_id: system.display_name for system in systems}
-        actions = tuple(
-            self._action_activity_view(action, system_names)
-            for action in self._store.list_action_activity_page(
-                offset=offset,
-                limit=query.page_size,
-                system_id=system_id,
-                state=state,
-                action_id=action_id,
-            )
-        )
+        has_more_actions = len(action_rows) > query.page_size
+        page_rows = action_rows[: query.page_size]
+        actions = tuple(self._action_activity_view(action, system_names) for action in page_rows)
         return ActionHistoryView(
             actions=actions,
             systems=tuple(
                 ActionSystemOption(system_id=system.system_id, name=system.display_name)
                 for system in systems
             ),
-            total=total,
-            page=page,
-            page_count=page_count,
-            page_start=offset + 1 if actions else 0,
-            page_end=offset + len(actions),
+            total=len(actions),
+            page=1,
+            page_count=2 if has_more_actions else 1,
+            page_start=1 if actions else 0,
+            page_end=len(actions),
             state_filter=query.state,
             system_filter=query.system_id,
             action_filter=query.action_id,
-            previous_page_url=(self._action_page_url(query, page - 1) if page > 1 else None),
-            next_page_url=(self._action_page_url(query, page + 1) if page < page_count else None),
+            previous_page_url=(self._action_page_url(query, "") if query.cursor else None),
+            next_page_url=(
+                self._action_page_url(
+                    query,
+                    self._cursor(
+                        (
+                            page_rows[-1]
+                            .created_at.isoformat(timespec="microseconds")
+                            .replace("+00:00", "Z"),
+                            page_rows[-1].action_id,
+                        )
+                    ),
+                )
+                if has_more_actions and page_rows
+                else None
+            ),
             loaded_at=datetime.now(UTC),
         )
 
@@ -728,13 +795,14 @@ class SQLiteWebBackend:
             return None
         systems = self._store.list_systems()
         system_names = {system.system_id: system.display_name for system in systems}
+        attempt_rows = self._store.list_action_attempts(action_id, limit=101)
+        attempts_truncated = len(attempt_rows) > 100
+        visible_attempts = attempt_rows[-100:]
         return ActionDetailView(
             action=self._action_activity_view(action, system_names),
-            attempts=tuple(
-                self._action_attempt_view(attempt)
-                for attempt in self._store.list_action_attempts(action_id, limit=100)
-            ),
-            attempt_total=self._store.count_action_attempts(action_id),
+            attempts=tuple(self._action_attempt_view(attempt) for attempt in visible_attempts),
+            attempt_total=len(visible_attempts),
+            attempts_truncated=attempts_truncated,
             loaded_at=datetime.now(UTC),
         )
 
@@ -742,35 +810,49 @@ class SQLiteWebBackend:
         query = query or AlertHistoryQuery()
         event_type = query.event_type or None
         severity = query.severity or None
-        total = self._store.count_alertable_events(
+        alert_cursor = self._cursor_values(query.cursor, count=2)
+        after_occurred_at: datetime | None = None
+        after_event_id: str | None = None
+        if alert_cursor:
+            after_occurred_at = self._cursor_time(alert_cursor[0])
+            after_event_id = str(UUID(alert_cursor[1]))
+        systems = self._store.list_systems()
+        system_names = {system.system_id: system.display_name for system in systems}
+        alert_rows = self._store.list_alertable_events_after(
+            after_occurred_at=after_occurred_at,
+            after_event_id=after_event_id,
+            limit=query.page_size + 1,
             event_type=event_type,
             severity=severity,
         )
-        page_count = max(1, (total + query.page_size - 1) // query.page_size)
-        page = min(query.page, page_count)
-        offset = (page - 1) * query.page_size
-        systems = self._store.list_systems()
-        system_names = {system.system_id: system.display_name for system in systems}
-        alerts = tuple(
-            self._event_view(event, system_names)
-            for event in self._store.list_alertable_events_page(
-                offset=offset,
-                limit=query.page_size,
-                event_type=event_type,
-                severity=severity,
-            )
-        )
+        has_more_alerts = len(alert_rows) > query.page_size
+        page_rows = alert_rows[: query.page_size]
+        alerts = tuple(self._event_view(event, system_names) for event in page_rows)
         return AlertHistoryView(
             alerts=alerts,
-            total=total,
-            page=page,
-            page_count=page_count,
-            page_start=offset + 1 if alerts else 0,
-            page_end=offset + len(alerts),
+            total=len(alerts),
+            page=1,
+            page_count=2 if has_more_alerts else 1,
+            page_start=1 if alerts else 0,
+            page_end=len(alerts),
             event_type_filter=query.event_type,
             severity_filter=query.severity,
-            previous_page_url=(self._alert_page_url(query, page - 1) if page > 1 else None),
-            next_page_url=(self._alert_page_url(query, page + 1) if page < page_count else None),
+            previous_page_url=(self._alert_page_url(query, "") if query.cursor else None),
+            next_page_url=(
+                self._alert_page_url(
+                    query,
+                    self._cursor(
+                        (
+                            page_rows[-1]
+                            .occurred_at.isoformat(timespec="microseconds")
+                            .replace("+00:00", "Z"),
+                            page_rows[-1].event_id,
+                        )
+                    ),
+                )
+                if has_more_alerts and page_rows
+                else None
+            ),
             loaded_at=datetime.now(UTC),
         )
 
@@ -786,24 +868,17 @@ class SQLiteWebBackend:
             (record.system_id, record.object_id, record.facet): record
             for record in self._store.list_latest_facet_actions((object_id,))
         }
-        relationship_total = self._store.count_related_objects_sync(
+        relationship_cursor = self._cursor_values(query.cursor, count=1)
+        after_relationship_id = str(UUID(relationship_cursor[0])) if relationship_cursor else None
+        relationship_rows = self._store.list_related_objects_after_sync(
             object_id,
+            after_id=after_relationship_id,
+            limit=query.relationship_page_size + 1,
             predicate="contains",
             object_type=query.object_type or None,
         )
-        relationship_page_count = max(
-            1,
-            (relationship_total + query.relationship_page_size - 1) // query.relationship_page_size,
-        )
-        relationship_page = min(query.relationship_page, relationship_page_count)
-        relationship_offset = (relationship_page - 1) * query.relationship_page_size
-        related_children = self._store.list_related_objects_page_sync(
-            object_id,
-            offset=relationship_offset,
-            limit=query.relationship_page_size,
-            predicate="contains",
-            object_type=query.object_type or None,
-        )
+        has_more_relationships = len(relationship_rows) > query.relationship_page_size
+        related_children = relationship_rows[: query.relationship_page_size]
         children = tuple(
             RelatedObjectView(
                 object_id=str(record.object.object_id),
@@ -839,20 +914,22 @@ class SQLiteWebBackend:
             system_name=system_name,
             children=children,
             refresh_options=refresh_options,
-            relationship_total=relationship_total,
-            relationship_page=relationship_page,
-            relationship_page_count=relationship_page_count,
-            relationship_page_start=relationship_offset + 1 if children else 0,
-            relationship_page_end=relationship_offset + len(children),
+            relationship_total=len(children),
+            relationship_page=1,
+            relationship_page_count=2 if has_more_relationships else 1,
+            relationship_page_start=1 if children else 0,
+            relationship_page_end=len(children),
             object_type_filter=query.object_type,
             previous_page_url=(
-                self._object_page_url(object_id, query, relationship_page - 1)
-                if relationship_page > 1
-                else None
+                self._object_page_url(object_id, query, "") if query.cursor else None
             ),
             next_page_url=(
-                self._object_page_url(object_id, query, relationship_page + 1)
-                if relationship_page < relationship_page_count
+                self._object_page_url(
+                    object_id,
+                    query,
+                    self._cursor((str(related_children[-1].object.object_id),)),
+                )
+                if has_more_relationships and related_children
                 else None
             ),
             loaded_at=datetime.now(UTC),
@@ -1189,10 +1266,17 @@ def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) ->
     configured_scope_ids: set[str] = set()
     for system in settings.databricks_systems:
         config_id = canonical_config_id(system.config_id) if system.config_id is not None else None
+        authority_material = json.dumps(
+            [system.authority_fingerprint, system.workspace_root],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode()
+        authority_key = f"databricks-host-v1:{hashlib.sha256(authority_material).hexdigest()}"
         legacy_stable = str(
             uuid5(
                 NAMESPACE_URL,
-                f"async-api-view/databricks/{system.name}/{system.profile}/{system.workspace_root}",
+                "async-api-view/databricks/legacy/"
+                f"{system.name}/{system.authority_fingerprint}/{system.workspace_root}",
             )
         )
         stable = legacy_stable
@@ -1200,17 +1284,12 @@ def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) ->
             mapped = store.get_configured_system_identity(
                 system_kind="databricks.workspace",
                 config_id=config_id,
-                authority_key=system.workspace_root,
+                authority_key=authority_key,
             )
-            legacy_system = store.get_system(legacy_stable)
-            stable = mapped or (
-                legacy_stable
-                if legacy_system is not None and legacy_system.system_kind == "databricks.workspace"
-                else str(
-                    uuid5(
-                        NAMESPACE_URL,
-                        f"async-api-view/databricks/{config_id}/{system.workspace_root}",
-                    )
+            stable = mapped or str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"async-api-view/databricks/{config_id}/{authority_key}",
                 )
             )
         seeded = bootstrap.configure_databricks_workspace(
@@ -1219,6 +1298,7 @@ def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) ->
             workspace_root=system.workspace_root,
             enabled_capability_keys=tuple(sorted(CAPABILITIES)),
             non_secret_settings={
+                "authority_fingerprint": system.authority_fingerprint,
                 "content_capture_enabled": False,
                 "content_max_bytes": settings.app.cli_output_limit_bytes,
                 "content_retention_days": 365,
@@ -1232,7 +1312,7 @@ def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) ->
             store.upsert_configured_system_identity(
                 system_kind="databricks.workspace",
                 config_id=config_id,
-                authority_key=system.workspace_root,
+                authority_key=authority_key,
                 system_id=seeded.system.system_id,
             )
         configured_system_ids.add(seeded.system.system_id)

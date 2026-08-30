@@ -689,6 +689,8 @@ Exactly-once downstream execution is not promised.
 Every claimed record MUST use an atomic lease with an expiry.
 An expired lease MAY be reclaimed, but the item MUST be revalidated before downstream work.
 
+Each claim promotes at most one bounded due batch. Intent priority is considered before batch truncation. Within one priority, deferred work that has been eligible longer is promoted first, then original request time and stable scope ID; the queued claim order remains priority, request time, and scope ID. This eligibility aging is intentional and keeps future deferred backlogs from turning one claim into an unbounded scan.
+
 If intent/action state and queue delivery cannot share a transaction, the implementation MUST use a durable outbox/inbox pattern.
 The service MUST durably mark a logical action as started before making a downstream call.
 
@@ -1125,9 +1127,9 @@ The first useful client SHOULD support:
 - redacted failure detail and next eligible or retry time;
 - a queryable history of alertable operational failures, even if active alert presentation is implemented later.
 
-Object inventory views MUST use bounded pages and keep every cached object reachable through pagination or filtering.
+Object inventory views MUST use bounded stable-key cursors and keep every cached object reachable through forward navigation or filtering without exact full-inventory counts.
 Refresh controls for objects SHOULD follow the displayed page; configured-scope refreshes remain visible independently.
-Object detail views MUST bound current outgoing containment pages and SHOULD expose facets, provenance, presence, type filtering, and object-specific refresh controls.
+Object detail views MUST bound current outgoing containment with stable-key cursors and SHOULD expose facets, provenance, presence, type filtering, and object-specific refresh controls.
 
 ### Freshness presentation
 
@@ -1398,6 +1400,7 @@ Contracts MUST still record the local actor and UI session so actions, policy ch
 The service MUST bind only to local inter-process or loopback interfaces.
 For the browser UI, each runtime creates a high-entropy `*.localhost` browser hostname and trusts only that Host.
 Before disclosing an activation capability, startup MUST exclusively reserve and listen on both `127.0.0.1` and `::1` at the configured port; failure to own either address family MUST close any partial reservation and stop without disclosure.
+Before applying desired configuration, `serve` MUST also acquire one private database-scoped operating-system lock. A second serve attempt, including one using another port, MUST fail before it can rotate or disable the running instance's durable authority.
 The launching terminal discloses one short-lived, single-use activation capability in a URL fragment on that unique host.
 The browser removes the fragment before exchanging the capability in a same-origin request body for a host-only, process-local session cookie.
 The capability and session MUST remain memory-only, rotate on restart, stay out of request targets and application/access logs, and gate every cached-data or mutation route by default.
@@ -1484,10 +1487,11 @@ Canonical configuration includes:
 
 The local TOML file is desired enabled state for its Databricks resources.
 Each new entry has an explicit stable configuration ID.
-Legacy entries without an ID remain compatible; adding an ID before changing other identity inputs records a durable mapping to the existing system and cached history.
-Display-name and profile changes under the same ID and Workspace root update one local system.
+Each entry also carries the SHA-256 fingerprint of its normalized workspace host. The raw host remains in the CLI-owned profile and is never stored in canonical state. The worker re-reads the standard profile and verifies that fingerprint before every remote command.
+Legacy entries without an ID remain compatible, but adding an explicit ID/fingerprint creates a new verified authority rather than adopting cache whose remote-host witness was never recorded.
+Display-name and profile-reference changes under the same ID, authority fingerprint, and Workspace root update one local system. Credential rotation inside the same named profile preserves identity; retargeting the profile fails before dispatch because the actual host fingerprint changes.
 Removing an entry disables its system, binding, capabilities, and configured scopes without deleting cached facts.
-Changing the Workspace root creates a new local system authority boundary and disables the predecessor.
+Changing the authority fingerprint or Workspace root creates a new local system authority boundary and disables the predecessor. Returning to a prior fingerprint/root re-enables its original cached authority.
 
 Session runtime state includes:
 
@@ -1537,7 +1541,7 @@ Clock skew between local processes must remain within a documented operational t
 No hard throughput or latency SLO is specified because object counts, system counts, and desired freshness are unknown.
 The initial design SHOULD optimize for correctness and inspectability at single-user local scale.
 The contracts MUST avoid requiring full object scans for every UI read, but a simple indexed scheduler scan is acceptable until measured otherwise.
-The current web view uses 50-object pages, bounded query text, active-plus-latest action summaries, and literal wildcard escaping for filters.
+The current web view uses 50-object forward-cursor pages with `limit + 1` lookahead, bounded query text, active-plus-latest action summaries, and indexed case-insensitive name-prefix filtering. Dashboard, containment, action, and alert requests do not calculate full-history totals or use deep offsets. Cursors are weakly consistent rather than snapshot-isolated: concurrent inserts before a boundary may require restarting at the first page, which the UI exposes explicitly.
 
 ## Testing and acceptance criteria
 

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal, Protocol
 from unicodedata import category
 from uuid import UUID
@@ -12,9 +15,7 @@ from uuid import UUID
 MAX_DISPLAY_LENGTH = 512
 DEFAULT_OBJECT_PAGE_SIZE = 50
 MAX_OBJECT_QUERY_LENGTH = 128
-MAX_OBJECT_PAGE = 1_000_000
-MAX_ALERT_PAGE = 10_000
-MAX_ACTION_PAGE = 10_000
+MAX_CURSOR_LENGTH = 2048
 _BIDI_CONTROLS = frozenset(
     {
         "\u061c",
@@ -32,6 +33,7 @@ _BIDI_CONTROLS = frozenset(
     }
 )
 _CONTRACT_KEY = re.compile(r"[a-z][a-z0-9_.-]{0,127}")
+_CURSOR = re.compile(r"[A-Za-z0-9_-]+")
 _ALERT_SEVERITIES = frozenset({"", "info", "warning", "error", "critical"})
 _ACTION_STATES = frozenset(
     {
@@ -49,10 +51,50 @@ _ACTION_STATES = frozenset(
 )
 
 
+def _validate_cursor(value: str, *, fields: int, timestamp_first: bool = False) -> None:
+    if not value:
+        return
+    if len(value) > MAX_CURSOR_LENGTH or _CURSOR.fullmatch(value) is None:
+        raise ValueError("cursor is invalid")
+    try:
+        padding = "=" * (-len(value) % 4)
+        decoded = base64.b64decode(value + padding, altchars=b"-_", validate=True)
+        payload = json.loads(decoded)
+    except (binascii.Error, UnicodeError, json.JSONDecodeError, ValueError):
+        raise ValueError("cursor is invalid") from None
+    if (
+        not isinstance(payload, list)
+        or len(payload) != fields
+        or not all(isinstance(item, str) and len(item) <= 512 for item in payload)
+    ):
+        raise ValueError("cursor is invalid")
+    try:
+        normalized_id = str(UUID(payload[-1]))
+        if payload[-1] != normalized_id:
+            raise ValueError
+        if timestamp_first:
+            parsed = datetime.fromisoformat(payload[0].replace("Z", "+00:00"))
+            if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+                raise ValueError
+            if payload[0] != parsed.isoformat(timespec="microseconds").replace("+00:00", "Z"):
+                raise ValueError
+    except (AttributeError, ValueError):
+        raise ValueError("cursor is invalid") from None
+    canonical = (
+        base64.urlsafe_b64encode(
+            json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode()
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    if value != canonical:
+        raise ValueError("cursor is invalid")
+
+
 @dataclass(frozen=True, slots=True)
 class DashboardQuery:
     object_query: str = ""
-    object_page: int = 1
+    cursor: str = ""
     object_page_size: int = DEFAULT_OBJECT_PAGE_SIZE
 
     def __post_init__(self) -> None:
@@ -60,21 +102,19 @@ class DashboardQuery:
             ord(char) < 32 for char in self.object_query
         ):
             raise ValueError("object query is invalid")
-        if not 1 <= self.object_page <= MAX_OBJECT_PAGE:
-            raise ValueError(f"object page must be between 1 and {MAX_OBJECT_PAGE}")
+        _validate_cursor(self.cursor, fields=2 if self.object_query else 1)
         if not 1 <= self.object_page_size <= 100:
             raise ValueError("object page size must be between 1 and 100")
 
 
 @dataclass(frozen=True, slots=True)
 class ObjectDetailQuery:
-    relationship_page: int = 1
+    cursor: str = ""
     relationship_page_size: int = DEFAULT_OBJECT_PAGE_SIZE
     object_type: str = ""
 
     def __post_init__(self) -> None:
-        if not 1 <= self.relationship_page <= MAX_OBJECT_PAGE:
-            raise ValueError(f"relationship page must be between 1 and {MAX_OBJECT_PAGE}")
+        _validate_cursor(self.cursor, fields=1)
         if not 1 <= self.relationship_page_size <= 100:
             raise ValueError("relationship page size must be between 1 and 100")
         if self.object_type and _CONTRACT_KEY.fullmatch(self.object_type) is None:
@@ -83,14 +123,13 @@ class ObjectDetailQuery:
 
 @dataclass(frozen=True, slots=True)
 class AlertHistoryQuery:
-    page: int = 1
+    cursor: str = ""
     page_size: int = DEFAULT_OBJECT_PAGE_SIZE
     event_type: str = ""
     severity: str = ""
 
     def __post_init__(self) -> None:
-        if not 1 <= self.page <= MAX_ALERT_PAGE:
-            raise ValueError(f"alert page must be between 1 and {MAX_ALERT_PAGE}")
+        _validate_cursor(self.cursor, fields=2, timestamp_first=True)
         if not 1 <= self.page_size <= 100:
             raise ValueError("alert page size must be between 1 and 100")
         if self.event_type and _CONTRACT_KEY.fullmatch(self.event_type) is None:
@@ -101,15 +140,14 @@ class AlertHistoryQuery:
 
 @dataclass(frozen=True, slots=True)
 class ActionHistoryQuery:
-    page: int = 1
+    cursor: str = ""
     page_size: int = DEFAULT_OBJECT_PAGE_SIZE
     state: str = ""
     system_id: str = ""
     action_id: str = ""
 
     def __post_init__(self) -> None:
-        if not 1 <= self.page <= MAX_ACTION_PAGE:
-            raise ValueError(f"action page must be between 1 and {MAX_ACTION_PAGE}")
+        _validate_cursor(self.cursor, fields=2, timestamp_first=True)
         if not 1 <= self.page_size <= 100:
             raise ValueError("action page size must be between 1 and 100")
         if self.state not in _ACTION_STATES:
@@ -123,7 +161,7 @@ class ActionHistoryQuery:
             except (AttributeError, ValueError) as exc:
                 raise ValueError(f"{field_name} is invalid") from exc
             object.__setattr__(self, field_name, normalized)
-        if self.action_id and (self.system_id or self.state):
+        if self.action_id and (self.system_id or self.state or self.cursor):
             raise ValueError("action ID cannot be combined with activity filters")
 
 
@@ -321,6 +359,7 @@ class ActionDetailView:
     action: ActionActivityView
     attempts: tuple[ActionAttemptView, ...] = ()
     attempt_total: int = 0
+    attempts_truncated: bool = False
     loaded_at: datetime | str | None = None
 
 

@@ -590,7 +590,14 @@ def smoke_installed_wheel(
         )
         if not all(
             command in help_result.stdout
-            for command in ("init-config", "export-docs", "doctor", "backup", "serve")
+            for command in (
+                "init-config",
+                "export-docs",
+                "fingerprint-profile",
+                "doctor",
+                "backup",
+                "serve",
+            )
         ):
             raise RuntimeError("installed CLI help is missing required commands")
         config = Path(temporary) / "rookery.toml"

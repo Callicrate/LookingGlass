@@ -18,7 +18,7 @@
     <section aria-labelledby="activity-heading">
       <div class="section-heading">
         <div><p class="eyebrow">Durable worker history</p><h2 id="activity-heading">Adapter actions</h2></div>
-        <span class="count">{% if view.total %}{{ view.page_start }}-{{ view.page_end }} of {{ view.total }}{% else %}0{% endif %} actions</span>
+        <span class="count">Showing {{ view.actions|length }} actions{% if view.next_page_url %} · more available{% endif %}</span>
       </div>
       <form class="activity-toolbar" method="get" action="/actions">
         <label for="action-state">State
@@ -64,9 +64,9 @@
         </article>
         {% endfor %}
       </div>
-      {% if view.page_count > 1 %}<nav class="pagination" aria-label="Action activity pages">
-        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← Previous</a>{% else %}<span></span>{% endif %}
-        <span>Page {{ view.page }} of {{ view.page_count }}</span>
+      {% if view.previous_page_url or view.next_page_url %}<nav class="pagination" aria-label="Action activity pages">
+        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← First page</a>{% else %}<span></span>{% endif %}
+        <span>Bounded cursor navigation</span>
         {% if view.next_page_url %}<a href="{{ view.next_page_url }}">Next →</a>{% else %}<span></span>{% endif %}
       </nav>{% endif %}
       {% else %}<div class="empty-state">
@@ -75,6 +75,6 @@
       </div>{% endif %}
     </section>
   </main>
-  <footer>Action records are local evidence. They do not imply that cached remote state is current.</footer>
+  <footer>Action records are local evidence. Cursor pages are weakly consistent while work commits; return to the first page to include concurrent changes.</footer>
 </body>
 </html>

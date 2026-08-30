@@ -75,7 +75,7 @@
     <section aria-labelledby="children-heading">
       <div class="section-heading">
         <div><p class="eyebrow">Cached positive evidence</p><h2 id="children-heading">Last-observed children</h2></div>
-        <span class="count">{% if view.relationship_total %}{{ view.relationship_page_start }}-{{ view.relationship_page_end }} of {{ view.relationship_total }}{% else %}0{% endif %}</span>
+        <span class="count">Showing {{ view.children|length }} relationships{% if view.next_page_url %} · more available{% endif %}</span>
       </div>
       <form class="inventory-toolbar" method="get" action="/objects/{{ view.object.object_id|display }}" role="search">
         <label for="child-type-filter">Filter direct children by canonical type</label>
@@ -91,10 +91,10 @@
         <a class="relationship-row" href="/objects/{{ relation.object_id|display }}"><strong>{{ relation.name|display }}</strong><span>{{ relation.object_type|display }} · relationship {{ relation.relationship_presence|display }} · object {{ relation.object_presence|display }} · observed {{ relation.observed_at|timestamp }}</span></a>
         {% endfor %}
       </div>
-      {% if view.relationship_page_count > 1 %}
+      {% if view.previous_page_url or view.next_page_url %}
       <nav class="pagination" aria-label="Contained object pages">
-        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← Previous</a>{% else %}<span></span>{% endif %}
-        <span>Page {{ view.relationship_page }} of {{ view.relationship_page_count }}</span>
+        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← First page</a>{% else %}<span></span>{% endif %}
+        <span>Bounded cursor navigation</span>
         {% if view.next_page_url %}<a href="{{ view.next_page_url }}">Next →</a>{% else %}<span></span>{% endif %}
       </nav>
       {% endif %}
@@ -126,6 +126,6 @@
       {% endif %}
     </section>
   </main>
-  <footer>Containment is last-positive cached evidence, not a complete or live remote listing. A missing child is not treated as absent while collection completeness is unknown.</footer>
+  <footer>Containment is last-positive cached evidence, not a complete or live remote listing. Cursor pages are weakly consistent; return to the first page after concurrent refreshes.</footer>
 </body>
 </html>

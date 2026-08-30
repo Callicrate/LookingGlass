@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import subprocess
+import traceback
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,7 +35,9 @@ from async_api_view.adapters.databricks import (
     ResolvedTarget,
     _downstream_retry_after,
     classify_failure,
+    databricks_profile_authority_fingerprint,
     redact_diagnostic,
+    workspace_authority_fingerprint,
 )
 from async_api_view.contracts import (
     ActionLease,
@@ -70,7 +73,12 @@ def _binding() -> ConnectionBinding:
         DATABRICKS_ADAPTER_KEY,
         DATABRICKS_ADAPTER_VERSION,
         True,
-        {"profile": "local", "content_capture_enabled": True, "content_max_bytes": 1024},
+        {
+            "authority_fingerprint": "1" * 64,
+            "profile": "local",
+            "content_capture_enabled": True,
+            "content_max_bytes": 1024,
+        },
     )
 
 
@@ -257,6 +265,34 @@ async def test_runner_rejects_manual_invocation_before_process_creation(
         await runner.run(invocation, correlation_id="test")
 
 
+def test_runner_rejects_mapped_observation_without_authority_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    runner._resolved_executable = "C:\\trusted\\databricks.exe"
+
+    async def unexpected_execution(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("missing authority fingerprint reached execution")
+
+    monkeypatch.setattr(runner, "_execute", unexpected_execution)
+    invocation = CliInvocation(
+        "databricks.workspace.children.read",
+        (
+            "databricks",
+            "workspace",
+            "list",
+            "/Shared",
+            "--profile",
+            "DEFAULT",
+            "--output",
+            "json",
+        ),
+    )
+
+    with pytest.raises(CommandRejected, match="requires an authority fingerprint"):
+        asyncio.run(runner.run(invocation, correlation_id="test"))
+
+
 class ScriptedDoctorRunner(CliRunner):
     def __init__(
         self,
@@ -321,6 +357,85 @@ def test_doctor_rejects_missing_required_help_surface() -> None:
         asyncio.run(runner.doctor())
 
 
+def test_profile_authority_fingerprint_normalizes_and_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / ".databrickscfg"
+    config.write_text(
+        "[DEFAULT]\nhost = HTTPS://Workspace.Example.COM/\n"
+        "[SECOND]\nhost = https://second.example.com\n",
+        encoding="utf-8",
+    )
+    expected = workspace_authority_fingerprint("https://workspace.example.com")
+
+    assert databricks_profile_authority_fingerprint("DEFAULT", config_file=config) == expected
+    assert workspace_authority_fingerprint("https://workspace.example.com:443/") == expected
+    assert workspace_authority_fingerprint("https://workspace.example.com./") == expected
+    CliRunner(profile_config_path=config).verify_profile_authority(
+        profile="DEFAULT",
+        expected_fingerprint=expected,
+    )
+    with pytest.raises(CommandRejected, match="does not match"):
+        CliRunner(profile_config_path=config).verify_profile_authority(
+            profile="SECOND",
+            expected_fingerprint=expected,
+        )
+
+    config.write_text("[DEFAULT]\nhost = http://insecure.example.com\n", encoding="utf-8")
+    with pytest.raises(CliUnavailable, match="authority is invalid"):
+        databricks_profile_authority_fingerprint("DEFAULT", config_file=config)
+
+    for malformed in (
+        "https://bad host.example",
+        "https://bad_host.example",
+        "https://workspace.example.com/path",
+    ):
+        with pytest.raises(CliUnavailable):
+            workspace_authority_fingerprint(malformed)
+
+    secret = "token=do-not-leak"
+    config.write_text(f"{secret}\n", encoding="utf-8")
+    with pytest.raises(CliUnavailable) as captured:
+        databricks_profile_authority_fingerprint("DEFAULT", config_file=config)
+    rendered = "".join(
+        traceback.format_exception(
+            type(captured.value),
+            captured.value,
+            captured.value.__traceback__,
+        )
+    )
+    assert secret not in rendered
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+    config.write_text("[DEFAULT]\nhost = https://workspace.example.com\n", encoding="utf-8")
+    runner = CliRunner(profile_config_path=config)
+    runner._resolved_executable = "C:\\trusted\\databricks.exe"
+
+    async def retarget_during_execution(*_args: object, **_kwargs: object) -> CliExecution:
+        config.write_text("[DEFAULT]\nhost = https://retargeted.example.com\n", encoding="utf-8")
+        return CliExecution("test", timedelta(), 0, b"[]", b"")
+
+    monkeypatch.setattr(runner, "_execute", retarget_during_execution)
+    invocation = CliInvocation(
+        "databricks.workspace.children.read",
+        (
+            "databricks",
+            "workspace",
+            "list",
+            "/Shared",
+            "--profile",
+            "DEFAULT",
+            "--output",
+            "json",
+        ),
+        authority_fingerprint=expected,
+    )
+    with pytest.raises(CommandRejected, match="does not match"):
+        asyncio.run(runner.run(invocation, correlation_id="test"))
+
+
 def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -372,6 +487,7 @@ def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     runner = CliRunner(executable="databricks")
     runner._resolved_executable = "C:\\trusted\\databricks.exe"
+    monkeypatch.setattr(runner, "verify_profile_authority", lambda **_kwargs: None)
 
     async def exercise() -> None:
         await runner.run_unmapped(CliInvocation("doctor", ("databricks", "--version")))
@@ -388,6 +504,7 @@ def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
                     "--output",
                     "json",
                 ),
+                authority_fingerprint="1" * 64,
             ),
             correlation_id="test",
         )
@@ -1653,7 +1770,9 @@ class _Guard:
 
 class _Bindings:
     def __init__(self, binding: ConnectionBinding) -> None:
-        self.binding = binding
+        settings = dict(binding.non_secret_settings)
+        settings.setdefault("authority_fingerprint", "1" * 64)
+        self.binding = replace(binding, non_secret_settings=settings)
 
     async def get_connection_binding(self, _: str) -> ConnectionBinding:
         return self.binding
@@ -1694,6 +1813,10 @@ class _UnexpectedTargets:
 
 class _Runner:
     executable = "databricks"
+
+    def verify_profile_authority(self, *, profile: str, expected_fingerprint: str) -> None:
+        assert profile
+        assert len(expected_fingerprint) == 64
 
     async def run(self, *_: object, **__: object) -> CliExecution:
         return CliExecution(str(uuid4()), timedelta(), 0, b'{"catalogs": [{"name": "main"}]}', b"")
@@ -1773,7 +1896,7 @@ class _HeartbeatFailedLifecycle(_Lifecycle):
         raise OSError("lifecycle storage unavailable")
 
 
-class _BlockingRunner:
+class _BlockingRunner(_Runner):
     executable = "databricks"
 
     def __init__(self) -> None:

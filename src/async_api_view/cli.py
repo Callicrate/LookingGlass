@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import socket
 import sqlite3
 import sys
@@ -15,13 +16,16 @@ from pathlib import Path
 import uvicorn
 
 from async_api_view.adapters import CliRunner
+from async_api_view.adapters.databricks import databricks_profile_authority_fingerprint
 from async_api_view.composition import ApplicationRuntime, build_runtime
 from async_api_view.config import ConfigError, ProjectSettings, load_settings
+from async_api_view.local_files import ExclusiveFileLock, absolute_local_path
 from async_api_view.storage import backup_sqlite_database
 
 logger = logging.getLogger(__name__)
 DEFAULT_RUN_ONCE_CYCLES = 10_000
 MAX_RUN_ONCE_CYCLES = 1_000_000
+_UVICORN_BACKLOG = 2_048
 
 _EXAMPLE_CONFIG = """[app]
 database_path = "./.local/rookery.sqlite3"
@@ -35,6 +39,7 @@ cli_output_limit_bytes = 8388608
 id = "primary-workspace"
 name = "primary-workspace"
 profile = "YOUR_PROFILE"
+authority_fingerprint = "0000000000000000000000000000000000000000000000000000000000000000"
 workspace_root = "/"
 """
 
@@ -78,6 +83,15 @@ def _parser() -> argparse.ArgumentParser:
             "New Markdown path (default: rookery-architecture.md); never overwrites an "
             "existing path."
         ),
+    )
+    fingerprint_profile = subparsers.add_parser(
+        "fingerprint-profile",
+        help="Print the non-secret workspace-authority fingerprint for one CLI profile.",
+    )
+    fingerprint_profile.add_argument(
+        "--profile",
+        required=True,
+        help="Existing named profile in the standard Databricks CLI configuration.",
     )
     subparsers.add_parser("init", help="Initialize the database and configured systems.")
     subparsers.add_parser(
@@ -274,6 +288,7 @@ def _reserve_loopback_sockets(port: int, *, backlog: int) -> list[socket.socket]
 def _serve_loopback(
     runtime: ApplicationRuntime,
     settings: ProjectSettings,
+    listeners: list[socket.socket],
     *,
     log_level: str,
     allow_redirected: bool,
@@ -284,22 +299,24 @@ def _serve_loopback(
         port=settings.app.port,
         log_level=log_level.lower(),
     )
-    listeners = _reserve_loopback_sockets(settings.app.port, backlog=config.backlog)
-    try:
-        logger.info(
-            "Reserved dashboard listeners on 127.0.0.1:%s and [::1]:%s",
-            settings.app.port,
-            settings.app.port,
-        )
-        _show_browser_activation(
-            runtime,
-            settings,
-            allow_redirected=allow_redirected,
-        )
-        uvicorn.Server(config).run(sockets=listeners)
-    finally:
-        for listener in listeners:
-            listener.close()
+    logger.info(
+        "Reserved dashboard listeners on 127.0.0.1:%s and [::1]:%s",
+        settings.app.port,
+        settings.app.port,
+    )
+    _show_browser_activation(
+        runtime,
+        settings,
+        allow_redirected=allow_redirected,
+    )
+    uvicorn.Server(config).run(sockets=listeners)
+
+
+def _serve_lock_path(database_path: Path) -> Path:
+    database = absolute_local_path(database_path)
+    if os.path.lexists(database.parent / ".git"):
+        raise OSError("Rookery serve state requires a dedicated private directory")
+    return database.with_name(f".{database.name}.serve.lock")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -315,6 +332,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "export-docs":
             _export_docs(args.output)
+            return 0
+        if args.command == "fingerprint-profile":
+            fingerprint = databricks_profile_authority_fingerprint(args.profile)
+            sys.stdout.write(f"{fingerprint}\n")
             return 0
         if args.command == "serve":
             _require_browser_activation_output(allow_redirected=args.allow_redirected_activation)
@@ -340,16 +361,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             destination = backup_sqlite_database(settings.app.database_path, args.output)
             logger.info("Created consistent SQLite backup at %s", destination)
         elif args.command == "serve":
-            runtime = build_runtime(settings)
+            listeners = _reserve_loopback_sockets(
+                settings.app.port,
+                backlog=_UVICORN_BACKLOG,
+            )
             try:
-                _serve_loopback(
-                    runtime,
-                    settings,
-                    log_level=args.log_level,
-                    allow_redirected=args.allow_redirected_activation,
-                )
+                with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
+                    runtime = build_runtime(settings)
+                    try:
+                        _serve_loopback(
+                            runtime,
+                            settings,
+                            listeners,
+                            log_level=args.log_level,
+                            allow_redirected=args.allow_redirected_activation,
+                        )
+                    finally:
+                        runtime.store.close()
             finally:
-                runtime.store.close()
+                for listener in listeners:
+                    listener.close()
         else:  # pragma: no cover - argparse owns the command vocabulary
             raise RuntimeError(f"unsupported command {args.command}")
     except sqlite3.Error:

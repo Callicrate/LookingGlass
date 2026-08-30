@@ -31,7 +31,7 @@
       </div>
       <dl class="snapshot-stats">
         <div><dt>Systems</dt><dd>{{ view.systems|length }}</dd></div>
-        <div><dt>Objects</dt><dd>{{ view.object_total }}</dd></div>
+        <div><dt>Objects shown</dt><dd>{{ view.objects|length }}</dd></div>
         <div><dt>Refresh options</dt><dd>{{ view.refresh_options|length }}</dd></div>
       </dl>
     </section>
@@ -119,12 +119,12 @@
           <p class="eyebrow">Canonical cache</p>
           <h2 id="objects-heading">Folders, objects, and facets</h2>
         </div>
-        <span class="count">{% if view.object_total %}{{ view.object_page_start }}-{{ view.object_page_end }} of {{ view.object_total }}{% else %}0{% endif %} objects</span>
+        <span class="count">Showing {{ view.objects|length }} objects{% if view.next_page_url %} · more available{% endif %}</span>
       </div>
       <form class="inventory-toolbar" method="get" action="/" role="search">
-        <label for="object-filter">Filter cached objects</label>
+        <label for="object-filter">Filter cached objects by name prefix</label>
         <div class="inventory-search">
-          <input id="object-filter" type="search" name="q" value="{{ view.object_query|display }}" maxlength="128" placeholder="Name or type">
+          <input id="object-filter" type="search" name="q" value="{{ view.object_query|display }}" maxlength="128" placeholder="Name prefix">
           <button type="submit">Filter</button>
           {% if view.object_query %}<a href="/">Clear</a>{% endif %}
         </div>
@@ -162,10 +162,10 @@
           </tbody>
         </table>
       </div>
-      {% if view.object_page_count > 1 %}
+      {% if view.previous_page_url or view.next_page_url %}
       <nav class="pagination" aria-label="Cached object pages">
-        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← Previous</a>{% else %}<span></span>{% endif %}
-        <span>Page {{ view.object_page }} of {{ view.object_page_count }}</span>
+        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← First page</a>{% else %}<span></span>{% endif %}
+        <span>Bounded cursor navigation</span>
         {% if view.next_page_url %}<a href="{{ view.next_page_url }}">Next →</a>{% else %}<span></span>{% endif %}
       </nav>
       {% endif %}
@@ -210,6 +210,6 @@
       {% endif %}
     </section>
   </main>
-  <footer>Cached knowledge remains visible when a remote system or worker is unavailable.</footer>
+  <footer>Cached knowledge remains visible when a remote system or worker is unavailable. Cursor pages are weakly consistent while refreshes commit; return to the first page to include concurrent changes.</footer>
 </body>
 </html>

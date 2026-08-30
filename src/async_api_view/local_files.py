@@ -273,6 +273,80 @@ class PrivateDirectoryGuard:
         self.close()
 
 
+class ExclusiveFileLock:
+    """Hold one private, process-scoped nonblocking filesystem lock."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = absolute_local_path(path)
+        self._descriptor: int | None = None
+        self._guard: RegularFileGuard | None = None
+        self._locked = False
+        prepare_private_directory(self.path.parent)
+        _assert_no_redirects(self.path)
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+        descriptor = os.open(self.path, flags, 0o600)
+        self._descriptor = descriptor
+        try:
+            harden_private_file(self.path)
+            self._guard = RegularFileGuard(self.path)
+            details = os.fstat(descriptor)
+            if (details.st_dev, details.st_ino) != self._guard.identity:
+                raise OSError("Rookery lock file identity changed while opening")
+            if details.st_size == 0:
+                os.write(descriptor, b"\0")
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            self._acquire()
+            self._guard.verify()
+        except BaseException:
+            self.close()
+            raise
+
+    def _acquire(self) -> None:
+        if self._descriptor is None:  # pragma: no cover - construction invariant
+            raise OSError("Rookery lock file is closed")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self._descriptor, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise OSError("another Rookery serve instance owns this database") from exc
+        self._locked = True
+
+    def close(self) -> None:
+        descriptor = self._descriptor
+        if descriptor is not None:
+            if self._locked:
+                try:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    self._locked = False
+            os.close(descriptor)
+            self._descriptor = None
+        if self._guard is not None:
+            self._guard.close()
+            self._guard = None
+
+    def __enter__(self) -> ExclusiveFileLock:
+        return self
+
+    def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
+        self.close()
+
+
 def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
     """Replace a Windows DACL with one current-user full-control grant."""
 

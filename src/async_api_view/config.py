@@ -14,6 +14,8 @@ MAX_CONFIG_BYTES = 1024 * 1024
 MAX_DATABRICKS_SYSTEMS = 32
 MIN_WORKER_POLL_SECONDS = 0.05
 _DATABRICKS_PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_AUTHORITY_FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
+PLACEHOLDER_AUTHORITY_FINGERPRINT = "0" * 64
 
 
 class ConfigError(ValueError):
@@ -70,6 +72,7 @@ class DatabricksSystemSettings:
     profile: str
     workspace_root: str
     config_id: str | None = None
+    authority_fingerprint: str = PLACEHOLDER_AUTHORITY_FINGERPRINT
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _bounded_text(self.name, "name", max_length=128))
@@ -82,6 +85,14 @@ class DatabricksSystemSettings:
             self,
             "workspace_root",
             _workspace_root(self.workspace_root, "workspace_root"),
+        )
+        object.__setattr__(
+            self,
+            "authority_fingerprint",
+            validate_authority_fingerprint(
+                self.authority_fingerprint,
+                "authority_fingerprint",
+            ),
         )
         if self.config_id is not None:
             object.__setattr__(self, "config_id", canonical_config_id(self.config_id))
@@ -111,6 +122,12 @@ class ProjectSettings:
         ]
         if len(set(config_ids)) != len(config_ids):
             raise ConfigError("Databricks system IDs must be unique")
+        authorities = [
+            (system.authority_fingerprint, system.workspace_root)
+            for system in self.databricks_systems
+        ]
+        if len(set(authorities)) != len(authorities):
+            raise ConfigError("Databricks workspace authorities must be unique")
 
 
 def _mapping(value: object, field_name: str) -> dict[str, Any]:
@@ -200,6 +217,15 @@ def validate_databricks_profile(value: object, field_name: str) -> str:
     return profile
 
 
+def validate_authority_fingerprint(value: object, field_name: str) -> str:
+    """Validate one SHA-256 remote-authority witness without accepting a raw host."""
+
+    fingerprint = _bounded_text(value, field_name, max_length=64).casefold()
+    if _AUTHORITY_FINGERPRINT.fullmatch(fingerprint) is None:
+        raise ConfigError(f"{field_name} must be a 64-character SHA-256 hexadecimal digest")
+    return fingerprint
+
+
 def load_settings(path: Path) -> ProjectSettings:
     """Load a bounded TOML file without accepting secrets or remote command data."""
     config_path = path.resolve(strict=True)
@@ -267,7 +293,13 @@ def load_settings(path: Path) -> ProjectSettings:
     for index, item in enumerate(databricks_raw):
         field_prefix = f"databricks[{index}]"
         entry = _mapping(item, field_prefix)
-        unknown = set(entry) - {"id", "name", "profile", "workspace_root"}
+        unknown = set(entry) - {
+            "id",
+            "name",
+            "profile",
+            "workspace_root",
+            "authority_fingerprint",
+        }
         if unknown:
             raise ConfigError(f"unknown {field_prefix} settings: {sorted(unknown)}")
         systems.append(
@@ -279,6 +311,10 @@ def load_settings(path: Path) -> ProjectSettings:
                 workspace_root=_workspace_root(
                     entry.get("workspace_root", "/"),
                     f"{field_prefix}.workspace_root",
+                ),
+                authority_fingerprint=validate_authority_fingerprint(
+                    entry.get("authority_fingerprint", PLACEHOLDER_AUTHORITY_FINGERPRINT),
+                    f"{field_prefix}.authority_fingerprint",
                 ),
                 config_id=(
                     canonical_config_id(entry["id"], f"{field_prefix}.id")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import re
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -44,6 +46,13 @@ DETAIL_ID = "11111111-1111-4111-8111-111111111111"
 CHILD_ID = "33333333-3333-4333-8333-333333333333"
 ACTION_ID = "22222222-2222-4222-8222-222222222222"
 SYSTEM_ID = "44444444-4444-4444-8444-444444444444"
+
+
+def page_cursor(*values: str) -> str:
+    encoded = json.dumps(values, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(encoded).rstrip(b"=").decode()
+
+
 OPTION = RefreshOption(
     system_id="system-1",
     target_kind="configured_scope",
@@ -147,7 +156,6 @@ class FakeBackend:
         return (
             replace(
                 self.object_view,
-                relationship_page=normalized_query.relationship_page,
                 object_type_filter=normalized_query.object_type,
             )
             if self.object_view is not None
@@ -161,7 +169,6 @@ class FakeBackend:
         self.alert_queries.append(normalized_query)
         return replace(
             self.alert_view,
-            page=normalized_query.page,
             event_type_filter=normalized_query.event_type,
             severity_filter=normalized_query.severity,
         )
@@ -173,7 +180,6 @@ class FakeBackend:
         self.action_queries.append(normalized_query)
         return replace(
             self.action_view,
-            page=normalized_query.page,
             state_filter=normalized_query.state,
             system_filter=normalized_query.system_id,
             action_filter=normalized_query.action_id,
@@ -580,7 +586,7 @@ def ready_alert_history() -> AlertHistoryView:
         page_count=2,
         page_start=1,
         page_end=50,
-        next_page_url="/alerts?page=2",
+        next_page_url="/alerts?after=cursor",
         loaded_at=NOW,
     )
 
@@ -608,7 +614,7 @@ def ready_action_history() -> ActionHistoryView:
         page_count=2,
         page_start=1,
         page_end=50,
-        next_page_url="/actions?page=2",
+        next_page_url="/actions?after=cursor",
         loaded_at=NOW,
     )
 
@@ -709,13 +715,27 @@ def test_failed_facet_links_redacted_action_without_hiding_cached_value() -> Non
     assert f"/actions/{ACTION_ID}" in response.text
 
 
-def test_dashboard_passes_bounded_filter_and_page_to_backend() -> None:
+def test_dashboard_passes_bounded_filter_and_cursor_to_backend() -> None:
     backend = FakeBackend(dashboard_view=ready_dashboard())
+    cursor = page_cursor("folder", DETAIL_ID)
 
-    response = client_for(backend).get("/?q=folder&page=2")
+    response = client_for(backend).get(f"/?q=folder&after={cursor}")
 
     assert response.status_code == 200
-    assert backend.dashboard_queries[-1] == DashboardQuery(object_query="folder", object_page=2)
+    assert backend.dashboard_queries[-1] == DashboardQuery(object_query="folder", cursor=cursor)
+
+
+def test_page_cursors_require_one_canonical_encoding() -> None:
+    uppercase_uuid = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+    with pytest.raises(ValueError, match="cursor"):
+        DashboardQuery(cursor=page_cursor(uppercase_uuid))
+    with pytest.raises(ValueError, match="cursor"):
+        ActionHistoryQuery(cursor=page_cursor(NOW.isoformat(), ACTION_ID))
+    noncanonical_json = (
+        base64.urlsafe_b64encode(f'[ "{DETAIL_ID}" ]'.encode()).rstrip(b"=").decode()
+    )
+    with pytest.raises(ValueError, match="cursor"):
+        DashboardQuery(cursor=noncanonical_json)
 
 
 @pytest.mark.parametrize(
@@ -726,6 +746,7 @@ def test_dashboard_passes_bounded_filter_and_page_to_backend() -> None:
         f"?page={'9' * 1000}",
         "?page=nan",
         "?page=1&page=2",
+        "?after=not-base64",
         "?unknown=value",
         f"?q={'x' * 129}",
     ],
@@ -742,7 +763,7 @@ def test_dashboard_rejects_invalid_query_contract(query: str) -> None:
 def test_object_page_shows_facets_containment_and_refresh_controls() -> None:
     backend = FakeBackend(object_view=ready_object_detail())
 
-    response = client_for(backend).get(f"/objects/{DETAIL_ID}?page=1&type=file")
+    response = client_for(backend).get(f"/objects/{DETAIL_ID}?type=file")
 
     assert response.status_code == 200
     assert "Facets and provenance" in response.text
@@ -788,6 +809,7 @@ def test_disabled_refresh_controls_render_matching_accessible_reasons() -> None:
         ("/objects/not-a-uuid", 404),
         (f"/objects/{DETAIL_ID}?page=0", 400),
         (f"/objects/{DETAIL_ID}?page=1&page=2", 400),
+        (f"/objects/{DETAIL_ID}?after=not-base64", 400),
         (f"/objects/{DETAIL_ID}?type=FILE", 400),
         (f"/objects/{DETAIL_ID}?type=file&type=folder", 400),
         (f"/objects/{DETAIL_ID}?unknown=x", 400),
@@ -870,15 +892,13 @@ def test_dashboard_shows_bounded_escaped_operational_alerts() -> None:
 def test_alert_history_shows_filters_paging_and_escaped_summaries() -> None:
     backend = FakeBackend(alert_view=ready_alert_history())
 
-    response = client_for(backend).get(
-        "/alerts?type=queue.coordinator.failed&severity=error&page=1"
-    )
+    response = client_for(backend).get("/alerts?type=queue.coordinator.failed&severity=error")
 
     assert response.status_code == 200
     assert "Alert history" in response.text
     assert "queue.coordinator.failed" in response.text
     assert "unknown_adapter_failure" in response.text
-    assert "/alerts?page=2" in response.text
+    assert "/alerts?after=cursor" in response.text
     assert f"/actions/{ACTION_ID}" in response.text
     assert '<script>alert("x")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
@@ -925,6 +945,7 @@ def test_operational_badges_preserve_semantic_scan_priority() -> None:
         "?page=0",
         "?page=10001",
         "?page=1000001",
+        "?after=not-base64",
         "?severity=debug",
         "?type=QUEUE.BAD",
         "?type=a&type=b",
@@ -1042,7 +1063,7 @@ def test_action_history_shows_filters_paging_and_escaped_diagnostics() -> None:
     assert "Action activity" in response.text
     assert "databricks.workspace.metadata.read" in response.text
     assert "downstream_rate_limit" in response.text
-    assert "/actions?page=2" in response.text
+    assert "/actions?after=cursor" in response.text
     assert (
         f"/actions/{ACTION_ID}?return=%2Factions%3Fstate%3Dretry_wait%26system%3D{SYSTEM_ID}"
         in response.text
@@ -1057,6 +1078,7 @@ def test_action_history_shows_filters_paging_and_escaped_diagnostics() -> None:
     [
         "?page=0",
         "?page=10001",
+        "?after=not-base64",
         "?state=unknown",
         "?system=not-a-uuid",
         "?action=not-a-uuid",
@@ -1084,14 +1106,20 @@ def test_action_history_returns_safe_unavailable_response() -> None:
 
 
 def test_action_detail_shows_bounded_escaped_attempts() -> None:
-    backend = FakeBackend(action_detail_view=replace(ready_action_detail(), attempt_total=101))
+    backend = FakeBackend(
+        action_detail_view=replace(
+            ready_action_detail(),
+            attempt_total=1,
+            attempts_truncated=True,
+        )
+    )
 
     response = client_for(backend).get(f"/actions/{ACTION_ID}")
 
     assert response.status_code == 200
     assert "Action detail" in response.text
     assert "Attempt 1" in response.text
-    assert "Showing latest 1 of 101" in response.text
+    assert "Showing latest 1 · more recorded" in response.text
     assert "downstream_rate_limit" in response.text
     assert '<script>alert("attempt")</script>' not in response.text
     assert "&lt;script&gt;alert" in response.text
@@ -1100,13 +1128,17 @@ def test_action_detail_shows_bounded_escaped_attempts() -> None:
 
 def test_action_detail_restores_valid_filtered_return_context() -> None:
     backend = FakeBackend(action_detail_view=ready_action_detail())
+    cursor = page_cursor(
+        NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        ACTION_ID,
+    )
 
     response = client_for(backend).get(
-        f"/actions/{ACTION_ID}?return=%2Factions%3Fstate%3Dfailed%26page%3D2"
+        f"/actions/{ACTION_ID}?return=%2Factions%3Fstate%3Dfailed%26after%3D{cursor}"
     )
 
     assert response.status_code == 200
-    assert 'href="/actions?state=failed&amp;page=2"' in response.text
+    assert f'href="/actions?state=failed&amp;after={cursor}"' in response.text
     assert backend.action_detail_ids == [ACTION_ID]
 
 
@@ -1118,7 +1150,7 @@ def test_action_detail_restores_valid_filtered_return_context() -> None:
         "?return=%2Factions%23fragment",
         "?return=%2Factions%3Funknown%3Dvalue",
         f"?return=%2Factions%3Faction%3D{ACTION_ID}%26state%3Dfailed",
-        "?return=%2Factions&return=%2Factions%3Fpage%3D2",
+        "?return=%2Factions&return=%2Factions%3Fafter%3Dcursor_2",
         "?unknown=value",
     ],
 )

@@ -19,7 +19,7 @@
     <section aria-labelledby="alerts-heading">
       <div class="section-heading">
         <div><p class="eyebrow">Durable and redacted</p><h2 id="alerts-heading">Alertable failures</h2></div>
-        <span class="count">{% if view.total %}{{ view.page_start }}-{{ view.page_end }} of {{ view.total }}{% else %}0{% endif %}</span>
+        <span class="count">Showing {{ view.alerts|length }} alerts{% if view.next_page_url %} · more available{% endif %}</span>
       </div>
       <form class="alert-toolbar" method="get" action="/alerts" aria-label="Filter alert history">
         <label>Event type<input name="type" value="{{ view.event_type_filter|display }}" maxlength="128" pattern="[a-z][a-z0-9_.-]{0,127}" placeholder="queue.coordinator.failed"></label>
@@ -41,10 +41,10 @@
         </article>
         {% endfor %}
       </div>
-      {% if view.page_count > 1 %}
+      {% if view.previous_page_url or view.next_page_url %}
       <nav class="pagination" aria-label="Alert history pages">
-        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← Previous</a>{% else %}<span></span>{% endif %}
-        <span>Page {{ view.page }} of {{ view.page_count }}</span>
+        {% if view.previous_page_url %}<a href="{{ view.previous_page_url }}">← First page</a>{% else %}<span></span>{% endif %}
+        <span>Bounded cursor navigation</span>
         {% if view.next_page_url %}<a href="{{ view.next_page_url }}">Next →</a>{% else %}<span></span>{% endif %}
       </nav>
       {% endif %}
@@ -53,6 +53,6 @@
       {% endif %}
     </section>
   </main>
-  <footer>Alert summaries are bounded and redacted before persistence.</footer>
+  <footer>Alert summaries are bounded and redacted before persistence. Cursor pages are weakly consistent; return to the first page to include concurrent alerts.</footer>
 </body>
 </html>

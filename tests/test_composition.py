@@ -6,6 +6,7 @@ import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import httpx2
@@ -16,6 +17,7 @@ from async_api_view.adapters.databricks import (
     CliInvocation,
     CliRunner,
     LifecyclePersistenceFailure,
+    workspace_authority_fingerprint,
 )
 from async_api_view.application import SystemBootstrapService
 from async_api_view.cli import _run_once
@@ -68,6 +70,10 @@ class FakeCliRunner(CliRunner):
 
     async def doctor(self) -> None:
         return None
+
+    def verify_profile_authority(self, *, profile: str, expected_fingerprint: str) -> None:
+        assert profile
+        assert len(expected_fingerprint) == 64
 
     async def run(self, invocation: CliInvocation, *, correlation_id: str) -> CliExecution:
         self.calls.append(invocation)
@@ -150,6 +156,7 @@ def settings(
     name: str = "test-workspace",
     profile: str = "TEST_PROFILE",
     workspace_root: str = "/",
+    authority_fingerprint: str = "1" * 64,
     worker_poll_seconds: float = 1.0,
 ) -> ProjectSettings:
     return ProjectSettings(
@@ -163,6 +170,7 @@ def settings(
                 name=name,
                 profile=profile,
                 workspace_root=workspace_root,
+                authority_fingerprint=authority_fingerprint,
             ),
         ),
     )
@@ -282,6 +290,59 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
     assert second.scopes[0].state == "deferred"
     assert second.scopes[0].eligible_at is not None
 
+    runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_profile_authority_mismatch_fails_before_remote_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_config = tmp_path / ".databrickscfg"
+    profile_config.write_text(
+        "[TEST_PROFILE]\nhost = https://workspace-b.example.com\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner(profile_config_path=profile_config)
+    runtime = build_runtime(
+        settings(
+            tmp_path,
+            authority_fingerprint=workspace_authority_fingerprint(
+                "https://workspace-a.example.com"
+            ),
+        ),
+        runner=runner,
+    )
+    runtime.worker_available = True
+    dashboard = await runtime.backend.dashboard()
+    option = next(
+        item
+        for item in dashboard.refresh_options
+        if item.capability_key == "databricks.workspace.children.read"
+        and item.target_kind == "configured_scope"
+    )
+    await runtime.backend.submit_refresh(
+        RefreshRequest(
+            system_id=option.system_id,
+            target_kind=option.target_kind,
+            target_id=option.target_id,
+            capability_key=option.capability_key,
+            facet=option.facet,
+        )
+    )
+    admitted = await runtime.coordinator.run_once()
+    assert admitted is not None and admitted.action_id is not None
+
+    async def unexpected_process(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("authority mismatch reached remote process creation")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_process)
+    assert await runtime.worker.run_once()
+
+    stored = runtime.store.get_stored_action(admitted.action_id)
+    assert stored is not None and stored.state.value == "failed"
+    assert stored.error_class == "adapter_contract_mismatch"
+    assert runtime.store.list_action_attempts(admitted.action_id) == ()
     runtime.store.close()
 
 
@@ -865,16 +926,27 @@ async def test_dashboard_reads_action_and_object_snapshots_once(
 
     calls = {"actions": 0, "objects": 0, "facet_actions": 0}
     list_actions = runtime.store.list_latest_system_activity
-    list_objects = runtime.store.list_objects_page
+    list_objects = runtime.store.list_objects_after
     list_facet_actions = runtime.store.list_latest_facet_actions
 
     def counted_actions() -> tuple[ActionActivityRecord, ...]:
         calls["actions"] += 1
         return list_actions()
 
-    def counted_objects(*, offset: int, limit: int, query: str = "") -> tuple[RemoteObject, ...]:
+    def counted_objects(
+        *,
+        after_name: str | None,
+        after_id: str | None,
+        limit: int,
+        query: str = "",
+    ) -> tuple[RemoteObject, ...]:
         calls["objects"] += 1
-        return list_objects(offset=offset, limit=limit, query=query)
+        return list_objects(
+            after_name=after_name,
+            after_id=after_id,
+            limit=limit,
+            query=query,
+        )
 
     def counted_facet_actions(
         object_ids: tuple[str, ...],
@@ -883,7 +955,7 @@ async def test_dashboard_reads_action_and_object_snapshots_once(
         return list_facet_actions(object_ids)
 
     monkeypatch.setattr(runtime.store, "list_latest_system_activity", counted_actions)
-    monkeypatch.setattr(runtime.store, "list_objects_page", counted_objects)
+    monkeypatch.setattr(runtime.store, "list_objects_after", counted_objects)
     monkeypatch.setattr(runtime.store, "list_latest_facet_actions", counted_facet_actions)
 
     rendered = await runtime.backend.dashboard()
@@ -959,7 +1031,10 @@ def test_facet_view_distinguishes_due_failed_refreshing_and_current(tmp_path: Pa
 
 
 @pytest.mark.anyio
-async def test_dashboard_paginates_and_filters_large_cached_inventory(tmp_path: Path) -> None:
+async def test_dashboard_paginates_and_filters_large_cached_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
     observed_at = datetime(2026, 8, 28, tzinfo=UTC)
     system_id = runtime.store.list_systems()[0].system_id
@@ -1019,20 +1094,32 @@ async def test_dashboard_paginates_and_filters_large_cached_inventory(tmp_path: 
             else None
         )
     )
+    monkeypatch.setattr(
+        runtime.store,
+        "count_objects",
+        lambda **_kwargs: pytest.fail("dashboard performed an exact object count"),
+    )
     first = await runtime.backend.dashboard(DashboardQuery())
     runtime.store._connection.set_trace_callback(None)
-    last = await runtime.backend.dashboard(DashboardQuery(object_page=11))
+    pages = [first]
+    while pages[-1].next_page_url is not None:
+        cursor = parse_qs(urlsplit(pages[-1].next_page_url).query)["after"][0]
+        pages.append(await runtime.backend.dashboard(DashboardQuery(cursor=cursor)))
+    last = pages[-1]
     filtered = await runtime.backend.dashboard(DashboardQuery(object_query="object-499"))
 
-    assert first.object_total == 502
+    assert first.object_total == 50
     assert len(first.objects) == 50
-    assert first.object_page_count == 11
+    assert first.object_page_count == 2
     assert first.previous_page_url is None
-    assert first.next_page_url == "/?page=2"
+    assert first.next_page_url is not None and first.next_page_url.startswith("/?after=")
     assert len(selects) <= 70
+    assert not any("COUNT(" in statement.upper() for statement in selects)
+    assert sum(len(page.objects) for page in pages) == 502
+    assert len({item.object_id for page in pages for item in page.objects}) == 502
     assert len(last.objects) == 2
-    assert last.object_page_start == 501
-    assert last.object_page_end == 502
+    assert last.object_page_start == 1
+    assert last.object_page_end == 2
     assert last.next_page_url is None
     assert filtered.object_total == 1
     assert [item.name for item in filtered.objects] == ["object-499"]
@@ -1048,29 +1135,43 @@ async def test_dashboard_paginates_and_filters_large_cached_inventory(tmp_path: 
             facet=object_refresh.facet,
         )
     )
-    first_detail = await runtime.backend.object_detail(root_scope.object_id)
-    last_detail = await runtime.backend.object_detail(
-        root_scope.object_id, ObjectDetailQuery(relationship_page=3)
+    monkeypatch.setattr(
+        runtime.store,
+        "count_related_objects_sync",
+        lambda *_args, **_kwargs: pytest.fail("object detail performed an exact count"),
     )
+    first_detail = await runtime.backend.object_detail(root_scope.object_id)
     assert first_detail is not None and len(first_detail.children) == 50
-    assert first_detail.relationship_total == 119
-    assert first_detail.next_page_url == f"/objects/{root_scope.object_id}?page=2"
-    assert last_detail is not None and len(last_detail.children) == 19
-    assert last_detail.relationship_page_start == 101
-    assert last_detail.next_page_url is None
+    assert first_detail.relationship_total == 50
+    assert first_detail.next_page_url is not None
+    detail_pages = [first_detail]
+    while detail_pages[-1].next_page_url is not None:
+        cursor = parse_qs(urlsplit(detail_pages[-1].next_page_url).query)["after"][0]
+        page = await runtime.backend.object_detail(
+            root_scope.object_id,
+            ObjectDetailQuery(cursor=cursor),
+        )
+        assert page is not None
+        detail_pages.append(page)
+    assert [len(page.children) for page in detail_pages] == [50, 50, 19]
+    assert len({child.object_id for page in detail_pages for child in page.children}) == 119
     type_filtered = await runtime.backend.object_detail(
         root_scope.object_id,
         ObjectDetailQuery(object_type="file"),
     )
     assert type_filtered is not None
-    assert type_filtered.relationship_total == 119
+    assert type_filtered.relationship_total == 50
     assert type_filtered.object_type_filter == "file"
-    assert type_filtered.next_page_url == (f"/objects/{root_scope.object_id}?type=file&page=2")
+    assert type_filtered.next_page_url is not None
+    assert f"/objects/{root_scope.object_id}?type=file&amp;" not in type_filtered.next_page_url
+    assert type_filtered.next_page_url.startswith(
+        f"/objects/{root_scope.object_id}?type=file&after="
+    )
     runtime.store.close()
 
 
 @pytest.mark.anyio
-async def test_configuration_reconciliation_rotates_profile_and_disables_removed_system(
+async def test_configuration_reconciliation_uses_verified_authority_and_disables_removed(
     tmp_path: Path,
 ) -> None:
     first = build_runtime(
@@ -1099,24 +1200,44 @@ async def test_configuration_reconciliation_rotates_profile_and_disables_removed
         runner=FakeCliRunner(b"[]"),
     )
     systems = rotated.store.list_systems()
-    assert [(system.system_id, system.display_name, system.enabled) for system in systems] == [
-        (initial_system_id, "Renamed", True)
-    ]
+    assert len(systems) == 1
+    enabled = systems[0]
+    assert enabled.enabled
+    assert enabled.system_id == initial_system_id
+    assert enabled.display_name == "Renamed"
     assert (
-        rotated.store.list_connection_bindings(system_id=initial_system_id)[0].non_secret_settings[
+        rotated.store.list_connection_bindings(system_id=enabled.system_id)[0].non_secret_settings[
             "profile"
         ]
         == "PROFILE_TWO"
     )
-    rotated.worker_available = True
-    rotated_dashboard = await rotated.backend.dashboard()
+    rotated.store.close()
+
+    changed = build_runtime(
+        settings(
+            tmp_path,
+            name="Different authority",
+            profile="PROFILE_TWO",
+            workspace_root="/Shared",
+            authority_fingerprint="2" * 64,
+        ),
+        runner=FakeCliRunner(b"[]"),
+    )
+    changed_systems = changed.store.list_systems()
+    changed_enabled = next(system for system in changed_systems if system.enabled)
+    assert changed_enabled.system_id != initial_system_id
+    assert [system.system_id for system in changed_systems if not system.enabled] == [
+        initial_system_id
+    ]
+    changed.worker_available = True
+    rotated_dashboard = await changed.backend.dashboard()
     rotated_option = next(
         option
         for option in rotated_dashboard.refresh_options
         if option.capability_key == "databricks.workspace.children.read"
         and option.target_kind == "configured_scope"
     )
-    await rotated.backend.submit_refresh(
+    await changed.backend.submit_refresh(
         RefreshRequest(
             system_id=rotated_option.system_id,
             target_kind=rotated_option.target_kind,
@@ -1125,9 +1246,22 @@ async def test_configuration_reconciliation_rotates_profile_and_disables_removed
             facet=rotated_option.facet,
         )
     )
-    admitted = await rotated.coordinator.run_once()
+    admitted = await changed.coordinator.run_once()
     assert admitted is not None and admitted.action_id is not None
-    rotated.store.close()
+    changed.store.close()
+
+    restored = build_runtime(
+        settings(tmp_path, name="Original again", profile="PROFILE_ONE", workspace_root="/Shared"),
+        runner=FakeCliRunner(b"[]"),
+    )
+    restored_systems = restored.store.list_systems()
+    assert [system.system_id for system in restored_systems if system.enabled] == [
+        initial_system_id
+    ]
+    assert [system.system_id for system in restored_systems if not system.enabled] == [
+        changed_enabled.system_id
+    ]
+    restored.store.close()
 
     removed_runner = FakeCliRunner(b"[]")
     removed = build_runtime(
@@ -1141,8 +1275,8 @@ async def test_configuration_reconciliation_rotates_profile_and_disables_removed
     removed_dashboard = await removed.backend.dashboard()
 
     assert removed_dashboard.objects
-    assert len(removed_dashboard.systems) == 1
-    assert not removed_dashboard.systems[0].enabled
+    assert len(removed_dashboard.systems) == 2
+    assert all(not system.enabled for system in removed_dashboard.systems)
     assert removed_dashboard.refresh_options == ()
     with pytest.raises(ValueError, match="not registered"):
         await removed.backend.submit_refresh(
@@ -1186,9 +1320,13 @@ def test_explicit_config_id_adopts_legacy_system_identity(tmp_path: Path) -> Non
         ),
         runner=FakeCliRunner(b"[]"),
     )
-    assert [(system.system_id, system.enabled) for system in adopted.store.list_systems()] == [
-        (legacy_system_id, True)
+    adopted_systems = adopted.store.list_systems()
+    assert len(adopted_systems) == 2
+    assert [system.system_id for system in adopted_systems if not system.enabled] == [
+        legacy_system_id
     ]
+    adopted_system_id = next(system.system_id for system in adopted_systems if system.enabled)
+    assert adopted_system_id != legacy_system_id
     adopted.store.close()
 
     renamed = build_runtime(
@@ -1201,11 +1339,51 @@ def test_explicit_config_id_adopts_legacy_system_identity(tmp_path: Path) -> Non
         ),
         runner=FakeCliRunner(b"[]"),
     )
+    renamed_systems = renamed.store.list_systems()
+    assert len(renamed_systems) == 2
     assert [
-        (system.system_id, system.display_name, system.enabled)
-        for system in renamed.store.list_systems()
-    ] == [(legacy_system_id, "Renamed", True)]
+        (system.system_id, system.display_name) for system in renamed_systems if not system.enabled
+    ] == [(legacy_system_id, "Legacy name")]
+    assert [system.display_name for system in renamed_systems if system.enabled] == ["Renamed"]
+    assert next(system.system_id for system in renamed_systems if system.enabled) == (
+        adopted_system_id
+    )
     renamed.store.close()
+
+
+def test_no_id_legacy_cache_is_not_blessed_by_a_new_authority_fingerprint(
+    tmp_path: Path,
+) -> None:
+    legacy = build_runtime(
+        settings(
+            tmp_path,
+            config_id=None,
+            name="Legacy",
+            profile="PROFILE",
+            workspace_root="/Shared",
+            authority_fingerprint="0" * 64,
+        ),
+        runner=FakeCliRunner(b"[]"),
+    )
+    legacy_id = next(system.system_id for system in legacy.store.list_systems())
+    legacy.store.close()
+
+    verified = build_runtime(
+        settings(
+            tmp_path,
+            config_id=None,
+            name="Legacy",
+            profile="PROFILE",
+            workspace_root="/Shared",
+            authority_fingerprint="2" * 64,
+        ),
+        runner=FakeCliRunner(b"[]"),
+    )
+    systems = verified.store.list_systems()
+    assert len(systems) == 2
+    assert [system.system_id for system in systems if not system.enabled] == [legacy_id]
+    assert next(system.system_id for system in systems if system.enabled) != legacy_id
+    verified.store.close()
 
 
 def test_case_only_config_id_change_preserves_identity_and_cache(tmp_path: Path) -> None:
@@ -1243,6 +1421,20 @@ def test_direct_settings_reject_non_ascii_config_id_before_database_creation(
         settings(tmp_path, config_id="İ")
 
     assert not (tmp_path / "state.sqlite3").exists()
+
+
+def test_unicode_workspace_root_keeps_authority_mapping_bounded(tmp_path: Path) -> None:
+    runtime = build_runtime(
+        settings(tmp_path, workspace_root=f"/{'é' * 400}"),
+        runner=FakeCliRunner(b"[]"),
+    )
+
+    mapping = runtime.store._connection.execute(
+        "SELECT authority_key FROM configured_system_identities"
+    ).fetchone()[0]
+    assert mapping.startswith("databricks-host-v1:")
+    assert len(mapping) < 128
+    runtime.store.close()
 
 
 def test_workspace_root_change_creates_new_authority_and_pauses_predecessor(
@@ -1740,7 +1932,10 @@ async def test_repeated_worker_loop_failures_do_not_flood_events(tmp_path: Path)
 
 
 @pytest.mark.anyio
-async def test_alert_history_pages_and_filters_durable_events(tmp_path: Path) -> None:
+async def test_alert_history_pages_and_filters_durable_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
     started = datetime(2026, 8, 28, tzinfo=UTC)
     for index in range(120):
@@ -1751,24 +1946,37 @@ async def test_alert_history_pages_and_filters_durable_events(tmp_path: Path) ->
             summary=f"Runtime failure {index}",
             occurred_at=started + timedelta(seconds=index),
         )
+    monkeypatch.setattr(
+        runtime.store,
+        "count_alertable_events",
+        lambda **_kwargs: pytest.fail("alert history performed an exact count"),
+    )
 
     first = await runtime.backend.alert_history()
+    filtered_first = await runtime.backend.alert_history(
+        AlertHistoryQuery(
+            event_type="queue.coordinator.failed",
+            severity="error",
+        )
+    )
+    assert filtered_first.next_page_url is not None
+    filtered_cursor = parse_qs(urlsplit(filtered_first.next_page_url).query)["after"][0]
     filtered = await runtime.backend.alert_history(
         AlertHistoryQuery(
-            page=2,
+            cursor=filtered_cursor,
             event_type="queue.coordinator.failed",
             severity="error",
         )
     )
 
-    assert first.total == 120
+    assert first.total == 50
     assert len(first.alerts) == 50
     assert first.alerts[0].summary == "Runtime failure 119"
-    assert first.next_page_url == "/alerts?page=2"
-    assert filtered.total == 60
+    assert first.next_page_url is not None and first.next_page_url.startswith("/alerts?after=")
+    assert filtered.total == 10
     assert len(filtered.alerts) == 10
-    assert filtered.page_start == 51
-    assert filtered.page_end == 60
+    assert filtered.page_start == 1
+    assert filtered.page_end == 10
     assert filtered.previous_page_url == ("/alerts?type=queue.coordinator.failed&severity=error")
     assert filtered.next_page_url is None
     assert {alert.event_type for alert in filtered.alerts} == {"queue.coordinator.failed"}
@@ -1800,28 +2008,38 @@ async def test_action_history_maps_bounded_pages_and_preserves_filters(
         for index in range(25)
     )
 
-    monkeypatch.setattr(runtime.store, "count_action_activity", lambda **_filters: 75)
+    cursor_time = created_at + timedelta(seconds=75)
+    cursor_id = str(uuid4())
+    monkeypatch.setattr(
+        runtime.store,
+        "count_action_activity",
+        lambda **_kwargs: pytest.fail("action history performed an exact count"),
+    )
 
     def action_page(**filters: object) -> tuple[ActionActivityRecord, ...]:
         assert filters == {
-            "offset": 50,
-            "limit": 50,
+            "after_created_at": cursor_time,
+            "after_action_id": cursor_id,
+            "limit": 51,
             "system_id": system.system_id,
             "state": "failed",
             "action_id": None,
         }
         return records
 
-    monkeypatch.setattr(runtime.store, "list_action_activity_page", action_page)
-
-    view = await runtime.backend.action_history(
-        ActionHistoryQuery(page=2, state="failed", system_id=system.system_id)
+    monkeypatch.setattr(runtime.store, "list_action_activity_after", action_page)
+    cursor = runtime.backend._cursor(
+        (cursor_time.isoformat(timespec="microseconds").replace("+00:00", "Z"), cursor_id)
     )
 
-    assert view.total == 75
+    view = await runtime.backend.action_history(
+        ActionHistoryQuery(cursor=cursor, state="failed", system_id=system.system_id)
+    )
+
+    assert view.total == 25
     assert len(view.actions) == 25
-    assert view.page_start == 51
-    assert view.page_end == 75
+    assert view.page_start == 1
+    assert view.page_end == 25
     assert view.actions[0].system_name == system.display_name
     assert view.actions[0].diagnostic == "redacted failure"
     assert view.previous_page_url == f"/actions?state=failed&system={system.system_id}"
@@ -1867,11 +2085,15 @@ async def test_action_detail_maps_bounded_attempt_evidence(
 
     def action_attempts(requested_id: str, *, limit: int) -> tuple[ActionAttemptRecord, ...]:
         assert requested_id == action_id
-        assert limit == 100
+        assert limit == 101
         return (attempt,)
 
     monkeypatch.setattr(runtime.store, "list_action_attempts", action_attempts)
-    monkeypatch.setattr(runtime.store, "count_action_attempts", lambda _action_id: 1)
+    monkeypatch.setattr(
+        runtime.store,
+        "count_action_attempts",
+        lambda _action_id: pytest.fail("action detail performed an exact attempt count"),
+    )
 
     view = await runtime.backend.action_detail(action_id)
 
@@ -1880,6 +2102,7 @@ async def test_action_detail_maps_bounded_attempt_evidence(
     assert view.action.retry_at == action.retry_at
     assert len(view.attempts) == 1
     assert view.attempt_total == 1
+    assert not view.attempts_truncated
     assert view.attempts[0].ordinal == 1
     assert view.attempts[0].diagnostic == "redacted attempt"
     runtime.store.close()

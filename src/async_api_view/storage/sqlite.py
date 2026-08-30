@@ -8,7 +8,6 @@ by leases; the transactions that claim a lease or elect an active action use
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
@@ -300,22 +299,43 @@ def _normalized_schema_sql(value: str) -> str:
 
 
 @cache
-def _schema_ddl_through(final_version: str) -> tuple[tuple[str, str, str, str], ...]:
+def _schema_ddl_through(
+    final_version: str,
+    *,
+    include_runtime_repairs: bool = False,
+) -> tuple[tuple[str, str, str, str], ...]:
     """Derive authoritative table/index DDL, including constraints and predicates."""
 
     with closing(sqlite3.connect(":memory:")) as reference:
+        reference.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
         for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
             reference.executescript(migration.read_text(encoding="utf-8"))
             if migration.stem == final_version:
                 break
         else:  # pragma: no cover - source packaging invariant
             raise RuntimeError(f"unknown schema DDL version {final_version}")
+        if include_runtime_repairs:
+            for index_name, (
+                _table,
+                _keys,
+                _partial,
+                statement,
+            ) in _REQUIRED_RUNTIME_INDEXES.items():
+                reference.execute(f'DROP INDEX IF EXISTS "{index_name}"')
+                reference.execute(statement)
         return tuple(
             (row[0], row[1], row[2], _normalized_schema_sql(row[3]))
             for row in reference.execute(
                 """
                 SELECT type, name, tbl_name, sql FROM sqlite_schema
-                WHERE type IN ('table', 'index', 'trigger')
+                WHERE type IN ('table', 'index', 'trigger', 'view')
                   AND name NOT LIKE 'sqlite_%'
                   AND sql IS NOT NULL
                 ORDER BY type, name
@@ -369,6 +389,23 @@ def _kind_for_application_id(application_id: int) -> _DatabaseKind:
     return _DatabaseKind.MARKED if application_id == _APPLICATION_ID else _DatabaseKind.MARKERLESS
 
 
+def _schema_ddl(connection: sqlite3.Connection) -> dict[tuple[str, str], tuple[str, str]]:
+    return {
+        (row["type"], row["name"]): (
+            row["tbl_name"],
+            _normalized_schema_sql(row["sql"]),
+        )
+        for row in connection.execute(
+            """
+            SELECT type, name, tbl_name, sql FROM sqlite_schema
+            WHERE type IN ('table', 'index', 'trigger', 'view')
+              AND name NOT LIKE 'sqlite_%'
+              AND sql IS NOT NULL
+            """
+        )
+    }
+
+
 def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind:
     """Reject foreign or incompatible SQLite state without mutating it."""
 
@@ -411,6 +448,8 @@ def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind
     if not versions:
         if tables != {"schema_migrations"}:
             raise sqlite3.DatabaseError("Rookery database schema is incomplete")
+        if set(_schema_ddl(connection)) != {("table", "schema_migrations")}:
+            raise sqlite3.DatabaseError("Rookery migration ledger schema is incompatible")
         return _kind_for_application_id(application_id)
     if versions[0] != "0001_initial":
         raise sqlite3.DatabaseError("Rookery initial migration is not recorded")
@@ -432,6 +471,15 @@ def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind
         }
         if not expected_signature.issubset(actual_signature):
             raise sqlite3.DatabaseError(f"Rookery {table_name} schema is incompatible")
+    expected_ddl = {
+        (object_type, name): (table_name, sql)
+        for object_type, name, table_name, sql in _schema_ddl_through(versions[-1])
+    }
+    actual_ddl = _schema_ddl(connection)
+    allowed_runtime_indexes = {("index", name) for name in _REQUIRED_RUNTIME_INDEXES}
+    unexpected = set(actual_ddl) - set(expected_ddl) - allowed_runtime_indexes
+    if unexpected:
+        raise sqlite3.DatabaseError("Rookery database contains an unexpected schema object")
     return _kind_for_application_id(application_id)
 
 
@@ -651,7 +699,7 @@ def _object_search_pattern(query: str) -> str | None:
         return None
     require_text(query, "object_query", max_length=128)
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    return f"{escaped}%"
 
 
 def _json_text(value: object, *, field_name: str) -> str:
@@ -1041,22 +1089,17 @@ class SQLiteStore:
             raise RuntimeError("Rookery migrations are unavailable")
         expected_ddl = {
             (object_type, name): (table_name, sql)
-            for object_type, name, table_name, sql in _schema_ddl_through(migrations[-1].stem)
-        }
-        actual_ddl = {
-            (row["type"], row["name"]): (
-                row["tbl_name"],
-                _normalized_schema_sql(row["sql"]),
-            )
-            for row in self._connection.execute(
-                """
-                SELECT type, name, tbl_name, sql FROM sqlite_schema
-                WHERE type IN ('table', 'index', 'trigger')
-                  AND name NOT LIKE 'sqlite_%'
-                  AND sql IS NOT NULL
-                """
+            for object_type, name, table_name, sql in _schema_ddl_through(
+                migrations[-1].stem,
+                include_runtime_repairs=True,
             )
         }
+        actual_ddl = _schema_ddl(self._connection)
+        expected_ddl.pop(("table", "schema_migrations"), None)
+        actual_ddl.pop(("table", "schema_migrations"), None)
+        unexpected = set(actual_ddl) - set(expected_ddl)
+        if unexpected:
+            raise sqlite3.DatabaseError("Rookery current schema has an unexpected object")
         for identity, expected in expected_ddl.items():
             if actual_ddl.get(identity) != expected:
                 raise sqlite3.DatabaseError(
@@ -1315,9 +1358,12 @@ class SQLiteStore:
             connection.execute(
                 """
                 DELETE FROM configured_system_identities
-                WHERE system_kind = ? AND config_id = ? COLLATE NOCASE AND authority_key = ?
+                WHERE system_kind = ? AND (
+                    (config_id = ? COLLATE NOCASE AND authority_key = ?)
+                    OR system_id = ?
+                )
                 """,
-                (system_kind, config_id, authority_key),
+                (system_kind, config_id, authority_key, system_id),
             )
             connection.execute(
                 """
@@ -1773,6 +1819,51 @@ class SQLiteStore:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._object_from_row(row) for row in rows)
 
+    def list_objects_after(
+        self,
+        *,
+        after_name: str | None,
+        after_id: str | None,
+        limit: int,
+        query: str = "",
+    ) -> tuple[RemoteObject, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 101:
+            raise ValueError("object cursor limit must be between 1 and 101")
+        if query and (after_name is None) != (after_id is None):
+            raise ValueError("filtered object cursor is incomplete")
+        if not query and after_name is not None:
+            raise ValueError("unfiltered object cursor has an unexpected name")
+        if after_name is not None:
+            require_text(after_name, "object cursor name", max_length=512)
+        if after_id is not None:
+            after_id = require_uuid(after_id, "object cursor ID")
+        pattern = _object_search_pattern(query)
+        conditions: list[str] = []
+        parameters: list[object] = []
+        if pattern is not None:
+            conditions.append("display_name LIKE ? ESCAPE '\\' COLLATE NOCASE")
+            parameters.append(pattern)
+            if after_name is not None:
+                conditions.append(
+                    "(display_name COLLATE NOCASE, object_id) > (? COLLATE NOCASE, ?)"
+                )
+                parameters.extend((after_name, after_id))
+        if after_id is not None and pattern is None:
+            conditions.append("object_id > ?")
+            parameters.append(after_id)
+        statement = "SELECT * FROM remote_objects"
+        if conditions:
+            statement += " WHERE " + " AND ".join(conditions)
+        statement += (
+            " ORDER BY display_name COLLATE NOCASE, object_id LIMIT ?"
+            if pattern is not None
+            else " ORDER BY object_id LIMIT ?"
+        )
+        parameters.append(limit)
+        with self._lock:
+            rows = self._connection.execute(statement, tuple(parameters)).fetchall()
+        return tuple(self._object_from_row(row) for row in rows)
+
     def _get_facet_row(self, object_id: str, facet: str) -> sqlite3.Row | None:
         return self._connection.execute(
             "SELECT * FROM facets WHERE object_id = ? AND facet = ?", (object_id, facet)
@@ -1963,6 +2054,7 @@ class SQLiteStore:
             "relationships.presence AS r_presence, "
             "relationships.observed_at AS r_observed_at, "
             "relationships.supporting_observation_id AS r_supporting_observation_id, "
+            "relationships.supporting_observation_id AS r_supporting_observation_id, "
             "objects.* FROM relationships AS relationships "
             "INNER JOIN remote_objects AS objects "
             "ON objects.object_id = relationships.object_id "
@@ -1978,6 +2070,65 @@ class SQLiteStore:
         statement += " ORDER BY relationships.object_id LIMIT ? OFFSET ?"
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
+        return tuple(
+            RelatedObjectRecord(
+                relationship=RelationshipState(
+                    relationship_id=row["r_relationship_id"],
+                    system_id=row["r_system_id"],
+                    subject_id=row["r_subject_id"],
+                    predicate=row["r_predicate"],
+                    object_id=row["r_object_id"],
+                    presence=PresenceState(row["r_presence"]),
+                    observed_at=_dt(row["r_observed_at"]),  # type: ignore[arg-type]
+                    supporting_observation_id=row["r_supporting_observation_id"],
+                ),
+                object=self._object_from_row(row),
+            )
+            for row in rows
+        )
+
+    def list_related_objects_after_sync(
+        self,
+        subject_id: str,
+        *,
+        after_id: str | None,
+        limit: int,
+        predicate: str = "contains",
+        object_type: str | None = None,
+    ) -> tuple[RelatedObjectRecord, ...]:
+        subject_id = require_uuid(subject_id, "subject_id")
+        require_contract_key(predicate, "predicate")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 101:
+            raise ValueError("relationship cursor limit must be between 1 and 101")
+        if after_id is not None:
+            after_id = require_uuid(after_id, "relationship cursor ID")
+        statement = (
+            "SELECT relationships.relationship_id AS r_relationship_id, "
+            "relationships.system_id AS r_system_id, "
+            "relationships.subject_id AS r_subject_id, "
+            "relationships.predicate AS r_predicate, "
+            "relationships.object_id AS r_object_id, "
+            "relationships.presence AS r_presence, "
+            "relationships.observed_at AS r_observed_at, "
+            "relationships.supporting_observation_id AS r_supporting_observation_id, "
+            "objects.* FROM relationships AS relationships "
+            "INDEXED BY ix_relationships_subject_predicate "
+            "INNER JOIN remote_objects AS objects ON objects.object_id = relationships.object_id "
+            "WHERE relationships.subject_id = ? AND relationships.predicate = ? "
+            "AND relationships.presence = 'present'"
+        )
+        parameters: list[object] = [subject_id, predicate]
+        if object_type is not None:
+            require_contract_key(object_type, "object_type")
+            statement += " AND objects.object_type = ?"
+            parameters.append(object_type)
+        if after_id is not None:
+            statement += " AND relationships.object_id > ?"
+            parameters.append(after_id)
+        statement += " ORDER BY relationships.object_id LIMIT ?"
+        parameters.append(limit)
+        with self._lock:
+            rows = self._connection.execute(statement, tuple(parameters)).fetchall()
         return tuple(
             RelatedObjectRecord(
                 relationship=RelationshipState(
@@ -2488,35 +2639,45 @@ class SQLiteStore:
         now_text = _utc_text(now)
         with self._immediate_transaction() as connection:
             promoted = 0
-            result = connection.execute(
-                """
-                UPDATE refresh_intent_scopes
-                SET state = 'queued', eligible_at = NULL
-                WHERE intent_scope_id IN (
-                    SELECT intent_scope_id FROM refresh_intent_scopes
-                        INDEXED BY ix_refresh_intent_scopes_deferred_due
-                    WHERE state = 'deferred' AND eligible_at IS NULL
-                    LIMIT ?
+            for priority in range(100, -1, -1):
+                remaining = _MAX_DUE_PROMOTIONS_PER_CLAIM - promoted
+                if remaining == 0:
+                    break
+                result = connection.execute(
+                    """
+                    UPDATE refresh_intent_scopes
+                    SET state = 'queued', eligible_at = NULL
+                    WHERE intent_scope_id IN (
+                        SELECT intent_scope_id FROM refresh_intent_scopes
+                            INDEXED BY ix_refresh_intent_scopes_deferred_priority_due
+                        WHERE state = 'deferred' AND queue_priority = ?
+                          AND eligible_at IS NULL
+                        ORDER BY eligible_at, queue_requested_at, intent_scope_id
+                        LIMIT ?
+                    )
+                    """,
+                    (priority, remaining),
                 )
-                """,
-                (_MAX_DUE_PROMOTIONS_PER_CLAIM,),
-            )
-            promoted += result.rowcount
-            remaining = _MAX_DUE_PROMOTIONS_PER_CLAIM - promoted
-            result = connection.execute(
-                """
-                UPDATE refresh_intent_scopes
-                SET state = 'queued', eligible_at = NULL
-                WHERE intent_scope_id IN (
-                    SELECT intent_scope_id FROM refresh_intent_scopes
-                        INDEXED BY ix_refresh_intent_scopes_deferred_due
-                    WHERE state = 'deferred' AND eligible_at <= ?
-                    LIMIT ?
+                promoted += result.rowcount
+                remaining = _MAX_DUE_PROMOTIONS_PER_CLAIM - promoted
+                if remaining == 0:
+                    break
+                result = connection.execute(
+                    """
+                    UPDATE refresh_intent_scopes
+                    SET state = 'queued', eligible_at = NULL
+                    WHERE intent_scope_id IN (
+                        SELECT intent_scope_id FROM refresh_intent_scopes
+                            INDEXED BY ix_refresh_intent_scopes_deferred_priority_due
+                        WHERE state = 'deferred' AND queue_priority = ?
+                          AND eligible_at <= ?
+                        ORDER BY eligible_at, queue_requested_at, intent_scope_id
+                        LIMIT ?
+                    )
+                    """,
+                    (priority, now_text, remaining),
                 )
-                """,
-                (now_text, remaining),
-            )
-            promoted += result.rowcount
+                promoted += result.rowcount
             remaining = _MAX_DUE_PROMOTIONS_PER_CLAIM - promoted
             result = connection.execute(
                 """
@@ -2547,8 +2708,7 @@ class SQLiteStore:
         if lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
         leased_until = now + lease_duration
-        while self._promote_due_intent_scopes(now):
-            await asyncio.sleep(0)
+        self._promote_due_intent_scopes(now)
         with self._immediate_transaction() as connection:
             while True:
                 row = connection.execute(
@@ -2985,8 +3145,8 @@ class SQLiteStore:
         self, action_id: str, *, limit: int = 100
     ) -> tuple[ActionAttemptRecord, ...]:
         action_id = require_uuid(action_id, "action_id")
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
-            raise ValueError("attempt limit must be between 1 and 100")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 101:
+            raise ValueError("attempt limit must be between 1 and 101")
         with self._lock:
             rows = self._connection.execute(
                 """
@@ -3173,6 +3333,53 @@ class SQLiteStore:
             parameters = (system_id, state, limit, offset)
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
+        return tuple(self._action_activity_from_row(row) for row in rows)
+
+    def list_action_activity_after(
+        self,
+        *,
+        after_created_at: datetime | None,
+        after_action_id: str | None,
+        limit: int,
+        system_id: str | None = None,
+        state: str | None = None,
+        action_id: str | None = None,
+    ) -> tuple[ActionActivityRecord, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 101:
+            raise ValueError("action cursor limit must be between 1 and 101")
+        if (after_created_at is None) != (after_action_id is None):
+            raise ValueError("action cursor is incomplete")
+        system_id, state, action_id = self._validate_action_activity_filters(
+            system_id=system_id,
+            state=state,
+            action_id=action_id,
+        )
+        conditions: list[str] = []
+        parameters: list[object] = []
+        if action_id is not None:
+            conditions.append("action_id = ?")
+            parameters.append(action_id)
+        else:
+            if system_id is not None:
+                conditions.append("system_id = ?")
+                parameters.append(system_id)
+            if state is not None:
+                conditions.append("state = ?")
+                parameters.append(state)
+            if after_created_at is not None:
+                after_action_id = require_uuid(after_action_id, "action cursor ID")  # type: ignore[arg-type]
+                conditions.append(
+                    "(record_created_at < ? OR (record_created_at = ? AND action_id > ?))"
+                )
+                timestamp = _utc_text(require_utc(after_created_at, "action cursor time"))
+                parameters.extend((timestamp, timestamp, after_action_id))
+        statement = "SELECT * FROM adapter_actions"
+        if conditions:
+            statement += " WHERE " + " AND ".join(conditions)
+        statement += " ORDER BY record_created_at DESC, action_id LIMIT ?"
+        parameters.append(limit)
+        with self._lock:
+            rows = self._connection.execute(statement, tuple(parameters)).fetchall()
         return tuple(self._action_activity_from_row(row) for row in rows)
 
     def list_dashboard_actions(self) -> tuple[StoredAction, ...]:
@@ -3496,8 +3703,7 @@ class SQLiteStore:
         now = require_utc(now, "now")
         lease_id = str(uuid4())
         leased_until = now + _DEFAULT_LEASE
-        while self._promote_due_actions(adapter_key=adapter_key, now=now):
-            await asyncio.sleep(0)
+        self._promote_due_actions(adapter_key=adapter_key, now=now)
         with self._immediate_transaction() as connection:
             while True:
                 row = connection.execute(
@@ -3906,6 +4112,92 @@ class SQLiteStore:
                 "ORDER BY occurred_at DESC, event_id LIMIT ? OFFSET ?"
             )
             parameters = (event_type, severity, limit, offset)
+        with self._lock:
+            rows = self._connection.execute(statement, parameters).fetchall()
+        return tuple(self._operational_event_from_row(row) for row in rows)
+
+    def list_alertable_events_after(
+        self,
+        *,
+        after_occurred_at: datetime | None,
+        after_event_id: str | None,
+        limit: int,
+        event_type: str | None = None,
+        severity: str | None = None,
+    ) -> tuple[OperationalEventRecord, ...]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 101:
+            raise ValueError("alert cursor limit must be between 1 and 101")
+        if (after_occurred_at is None) != (after_event_id is None):
+            raise ValueError("alert cursor is incomplete")
+        if event_type is not None:
+            require_contract_key(event_type, "event_type")
+        if severity is not None and severity not in _ALERT_SEVERITIES:
+            raise ValueError("severity is not registered")
+        timestamp: str | None = None
+        if after_occurred_at is not None:
+            after_event_id = require_uuid(after_event_id, "alert cursor ID")  # type: ignore[arg-type]
+            timestamp = _utc_text(require_utc(after_occurred_at, "alert cursor time"))
+        if event_type is None and severity is None and timestamp is None:
+            statement = (
+                "SELECT * FROM operational_events WHERE alertable = 1 "
+                "ORDER BY occurred_at DESC, event_id LIMIT ?"
+            )
+            parameters: tuple[object, ...] = (limit,)
+        elif event_type is None and severity is None:
+            statement = (
+                "SELECT * FROM operational_events WHERE alertable = 1 "
+                "AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?)) "
+                "ORDER BY occurred_at DESC, event_id LIMIT ?"
+            )
+            parameters = (timestamp, timestamp, after_event_id, limit)
+        elif event_type is not None and severity is None and timestamp is None:
+            statement = (
+                "SELECT * FROM operational_events WHERE alertable = 1 AND event_type = ? "
+                "ORDER BY occurred_at DESC, event_id LIMIT ?"
+            )
+            parameters = (event_type, limit)
+        elif event_type is not None and severity is None:
+            statement = (
+                "SELECT * FROM operational_events WHERE alertable = 1 AND event_type = ? "
+                "AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?)) "
+                "ORDER BY occurred_at DESC, event_id LIMIT ?"
+            )
+            parameters = (event_type, timestamp, timestamp, after_event_id, limit)
+        elif event_type is None and timestamp is None:
+            statement = (
+                "SELECT * FROM operational_events WHERE alertable = 1 AND severity = ? "
+                "ORDER BY occurred_at DESC, event_id LIMIT ?"
+            )
+            parameters = (severity, limit)
+        elif event_type is None:
+            statement = (
+                "SELECT * FROM operational_events WHERE alertable = 1 AND severity = ? "
+                "AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?)) "
+                "ORDER BY occurred_at DESC, event_id LIMIT ?"
+            )
+            parameters = (severity, timestamp, timestamp, after_event_id, limit)
+        elif timestamp is None:
+            statement = (
+                "SELECT * FROM operational_events "
+                "WHERE alertable = 1 AND event_type = ? AND severity = ? "
+                "ORDER BY occurred_at DESC, event_id LIMIT ?"
+            )
+            parameters = (event_type, severity, limit)
+        else:
+            statement = (
+                "SELECT * FROM operational_events "
+                "WHERE alertable = 1 AND event_type = ? AND severity = ? "
+                "AND (occurred_at < ? OR (occurred_at = ? AND event_id > ?)) "
+                "ORDER BY occurred_at DESC, event_id LIMIT ?"
+            )
+            parameters = (
+                event_type,
+                severity,
+                timestamp,
+                timestamp,
+                after_event_id,
+                limit,
+            )
         with self._lock:
             rows = self._connection.execute(statement, parameters).fetchall()
         return tuple(self._operational_event_from_row(row) for row in rows)

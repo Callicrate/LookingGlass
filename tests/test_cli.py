@@ -11,6 +11,7 @@ import pytest
 
 from async_api_view import cli
 from async_api_view.config import AppSettings, ProjectSettings, load_settings
+from async_api_view.local_files import ExclusiveFileLock
 from async_api_view.web import LocalCallerAuthorizer
 
 
@@ -99,6 +100,29 @@ def test_export_docs_is_checkout_current_and_never_overwrites(tmp_path: Path) ->
     assert refused == 2
     assert original == Path("docs/architecture.md").read_bytes()
     assert output.read_bytes() == original
+
+
+def test_fingerprint_profile_prints_only_digest_without_loading_project(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "databricks_profile_authority_fingerprint",
+        lambda _profile: "a" * 64,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load",
+        lambda _path: pytest.fail("fingerprint-profile loaded project configuration"),
+    )
+
+    result = cli.main(["fingerprint-profile", "--profile", "TEST_PROFILE"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.out == f"{'a' * 64}\n"
+    assert captured.err == ""
 
 
 def test_init_rejects_missing_config(tmp_path: Path) -> None:
@@ -407,18 +431,21 @@ def test_serve_fails_before_activation_disclosure_when_ipv6_port_is_occupied(
         store = FakeStore()
         bootstrap_token = secrets.token_urlsafe(32)
         authorizer = LocalCallerAuthorizer(bootstrap_token=bootstrap_token)
-        runtime = SimpleNamespace(app=object(), store=store, local_authorizer=authorizer)
         settings = ProjectSettings(
             app=AppSettings(database_path=tmp_path / "state.sqlite3", port=port),
             databricks_systems=(),
         )
         monkeypatch.setattr(cli, "_load", lambda _path: settings)
-        monkeypatch.setattr(cli, "build_runtime", lambda _settings: runtime)
+        monkeypatch.setattr(
+            cli,
+            "build_runtime",
+            lambda _settings: pytest.fail("occupied port built the runtime"),
+        )
 
         result = cli.main(["serve", "--allow-redirected-activation"])
 
         assert result == 2
-        assert store.closed
+        assert not store.closed
         captured = capsys.readouterr()
         assert captured.out == ""
         assert "/bootstrap#" not in captured.err
@@ -431,6 +458,78 @@ def test_serve_fails_before_activation_disclosure_when_ipv6_port_is_occupied(
             released_ipv4.close()
     finally:
         blocker.close()
+
+
+def test_second_serve_owner_fails_before_runtime_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "private" / "state.sqlite3"
+    config = tmp_path / "config.toml"
+
+    def write_config(profile: str) -> None:
+        config.write_text(
+            f"""
+[app]
+database_path = "{database.as_posix()}"
+port = 8766
+
+[[databricks]]
+id = "workspace"
+name = "workspace"
+profile = "{profile}"
+workspace_root = "/"
+""",
+            encoding="utf-8",
+        )
+
+    write_config("PROFILE_ONE")
+    assert cli.main(["--config", str(config), "init"]) == 0
+    with sqlite3.connect(database) as connection:
+        before = tuple(
+            connection.execute(
+                "SELECT system_id, display_name, enabled FROM systems ORDER BY system_id"
+            ).fetchall()
+        )
+    write_config("PROFILE_TWO")
+
+    class FakeListener:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    listeners = [FakeListener(), FakeListener()]
+    monkeypatch.setattr(
+        cli,
+        "_reserve_loopback_sockets",
+        lambda _port, *, backlog: listeners,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_runtime",
+        lambda _settings: pytest.fail("second serve built the runtime"),
+    )
+    lock_path = cli._serve_lock_path(database)
+    with ExclusiveFileLock(lock_path):
+        result = cli.main(
+            [
+                "--config",
+                str(config),
+                "serve",
+                "--allow-redirected-activation",
+            ]
+        )
+
+    assert result == 2
+    assert all(listener.closed for listener in listeners)
+    with sqlite3.connect(database) as connection:
+        after = tuple(
+            connection.execute(
+                "SELECT system_id, display_name, enabled FROM systems ORDER BY system_id"
+            ).fetchall()
+        )
+    assert after == before
 
 
 def test_serve_refuses_to_disclose_activation_to_redirected_stdout(

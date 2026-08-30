@@ -34,7 +34,7 @@
     <section aria-labelledby="attempts-heading">
       <div class="section-heading">
         <div><p class="eyebrow">Bounded execution record</p><h2 id="attempts-heading">Attempts</h2></div>
-        <span class="count">{% if view.attempt_total > view.attempts|length %}Showing latest {{ view.attempts|length }} of {{ view.attempt_total }}{% else %}{{ view.attempt_total }} recorded{% endif %}</span>
+        <span class="count">{% if view.attempts_truncated %}Showing latest {{ view.attempts|length }} · more recorded{% else %}{{ view.attempt_total }} recorded{% endif %}</span>
       </div>
       {% if view.attempts %}<div class="attempt-list">
         {% for attempt in view.attempts %}<article class="attempt-row">

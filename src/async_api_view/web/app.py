@@ -112,28 +112,29 @@ def _same_origin(request: Request) -> bool:
 
 def _dashboard_query(request: Request) -> DashboardQuery:
     values = list(request.query_params.multi_items())
-    if any(name not in {"q", "page"} for name, _value in values):
+    if any(name not in {"q", "after"} for name, _value in values):
         raise HTTPException(status_code=400, detail="Unexpected dashboard query parameter")
     if len({name for name, _value in values}) != len(values):
         raise HTTPException(status_code=400, detail="Duplicate dashboard query parameter")
     query = request.query_params.get("q", "")
-    page_text = request.query_params.get("page", "1")
     try:
-        page = int(page_text)
-        return DashboardQuery(object_query=query, object_page=page)
+        return DashboardQuery(
+            object_query=query,
+            cursor=request.query_params.get("after", ""),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid dashboard query") from exc
 
 
 def _object_detail_query(request: Request) -> ObjectDetailQuery:
     values = list(request.query_params.multi_items())
-    if any(name not in {"page", "type"} for name, _value in values):
+    if any(name not in {"after", "type"} for name, _value in values):
         raise HTTPException(status_code=400, detail="Unexpected object query parameter")
     if len({name for name, _value in values}) != len(values):
         raise HTTPException(status_code=400, detail="Duplicate object query parameter")
     try:
         return ObjectDetailQuery(
-            relationship_page=int(request.query_params.get("page", "1")),
+            cursor=request.query_params.get("after", ""),
             object_type=request.query_params.get("type", ""),
         )
     except ValueError as exc:
@@ -142,13 +143,13 @@ def _object_detail_query(request: Request) -> ObjectDetailQuery:
 
 def _alert_history_query(request: Request) -> AlertHistoryQuery:
     values = list(request.query_params.multi_items())
-    if any(name not in {"page", "type", "severity"} for name, _value in values):
+    if any(name not in {"after", "type", "severity"} for name, _value in values):
         raise HTTPException(status_code=400, detail="Unexpected alert query parameter")
     if len({name for name, _value in values}) != len(values):
         raise HTTPException(status_code=400, detail="Duplicate alert query parameter")
     try:
         return AlertHistoryQuery(
-            page=int(request.query_params.get("page", "1")),
+            cursor=request.query_params.get("after", ""),
             event_type=request.query_params.get("type", ""),
             severity=request.query_params.get("severity", ""),
         )
@@ -158,13 +159,13 @@ def _alert_history_query(request: Request) -> AlertHistoryQuery:
 
 def _action_history_query(request: Request) -> ActionHistoryQuery:
     values = list(request.query_params.multi_items())
-    if any(name not in {"page", "state", "system", "action"} for name, _value in values):
+    if any(name not in {"after", "state", "system", "action"} for name, _value in values):
         raise HTTPException(status_code=400, detail="Unexpected action query parameter")
     if len({name for name, _value in values}) != len(values):
         raise HTTPException(status_code=400, detail="Duplicate action query parameter")
     try:
         return ActionHistoryQuery(
-            page=int(request.query_params.get("page", "1")),
+            cursor=request.query_params.get("after", ""),
             state=request.query_params.get("state", ""),
             system_id=request.query_params.get("system", ""),
             action_id=request.query_params.get("action", ""),
@@ -198,13 +199,13 @@ def _action_detail_return(request: Request) -> str:
             strict_parsing=True,
             max_num_fields=4,
         )
-        if any(name not in {"page", "state", "system", "action"} for name, _value in pairs):
+        if any(name not in {"after", "state", "system", "action"} for name, _value in pairs):
             raise ValueError("unexpected return parameter")
         if len({name for name, _value in pairs}) != len(pairs):
             raise ValueError("duplicate return parameter")
         parameters = dict(pairs)
         ActionHistoryQuery(
-            page=int(parameters.get("page", "1")),
+            cursor=parameters.get("after", ""),
             state=parameters.get("state", ""),
             system_id=parameters.get("system", ""),
             action_id=parameters.get("action", ""),

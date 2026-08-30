@@ -444,7 +444,7 @@ def test_future_deferred_backlog_does_not_amplify_runnable_claim_steps(tmp_path)
     assert progress_callbacks < 200
 
 
-def test_simultaneous_due_backlog_promotes_in_bounded_transactions(tmp_path) -> None:
+def test_simultaneous_due_backlog_promotes_only_one_bounded_batch(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "simultaneous-due-claim.sqlite3")
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
@@ -483,27 +483,9 @@ def test_simultaneous_due_backlog_promotes_in_bounded_transactions(tmp_path) -> 
         progress_callbacks += 1
         return 0
 
-    async def claim_with_ticker():
-        ticks = 0
-        stopped = False
-
-        async def ticker() -> None:
-            nonlocal ticks
-            while not stopped:
-                ticks += 1
-                await asyncio.sleep(0)
-
-        task = asyncio.create_task(ticker())
-        try:
-            claimed = await store.lease_next_intent_scope(worker_id="worker", now=NOW)
-        finally:
-            stopped = True
-            await task
-        return claimed, ticks
-
     store._connection.set_progress_handler(count_vm_steps, 100)
     try:
-        claimed, ticks = run(claim_with_ticker())
+        claimed = run(store.lease_next_intent_scope(worker_id="worker", now=NOW))
     finally:
         store._connection.set_progress_handler(None, 0)
     states = dict(
@@ -511,11 +493,64 @@ def test_simultaneous_due_backlog_promotes_in_bounded_transactions(tmp_path) -> 
             "SELECT state, COUNT(*) FROM refresh_intent_scopes GROUP BY state"
         ).fetchall()
     )
-    assert states == {"leased": 1, "queued": 5_000}
-    assert progress_callbacks < 8_000
-    assert ticks >= 4
+    assert states == {"deferred": 4_000, "leased": 1, "queued": 1_000}
+    assert progress_callbacks < 2_000
     assert claimed is not None and claimed.intent.priority == 0
     assert claimed.intent_scope_id.startswith("due-")
+
+
+def test_due_promotion_preserves_priority_before_batch_truncation(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "due-priority.sqlite3")
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    low = run(store.submit_refresh(_intent(scope, NOW)))
+    store._connection.execute(
+        """
+        WITH RECURSIVE item(number) AS (
+            VALUES(1)
+            UNION ALL
+            SELECT number + 1 FROM item WHERE number < 1000
+        )
+        INSERT INTO refresh_intent_scopes (
+            intent_scope_id, intent_id, system_id, target_kind, target_id,
+            object_type, facet, capability_key, coverage, field_mask_json,
+            state, eligible_at, queue_priority, queue_requested_at
+        )
+        SELECT printf('low-%06d', item.number), scope.intent_id, scope.system_id,
+               scope.target_kind, scope.target_id, scope.object_type, scope.facet,
+               scope.capability_key, scope.coverage, scope.field_mask_json,
+               'deferred', ?, 0, '2000-01-01T00:00:00.000000Z'
+        FROM item
+        CROSS JOIN refresh_intent_scopes AS scope
+        WHERE scope.intent_scope_id = ?
+        """,
+        (NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"), low.scope_ids[0]),
+    )
+    high_intent = replace(
+        _intent(scope, NOW + timedelta(seconds=1)),
+        priority=10,
+    )
+    high = run(store.submit_refresh(high_intent))
+    store._connection.execute(
+        """
+        UPDATE refresh_intent_scopes
+        SET state = 'deferred', eligible_at = ?
+        WHERE intent_scope_id = ?
+        """,
+        (NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"), high.scope_ids[0]),
+    )
+
+    claimed = run(store.lease_next_intent_scope(worker_id="worker", now=NOW))
+
+    assert claimed is not None and claimed.intent.intent_id == high.intent_id
+    states = dict(
+        store._connection.execute(
+            "SELECT state, COUNT(*) FROM refresh_intent_scopes GROUP BY state"
+        ).fetchall()
+    )
+    assert states == {"deferred": 1, "leased": 1, "queued": 1_000}
 
 
 def test_queue_claim_migration_backfills_immutable_intent_order(tmp_path) -> None:
@@ -539,6 +574,8 @@ def test_queue_claim_migration_backfills_immutable_intent_order(tmp_path) -> Non
             "ix_adapter_actions_claim_order",
             "ix_adapter_actions_lease_due",
             "ix_adapter_actions_retry_due",
+            "ix_remote_objects_display_cursor",
+            "ix_refresh_intent_scopes_deferred_priority_due",
         ):
             store._connection.execute(f"DROP INDEX {index_name}")
         store._connection.execute("ALTER TABLE refresh_intent_scopes DROP COLUMN queue_priority")
@@ -547,6 +584,9 @@ def test_queue_claim_migration_backfills_immutable_intent_order(tmp_path) -> Non
         )
         store._connection.execute(
             "DELETE FROM schema_migrations WHERE version = '0017_queue_claim_order'"
+        )
+        store._connection.execute(
+            "DELETE FROM schema_migrations WHERE version = '0019_web_cursor_indexes'"
         )
 
     with SQLiteStore(path) as migrated:
