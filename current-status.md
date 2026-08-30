@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 03:02 ET
+Updated: 2026-08-30 04:17 ET
 
 ## Contents
 
@@ -17,13 +17,13 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 ## Current state
 
 - Project: `async-api-view`, the local directory requested as the improved Rookery working copy.
-- Latest checks: 509 tests passed with 8 Windows platform skips and 511 tests passed with 6 Ubuntu/WSL platform skips; Ruff format, standard/security/performance lint, lock validation, package build/distribution verification, and explicit statement/branch/combined coverage floors pass on both platforms.
+- Latest complete check: 528 tests passed with 8 Windows platform skips; the final cursor residual patches pass focused tests, with exact full coverage/package and Ubuntu/WSL parity reruns pending.
 - Coverage: Windows 91.49% statements / 77.57% branch-only / 88.16% combined; Ubuntu/WSL 89.82% / 76.99% / 86.75%.
-- Runtime surface: 7 CLI commands and 11 HTTP routes, verified from source.
+- Runtime surface: 8 CLI commands and 11 HTTP routes, verified from source.
 - Version control: local `main` contains the verified action/activity, facet-truth, authorization, lifecycle, poison-item, tolerant-dashboard, and bidirectional presence-monotonicity slices plus all prior correctness fixes; completed batches are committed with focused messages.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: the 02:06 report is closed; fresh first-look report `critical-reviews/20260830-030232.md` records one high authority-identity finding and four medium lifecycle/boundedness/schema findings now queued for remediation.
-- Latest checkpoint: `progress/20260830-024554.md`.
+- Active review round: all five findings in `critical-reviews/20260830-030232.md` are implemented; four are independently clear and final cursor residual re-review is pending.
+- Latest checkpoint: `progress/20260830-041706.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; authenticated forum access and BookStack reads are available, and the closed release/recovery evidence is verified at topic 40, post 3 under that identity.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
@@ -56,11 +56,11 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Roll back rejected ingestion-item identity and journal mutations without discarding valid siblings.
 - [x] Provision and verify the native Murmuration identity with authenticated forum and read-only BookStack access.
 - [ ] Continue hourly progress and Murmuration passes through Sunday at 22:00 ET.
-- [ ] Treat profile-reference changes as a new remote authority/cache identity.
-- [ ] Reserve serve ownership before any durable configuration reconciliation.
-- [ ] Limit one queue claim to one due-promotion batch.
+- [x] Bind remote authority to a verified workspace-host fingerprint and fail closed on retargeting.
+- [x] Reserve serve ownership before any durable configuration reconciliation.
+- [x] Limit one queue claim to one priority-aware due-promotion batch.
 - [ ] Replace exact-count/deep-OFFSET navigation with bounded keyset pagination.
-- [ ] Reject unexpected migration-external SQLite schema objects before write-capable open.
+- [x] Reject unexpected migration-external SQLite schema objects before write-capable open.
 - [x] Quarantine malformed state-dependent lease/retry timestamps without wedging durable work.
 - [x] Bound SQLite event-loop contention and yield between background work batches.
 - [x] Prevent unconstrained project builds before the hash-constrained CI release build.
@@ -513,6 +513,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The 02:51 Murmuration Tend pass reconfirmed native identity/forum readiness and published the closed recovery/release evidence idempotently as topic 40, post 3 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
 - Historical status metrics now call coverage.py's aggregate percentage “combined coverage”; only separately computed branch-only percentages are labeled branch coverage.
 - Fresh review `critical-reviews/20260830-030232.md` retains one high and four medium findings after independent authority/lifecycle, boundedness, and local-security passes; no prior closed finding was reopened.
+- Verified authority now uses a non-secret normalized workspace-host digest, double-checks each mapped invocation around execution, and separates legacy/unverified cache; focused re-review is clear.
+- `serve` owns both listeners and one database-scoped nonblocking OS lock before runtime construction; independent review cleared cleanup, path identity, same-port, and alternate-port behavior.
+- Immutable preflight rejects unexpected executable schema while partial migrations and forced index repair remain valid; queue claims promote one strict-priority bounded batch and both slices are independently clear.
+- Web list paths now use canonical forward keyset cursors, immutable object IDs when unfiltered, indexed name-prefix keys when filtered, and no exact totals/deep offsets; final residual review is pending.
 
 ## Risks / watch list
 
