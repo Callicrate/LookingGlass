@@ -731,7 +731,8 @@ def test_intent_poison_terminalization_operational_error_rolls_back(
 
 
 def test_lease_recovery_revalidates_deferred_scope_and_policy_precedence(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "state.sqlite3")
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / "state.sqlite3", clock=lambda: current_time[0])
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
     )
@@ -753,15 +754,15 @@ def test_lease_recovery_revalidates_deferred_scope_and_policy_precedence(tmp_pat
         )
     )
     assert leased is not None
-    recovered = run(
-        DurableCoordinator(store, worker_id="recovered").run_once(now=NOW + timedelta(seconds=2))
-    )
+    current_time[0] = NOW + timedelta(seconds=2)
+    recovered = run(DurableCoordinator(store, worker_id="recovered").run_once(now=current_time[0]))
     assert recovered is not None and recovered.state.value == "admitted"
     assert store.list_intent_scopes(receipt.intent_id)[0].state.value == "admitted"
 
 
-def test_expired_coordinator_claim_cannot_dispose_or_admit(tmp_path, monkeypatch) -> None:
-    store = SQLiteStore(tmp_path / "expired-claim.sqlite3")
+def test_expired_coordinator_claim_cannot_dispose_or_admit(tmp_path) -> None:
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / "expired-claim.sqlite3", clock=lambda: current_time[0])
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
     )
@@ -775,7 +776,7 @@ def test_expired_coordinator_claim_cannot_dispose_or_admit(tmp_path, monkeypatch
         )
     )
     assert work is not None
-    monkeypatch.setattr(sqlite_storage, "_now", lambda: work.leased_until)
+    current_time[0] = work.leased_until
 
     for state in (
         IntentScopeState.SATISFIED,
@@ -926,16 +927,16 @@ def test_coordinator_rejects_invalid_local_authority(
 
 
 def test_coordinator_expires_request_before_local_admission(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "expired-intent.sqlite3")
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / "expired-intent.sqlite3", clock=lambda: current_time[0])
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
     )
     scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
     receipt = run(store.submit_refresh(_intent(scope, NOW, expires_at=NOW + timedelta(seconds=1))))
+    current_time[0] = NOW + timedelta(seconds=2)
 
-    result = run(
-        DurableCoordinator(store, worker_id="expired").run_once(now=NOW + timedelta(seconds=2))
-    )
+    result = run(DurableCoordinator(store, worker_id="expired").run_once(now=current_time[0]))
 
     assert result is not None and result.state.value == "expired"
     assert result.reason == "request_expired"
@@ -943,8 +944,26 @@ def test_coordinator_expires_request_before_local_admission(tmp_path) -> None:
     assert store.list_actions() == ()
 
 
+def test_future_caller_time_cannot_expire_request_before_store_time(tmp_path) -> None:
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / "caller-expired-intent.sqlite3", clock=lambda: current_time[0])
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = _scope(seeded.system.system_id, seeded.workspace_root_scope.scope_id)
+    receipt = run(store.submit_refresh(_intent(scope, NOW, expires_at=NOW + timedelta(days=1))))
+
+    result = run(
+        DurableCoordinator(store, worker_id="future-caller").run_once(now=NOW + timedelta(days=2))
+    )
+
+    assert result is not None and result.state is IntentScopeState.ADMITTED
+    assert store.list_intent_scopes(receipt.intent_id)[0].state is IntentScopeState.ADMITTED
+
+
 def test_refresh_override_change_wakes_deferred_scope_for_policy_recheck(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "policy-change.sqlite3")
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / "policy-change.sqlite3", clock=lambda: current_time[0])
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
     )
@@ -966,6 +985,7 @@ def test_refresh_override_change_wakes_deferred_scope_for_policy_recheck(tmp_pat
         )
     )
     requested_at = NOW + timedelta(hours=2)
+    current_time[0] = requested_at
     deferred_receipt = run(store.submit_refresh(_intent(scope, requested_at)))
     deferred = run(DurableCoordinator(store, worker_id="deferred").run_once(now=requested_at))
     assert deferred is not None and deferred.state.value == "deferred"
@@ -1293,7 +1313,8 @@ def test_guard_cancellation_completes_attached_parent_intent(
 
 
 def test_guard_expires_dead_action_and_requeues_still_live_coalesced_scope(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "deadline.sqlite3")
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / "deadline.sqlite3", clock=lambda: current_time[0])
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
     )
@@ -1302,11 +1323,13 @@ def test_guard_expires_dead_action_and_requeues_still_live_coalesced_scope(tmp_p
     admitted = run(DurableCoordinator(store, worker_id="first").run_once(now=NOW))
     assert admitted is not None and admitted.action_id is not None
     still_live = run(store.submit_refresh(_intent(scope, NOW + timedelta(seconds=1))))
+    current_time[0] = NOW + timedelta(seconds=1)
     coalesced = run(
         DurableCoordinator(store, worker_id="coalesced").run_once(now=NOW + timedelta(seconds=1))
     )
     assert coalesced is not None and coalesced.state.value == "coalesced"
     assert coalesced.action_id == admitted.action_id
+    current_time[0] = NOW + timedelta(seconds=3)
     lease = run(
         store.lease_next(
             adapter_key="databricks",
@@ -1340,7 +1363,8 @@ def test_guard_expires_dead_action_and_requeues_still_live_coalesced_scope(tmp_p
 
 
 def test_guard_expires_coalesced_scope_without_cancelling_live_action(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "coalesced-expiry.sqlite3")
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / "coalesced-expiry.sqlite3", clock=lambda: current_time[0])
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
     )
@@ -1357,10 +1381,12 @@ def test_guard_expires_coalesced_scope_without_cancelling_live_action(tmp_path) 
             )
         )
     )
+    current_time[0] = NOW + timedelta(seconds=1)
     coalesced = run(
         DurableCoordinator(store, worker_id="coalesced").run_once(now=NOW + timedelta(seconds=1))
     )
     assert coalesced is not None and coalesced.state.value == "coalesced"
+    current_time[0] = NOW + timedelta(seconds=3)
     lease = run(
         store.lease_next(
             adapter_key="databricks",

@@ -26,6 +26,7 @@ from async_api_view.contracts import (
     ErrorClass,
     FacetObservation,
     FieldCoverage,
+    IntentScopeState,
     ObjectLocator,
     ObservationBatch,
     PresenceState,
@@ -2033,7 +2034,8 @@ def test_failed_logical_action_anchors_cooldown_and_creates_one_event(tmp_path) 
 
 
 def test_legacy_mark_running_rejects_exact_lease_expiry(tmp_path) -> None:
-    with SQLiteStore(tmp_path / "state.sqlite3") as store:
+    current_time = [NOW]
+    with SQLiteStore(tmp_path / "state.sqlite3", clock=lambda: current_time[0]) as store:
         seeded = SystemBootstrapService(store).configure_databricks_workspace(
             display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
         )
@@ -2058,6 +2060,7 @@ def test_legacy_mark_running_rejects_exact_lease_expiry(tmp_path) -> None:
         run(store.enqueue(action))
         lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
         assert lease is not None
+        current_time[0] = lease.leased_until
 
         with pytest.raises(ValueError, match="lease is not valid"):
             run(
@@ -2081,9 +2084,366 @@ def test_legacy_mark_running_rejects_exact_lease_expiry(tmp_path) -> None:
         assert store.get_stored_action(action.action_id).state.value == "leased"
 
 
+def test_action_leases_reject_stale_lifecycle_times_and_reclaim_with_store_clock(tmp_path) -> None:
+    def leased_action(name: str):
+        current_time = [NOW]
+        store = SQLiteStore(tmp_path / f"{name}.sqlite3", clock=lambda: current_time[0])
+        seeded = SystemBootstrapService(store).configure_databricks_workspace(
+            display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+        )
+        scope = RefreshScope(
+            system_id=seeded.system.system_id,
+            target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+            object_type="folder",
+            facet="membership",
+        )
+        action = AdapterAction(
+            action_id=uuid4(),
+            correlation_id=uuid4(),
+            system_id=seeded.system.system_id,
+            connection_binding_id=seeded.connection_binding_id,
+            adapter_key="databricks",
+            adapter_version="1",
+            capability_key="databricks.workspace.children.read",
+            capability_version="1",
+            target=scope.target,
+            requested_scopes=(scope,),
+        )
+        run(store.enqueue(action))
+        lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW))
+        assert lease is not None
+        return store, action, lease, current_time
+
+    marked_store, marked_action, marked_lease, marked_time = leased_action("stale-mark")
+    marked_time[0] = marked_lease.leased_until
+    with pytest.raises(ValueError, match="lease is not valid"):
+        run(
+            marked_store.mark_running(
+                action_id=marked_action.action_id,
+                lease_id=marked_lease.lease_id,
+                started_at=NOW,
+            )
+        )
+    replacement = run(
+        marked_store.lease_next(adapter_key="databricks", worker_id="replacement", now=NOW)
+    )
+    assert replacement is not None and replacement.lease_id != marked_lease.lease_id
+    marked_store.close()
+
+    heartbeat_store, heartbeat_action, heartbeat_lease, heartbeat_time = leased_action(
+        "stale-heartbeat"
+    )
+    heartbeat_time[0] = NOW + timedelta(seconds=10)
+    run(
+        heartbeat_store.heartbeat(
+            action_id=heartbeat_action.action_id,
+            lease_id=heartbeat_lease.lease_id,
+            worker_id="worker",
+            at=NOW,
+        )
+    )
+    extended_until = heartbeat_time[0] + timedelta(seconds=60)
+    assert (
+        heartbeat_store.get_stored_action(heartbeat_action.action_id).leased_until == extended_until
+    )
+    heartbeat_time[0] = extended_until
+    with pytest.raises(ActionLeaseLost, match="lease is no longer current"):
+        run(
+            heartbeat_store.heartbeat(
+                action_id=heartbeat_action.action_id,
+                lease_id=heartbeat_lease.lease_id,
+                worker_id="worker",
+                at=NOW,
+            )
+        )
+    assert heartbeat_store.get_stored_action(heartbeat_action.action_id).leased_until == (
+        extended_until
+    )
+    heartbeat_store.close()
+
+    lifecycle_store, lifecycle_action, lifecycle_lease, lifecycle_time = leased_action(
+        "stale-lifecycle"
+    )
+    run(
+        lifecycle_store.mark_running(
+            action_id=lifecycle_action.action_id,
+            lease_id=lifecycle_lease.lease_id,
+            started_at=NOW,
+        )
+    )
+    lifecycle_time[0] = lifecycle_lease.leased_until
+    with pytest.raises(ActionLeaseLost, match="lease has expired"):
+        run(
+            lifecycle_store.record_attempt(
+                ActionAttempt(
+                    uuid4(),
+                    lifecycle_action.action_id,
+                    1,
+                    NOW,
+                    NOW + timedelta(seconds=1),
+                ),
+                lease_id=lifecycle_lease.lease_id,
+            )
+        )
+    with pytest.raises(ActionLeaseLost, match="lease has expired"):
+        run(
+            lifecycle_store.complete_action(
+                ActionCompletion(
+                    action_id=lifecycle_action.action_id,
+                    outcome=ActionOutcome.SUCCEEDED,
+                    completed_at=NOW,
+                ),
+                lease_id=lifecycle_lease.lease_id,
+            )
+        )
+    root_object_id = lifecycle_store.list_objects(system_id=lifecycle_action.system_id)[0].object_id
+    rejected = run(
+        lifecycle_store.ingest(
+            ObservationBatch(
+                batch_id=uuid4(),
+                system_id=lifecycle_action.system_id,
+                connection_binding_id=lifecycle_action.connection_binding_id,
+                adapter_key=lifecycle_action.adapter_key,
+                adapter_version=lifecycle_action.adapter_version,
+                action_id=lifecycle_action.action_id,
+                observed_at=NOW,
+                received_at=NOW,
+                facet_observations=(
+                    FacetObservation(
+                        observation_id=uuid4(),
+                        target=ObjectLocator(object_type="folder", object_id=root_object_id),
+                        facet="membership",
+                        facet_version="1",
+                        update_mode=UpdateMode.PATCH,
+                        field_coverage=FieldCoverage.PARTIAL,
+                        payload={"member_count": 1},
+                        field_mask=("member_count",),
+                    ),
+                ),
+            ),
+            lease_id=lifecycle_lease.lease_id,
+        )
+    )
+    assert rejected.status.value == "rejected"
+    assert lifecycle_store.list_action_attempts(lifecycle_action.action_id) == ()
+    assert lifecycle_store.get_stored_action(lifecycle_action.action_id).state.value == "running"
+    lifecycle_store.close()
+
+    guard_store, guard_action, guard_lease, guard_time = leased_action("stale-guard")
+    guard_time[0] = guard_lease.leased_until
+    evaluate = run(
+        guard_store.evaluate(
+            action_id=guard_action.action_id,
+            lease_id=guard_lease.lease_id,
+            now=NOW,
+        )
+    )
+    authorize = run(
+        guard_store.authorize_start(
+            action_id=guard_action.action_id,
+            lease_id=guard_lease.lease_id,
+            binding_revision="stale-revision",
+            now=NOW,
+        )
+    )
+    assert evaluate.reason == authorize.reason == "expired_action_lease"
+    assert guard_store.get_stored_action(guard_action.action_id).state.value == "leased"
+    guard_store.close()
+
+
+def test_action_guard_uses_store_clock_for_deadlines_and_origin_expiry(tmp_path) -> None:
+    deadline_time = [NOW]
+    deadline_store = SQLiteStore(
+        tmp_path / "deadline-authority.sqlite3", clock=lambda: deadline_time[0]
+    )
+    seeded = SystemBootstrapService(deadline_store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+    )
+    deadline = NOW + timedelta(seconds=1)
+    deadline_action = AdapterAction(
+        action_id=uuid4(),
+        correlation_id=uuid4(),
+        system_id=seeded.system.system_id,
+        connection_binding_id=seeded.connection_binding_id,
+        adapter_key="databricks",
+        adapter_version="1",
+        capability_key="databricks.workspace.children.read",
+        capability_version="1",
+        target=scope.target,
+        requested_scopes=(scope,),
+        deadline=deadline,
+    )
+    run(deadline_store.enqueue(deadline_action))
+    deadline_lease = run(
+        deadline_store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW)
+    )
+    assert deadline_lease is not None
+    deadline_time[0] = deadline
+    deadline_decision = run(
+        deadline_store.authorize_start(
+            action_id=deadline_action.action_id,
+            lease_id=deadline_lease.lease_id,
+            binding_revision="stale-caller-revision",
+            now=NOW,
+        )
+    )
+    assert deadline_decision.reason == "action_deadline_expired"
+    assert deadline_decision.disposition.value == "cancel"
+    deadline_stored = deadline_store.get_stored_action(deadline_action.action_id)
+    assert deadline_stored is not None
+    assert deadline_stored.state.value == "cancelled"
+    assert deadline_stored.started_at is None
+    deadline_store.close()
+
+    origin_time = [NOW]
+    origin_store = SQLiteStore(tmp_path / "origin-authority.sqlite3", clock=lambda: origin_time[0])
+    origin_seeded = SystemBootstrapService(origin_store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    origin_scope = RefreshScope(
+        system_id=origin_seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, origin_seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+    )
+    live = run(
+        origin_store.submit_refresh(
+            RefreshIntent(
+                intent_id=uuid4(),
+                idempotency_key=str(uuid4()),
+                origin=RefreshOrigin.MANUAL,
+                actor_id="local-user",
+                scopes=(origin_scope,),
+                requested_at=NOW,
+            )
+        )
+    )
+    admitted = run(DurableCoordinator(origin_store).run_once(now=NOW))
+    assert admitted is not None and admitted.action_id is not None
+    expiring = run(
+        origin_store.submit_refresh(
+            RefreshIntent(
+                intent_id=uuid4(),
+                idempotency_key=str(uuid4()),
+                origin=RefreshOrigin.MANUAL,
+                actor_id="local-user",
+                scopes=(origin_scope,),
+                requested_at=NOW,
+                expires_at=NOW + timedelta(seconds=1),
+            )
+        )
+    )
+    coalesced = run(DurableCoordinator(origin_store).run_once(now=NOW))
+    assert coalesced is not None and coalesced.state.value == "coalesced"
+    origin_lease = run(
+        origin_store.lease_next(adapter_key="databricks", worker_id="worker", now=NOW)
+    )
+    assert origin_lease is not None and origin_lease.action.action_id == admitted.action_id
+    origin_time[0] = NOW + timedelta(seconds=1)
+    origin_decision = run(
+        origin_store.evaluate(
+            action_id=admitted.action_id,
+            lease_id=origin_lease.lease_id,
+            now=NOW,
+        )
+    )
+    assert origin_decision.disposition.value == "dispatch"
+    assert origin_store.get_stored_action(admitted.action_id).state.value == "leased"
+    assert origin_store.list_intent_scopes(expiring.intent_id)[0].state.value == "expired"
+    assert origin_store.list_intent_scopes(live.intent_id)[0].state.value == "admitted"
+    origin_store.close()
+
+
+def test_intent_scope_leases_use_the_store_clock_for_claims_and_dispositions(tmp_path) -> None:
+    current_time = [NOW]
+    store = SQLiteStore(tmp_path / "intent-authority.sqlite3", clock=lambda: current_time[0])
+    seeded = SystemBootstrapService(store).configure_databricks_workspace(
+        display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
+    )
+    scope = RefreshScope(
+        system_id=seeded.system.system_id,
+        target=TargetRef(TargetKind.CONFIGURED_SCOPE, seeded.workspace_root_scope.scope_id),
+        object_type="folder",
+        facet="membership",
+    )
+
+    def submit() -> str:
+        receipt = run(
+            store.submit_refresh(
+                RefreshIntent(
+                    intent_id=uuid4(),
+                    idempotency_key=str(uuid4()),
+                    origin=RefreshOrigin.MANUAL,
+                    actor_id="local-user",
+                    scopes=(scope,),
+                    requested_at=NOW,
+                )
+            )
+        )
+        return receipt.scope_ids[0]
+
+    first_scope_id = submit()
+    future_caller_now = NOW + timedelta(hours=1)
+    first = run(store.lease_next_intent_scope(worker_id="coordinator", now=future_caller_now))
+    assert first is not None and first.intent_scope_id == first_scope_id
+    assert first.leased_until == NOW + timedelta(seconds=60)
+
+    current_time[0] = first.leased_until
+    with pytest.raises(ValueError, match="lease is no longer current"):
+        store.set_intent_scope_disposition(
+            intent_scope_id=first.intent_scope_id,
+            lease_id=first.lease_id,
+            state=IntentScopeState.SATISFIED,
+            reason="evidence_satisfied",
+        )
+    reclaimed = run(store.lease_next_intent_scope(worker_id="recovered", now=NOW))
+    assert reclaimed is not None and reclaimed.intent_scope_id == first_scope_id
+    store.set_intent_scope_disposition(
+        intent_scope_id=reclaimed.intent_scope_id,
+        lease_id=reclaimed.lease_id,
+        state=IntentScopeState.SATISFIED,
+        reason="evidence_satisfied",
+    )
+    assert (
+        store.list_intent_scopes(reclaimed.intent.intent_id)[0].state is IntentScopeState.SATISFIED
+    )
+
+    deferred_scope_id = submit()
+    deferred = run(store.lease_next_intent_scope(worker_id="coordinator", now=NOW))
+    assert deferred is not None and deferred.intent_scope_id == deferred_scope_id
+    eligible_at = current_time[0] + timedelta(seconds=1)
+    store.set_intent_scope_disposition(
+        intent_scope_id=deferred.intent_scope_id,
+        lease_id=deferred.lease_id,
+        state=IntentScopeState.DEFERRED,
+        reason="minimum_interval_not_elapsed",
+        eligible_at=eligible_at,
+    )
+    assert (
+        run(
+            store.lease_next_intent_scope(
+                worker_id="future-caller",
+                now=eligible_at + timedelta(hours=1),
+            )
+        )
+        is None
+    )
+    current_time[0] = eligible_at
+    due = run(store.lease_next_intent_scope(worker_id="coordinator", now=NOW))
+    assert due is not None and due.intent_scope_id == deferred_scope_id
+    store.close()
+
+
 def test_expired_running_lease_reopens_with_new_authority_and_preserves_start(tmp_path) -> None:
     path = tmp_path / "state.sqlite3"
-    with SQLiteStore(path) as store:
+    current_time = [NOW]
+    with SQLiteStore(path, clock=lambda: current_time[0]) as store:
         seeded = SystemBootstrapService(store).configure_databricks_workspace(
             display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
         )
@@ -2114,8 +2474,9 @@ def test_expired_running_lease_reopens_with_new_authority_and_preserves_start(tm
             )
         )
 
-    with SQLiteStore(path) as reopened:
+    with SQLiteStore(path, clock=lambda: current_time[0]) as reopened:
         recovery_at = NOW + timedelta(seconds=61)
+        current_time[0] = recovery_at
         second_lease = run(
             reopened.lease_next(adapter_key="databricks", worker_id="second", now=recovery_at)
         )
@@ -2152,8 +2513,8 @@ def test_expired_running_lease_reopens_with_new_authority_and_preserves_start(tm
 
 
 def test_final_start_strictly_fences_expiry_and_renews_running_lease(tmp_path) -> None:
-    def leased_action(path: Path):
-        store = SQLiteStore(path)
+    def leased_action(path: Path, current_time: list[datetime]):
+        store = SQLiteStore(path, clock=lambda: current_time[0])
         seeded = SystemBootstrapService(store).configure_databricks_workspace(
             display_name="local",
             profile="DEFAULT",
@@ -2167,7 +2528,7 @@ def test_final_start_strictly_fences_expiry_and_renews_running_lease(tmp_path) -
             facet="membership",
             capability_key="databricks.workspace.children.read",
         )
-        action_now = datetime.now(UTC)
+        action_now = current_time[0]
         run(
             store.submit_refresh(
                 RefreshIntent(
@@ -2190,9 +2551,11 @@ def test_final_start_strictly_fences_expiry_and_renews_running_lease(tmp_path) -
         assert lease is not None and binding.revision is not None
         return store, action, lease, binding.revision
 
+    exact_time = [datetime.now(UTC)]
     exact_store, exact_action, exact_lease, exact_revision = leased_action(
-        tmp_path / "exact-expiry.sqlite3"
+        tmp_path / "exact-expiry.sqlite3", exact_time
     )
+    exact_time[0] = exact_lease.leased_until
     exact_decision = run(
         exact_store.authorize_start(
             action_id=exact_action.action_id,
@@ -2213,10 +2576,12 @@ def test_final_start_strictly_fences_expiry_and_renews_running_lease(tmp_path) -
     assert replacement is not None and replacement.lease_id != exact_lease.lease_id
     exact_store.close()
 
+    renewed_time = [datetime.now(UTC)]
     renewed_store, renewed_action, renewed_lease, renewed_revision = leased_action(
-        tmp_path / "renewed-running.sqlite3"
+        tmp_path / "renewed-running.sqlite3", renewed_time
     )
     just_before_expiry = renewed_lease.leased_until - timedelta(microseconds=1)
+    renewed_time[0] = just_before_expiry
     dispatch = run(
         renewed_store.authorize_start(
             action_id=renewed_action.action_id,
@@ -2239,6 +2604,7 @@ def test_final_start_strictly_fences_expiry_and_renews_running_lease(tmp_path) -
         )
         is None
     )
+    renewed_time[0] = running.leased_until
     reclaimed = run(
         renewed_store.lease_next(
             adapter_key="databricks",
@@ -2349,7 +2715,8 @@ def test_action_projection_migration_backfills_history_and_triggers(tmp_path) ->
 
 def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path) -> None:
     path = tmp_path / "state.sqlite3"
-    with SQLiteStore(path) as store:
+    current_time = [NOW]
+    with SQLiteStore(path, clock=lambda: current_time[0]) as store:
         seeded = SystemBootstrapService(store).configure_databricks_workspace(
             display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
         )
@@ -2404,7 +2771,7 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
         assert "do-not-persist" not in attempt_events[0].redacted_summary
         assert store.list_operational_events(alertable_only=True) == ()
 
-    with SQLiteStore(path) as reopened:
+    with SQLiteStore(path, clock=lambda: current_time[0]) as reopened:
         activity = reopened.get_action_activity(action.action_id)
         attempts = reopened.list_action_attempts(action.action_id)
         assert activity is not None and activity.action_id == action.action_id
@@ -2416,6 +2783,7 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
         assert reopened.list_operational_events()[0].attempt_id == first_attempt.attempt_id
         with pytest.raises(ValueError, match="attempt limit"):
             reopened.list_action_attempts(action.action_id, limit=102)
+        current_time[0] = retry_at - timedelta(microseconds=1)
         assert (
             run(
                 reopened.lease_next(
@@ -2426,6 +2794,7 @@ def test_retry_wait_is_durable_and_next_lease_advances_attempt_ordinal(tmp_path)
             )
             is None
         )
+        current_time[0] = retry_at
         second = run(
             reopened.lease_next(adapter_key="databricks", worker_id="second", now=retry_at)
         )
@@ -3440,7 +3809,8 @@ def test_workspace_root_uses_normalized_external_identity(tmp_path) -> None:
 
 def test_legacy_pre_digest_batch_redelivery_backfills_only_exact_match(tmp_path) -> None:
     path = tmp_path / "state.sqlite3"
-    with SQLiteStore(path) as store:
+    current_time = [datetime.now(UTC)]
+    with SQLiteStore(path, clock=lambda: current_time[0]) as store:
         seeded = SystemBootstrapService(store).configure_databricks_workspace(
             display_name="local", profile="DEFAULT", workspace_root="/Shared", now=NOW
         )
@@ -3464,7 +3834,7 @@ def test_legacy_pre_digest_batch_redelivery_backfills_only_exact_match(tmp_path)
             requested_scopes=(scope,),
         )
         run(store.enqueue(action))
-        lease_now = datetime.now(UTC)
+        lease_now = current_time[0]
         lease = run(store.lease_next(adapter_key="databricks", worker_id="worker", now=lease_now))
         assert lease is not None
         run(
@@ -3501,7 +3871,8 @@ def test_legacy_pre_digest_batch_redelivery_backfills_only_exact_match(tmp_path)
             (batch.batch_id,),
         )
 
-    with SQLiteStore(path) as reopened:
+    current_time[0] = lease.leased_until + timedelta(microseconds=1)
+    with SQLiteStore(path, clock=lambda: current_time[0]) as reopened:
         exact = run(reopened.ingest(batch))
         assert exact.status.value == "duplicate"
         digest = reopened._connection.execute(

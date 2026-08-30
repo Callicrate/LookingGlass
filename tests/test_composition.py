@@ -571,7 +571,8 @@ async def test_direct_workspace_metadata_refresh_is_accepted_and_credited(
 @pytest.mark.anyio
 async def test_expired_action_deadline_never_reaches_cli_runner(tmp_path: Path) -> None:
     runner = FakeCliRunner(b"[]")
-    runtime = build_runtime(settings(tmp_path), runner=runner)
+    current_time = [datetime.now(UTC)]
+    runtime = build_runtime(settings(tmp_path), runner=runner, clock=lambda: current_time[0])
     dashboard = await runtime.backend.dashboard()
     option = next(
         item
@@ -581,7 +582,7 @@ async def test_expired_action_deadline_never_reaches_cli_runner(tmp_path: Path) 
     )
     configured = runtime.store.get_configured_scope(option.target_id)
     assert configured is not None
-    requested_at = datetime.now(UTC)
+    requested_at = current_time[0]
     intent = RefreshIntent(
         intent_id=uuid4(),
         idempotency_key=str(uuid4()),
@@ -603,7 +604,8 @@ async def test_expired_action_deadline_never_reaches_cli_runner(tmp_path: Path) 
     admitted = await runtime.coordinator.run_once(now=requested_at)
     assert admitted is not None and admitted.action_id is not None
 
-    assert await runtime.worker.run_once(now=requested_at + timedelta(seconds=2))
+    current_time[0] = requested_at + timedelta(seconds=2)
+    assert await runtime.worker.run_once(now=current_time[0])
 
     assert runner.calls == []
     assert runtime.store.get_stored_action(admitted.action_id).state.value == "cancelled"
@@ -706,7 +708,10 @@ async def test_final_start_authorization_blocks_revoked_remote_dispatch(
 
 @pytest.mark.anyio
 async def test_expired_coalesced_receipt_is_not_overlaid_by_live_action(tmp_path: Path) -> None:
-    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    current_time = [datetime.now(UTC)]
+    runtime = build_runtime(
+        settings(tmp_path), runner=FakeCliRunner(b"[]"), clock=lambda: current_time[0]
+    )
     dashboard = await runtime.backend.dashboard()
     option = next(
         item
@@ -716,7 +721,7 @@ async def test_expired_coalesced_receipt_is_not_overlaid_by_live_action(tmp_path
     )
     configured = runtime.store.get_configured_scope(option.target_id)
     assert configured is not None
-    requested_at = datetime.now(UTC)
+    requested_at = current_time[0]
     scope = RefreshScope(
         system_id=option.system_id,
         target=TargetRef(TargetKind.CONFIGURED_SCOPE, option.target_id),
@@ -745,8 +750,10 @@ async def test_expired_coalesced_receipt_is_not_overlaid_by_live_action(tmp_path
     admitted = await runtime.coordinator.run_once(now=requested_at)
     assert admitted is not None and admitted.action_id is not None
     await runtime.store.submit_refresh(expiring)
+    current_time[0] = requested_at + timedelta(seconds=1)
     coalesced = await runtime.coordinator.run_once(now=requested_at + timedelta(seconds=1))
     assert coalesced is not None and coalesced.state.value == "coalesced"
+    current_time[0] = requested_at + timedelta(seconds=3)
     lease = await runtime.store.lease_next(
         adapter_key="databricks",
         worker_id="worker",
@@ -2274,11 +2281,12 @@ async def test_runtime_stop_cancels_in_flight_worker_without_waiting_for_cli_tim
 
     assert runner.cancelled
 
-    with SQLiteStore(database_path) as reopened:
+    recovery_time = interrupted.leased_until + timedelta(microseconds=1)
+    with SQLiteStore(database_path, clock=lambda: recovery_time) as reopened:
         recovered = await reopened.lease_next(
             adapter_key="databricks",
             worker_id="recovered",
-            now=interrupted.leased_until + timedelta(microseconds=1),
+            now=recovery_time,
         )
         assert recovered is not None
         assert recovered.action.action_id == interrupted.action.action_id

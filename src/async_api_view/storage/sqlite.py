@@ -16,7 +16,7 @@ import sqlite3
 import tempfile
 import threading
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -821,7 +821,15 @@ class SQLiteStore:
     presentation, coordinator, and adapter-worker layers.
     """
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if clock is not None and not callable(clock):
+            raise TypeError("clock must be callable")
+        self._clock = clock or _now
         self.database_path = absolute_local_path(database_path)
         self._file_guard, preflight_kind = _create_or_preflight_database(self.database_path)
         self._directory_guard: PrivateDirectoryGuard | None = None
@@ -881,7 +889,7 @@ class SQLiteStore:
                 self._migrate()
                 self._repair_required_runtime_indexes()
                 self._validate_current_schema()
-                recovery_now = _now()
+                recovery_now = self._current_time()
                 self._quarantine_invalid_queue_timing(connection, now=recovery_now)
                 disabled_systems = tuple(
                     row["system_id"]
@@ -907,6 +915,16 @@ class SQLiteStore:
             if self._directory_guard is not None:
                 self._directory_guard.close()
             raise
+
+    def _current_time(self) -> datetime:
+        """Return the store-owned UTC clock used for action-lease authority."""
+
+        return require_utc(self._clock(), "SQLiteStore clock")
+
+    def authority_time(self) -> datetime:
+        """Expose one store-owned time sample to the local durable coordinator."""
+
+        return self._current_time()
 
     def _enable_wal_mode(self) -> None:
         for attempt in range(8):
@@ -1045,7 +1063,7 @@ class SQLiteStore:
                 self._terminalize_action_contract_failure(
                     connection,
                     action_id=row["action_id"],
-                    now=now,
+                    authority_now=now,
                     reason="persisted_action_timing_mismatch",
                 )
 
@@ -2898,9 +2916,10 @@ class SQLiteStore:
             intent_scope_id=row["intent_scope_id"],
         )
 
-    def _promote_due_intent_scopes(self, now: datetime) -> bool:
-        now_text = _utc_text(now)
+    def _promote_due_intent_scopes(self) -> bool:
         with self._immediate_transaction() as connection:
+            authority_now = self._current_time()
+            now_text = _utc_text(authority_now)
             promoted = 0
             for priority in range(100, -1, -1):
                 remaining = _MAX_DUE_PROMOTIONS_PER_CLAIM - promoted
@@ -2967,12 +2986,13 @@ class SQLiteStore:
         lease_duration: timedelta = _DEFAULT_LEASE,
     ) -> IntentScopeWork | None:
         require_text(worker_id, "worker_id", max_length=256)
-        now = require_utc(now, "now")
+        require_utc(now, "now")
         if lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
-        leased_until = now + lease_duration
-        self._promote_due_intent_scopes(now)
+        self._promote_due_intent_scopes()
         with self._immediate_transaction() as connection:
+            authority_now = self._current_time()
+            leased_until = authority_now + lease_duration
             while True:
                 row = connection.execute(
                     """
@@ -3008,7 +3028,7 @@ class SQLiteStore:
                     self._terminalize_intent_scope_contract_failure(
                         connection,
                         row=row,
-                        now=now,
+                        now=authority_now,
                     )
                     continue
                 break
@@ -3040,9 +3060,13 @@ class SQLiteStore:
         )
 
     def _claim_is_current(
-        self, connection: sqlite3.Connection, *, intent_scope_id: str, lease_id: str
+        self,
+        connection: sqlite3.Connection,
+        *,
+        intent_scope_id: str,
+        lease_id: str,
+        authority_now: datetime,
     ) -> bool:
-        commit_time = _utc_text(_now())
         return (
             connection.execute(
                 """
@@ -3050,7 +3074,7 @@ class SQLiteStore:
                 WHERE intent_scope_id = ? AND state = 'leased' AND lease_id = ?
                   AND leased_until > ?
                 """,
-                (intent_scope_id, lease_id, commit_time),
+                (intent_scope_id, lease_id, _utc_text(authority_now)),
             ).fetchone()
             is not None
         )
@@ -3074,8 +3098,12 @@ class SQLiteStore:
         if observation_id is not None:
             observation_id = require_uuid(observation_id, "observation_id")
         with self._immediate_transaction() as connection:
+            authority_now = self._current_time()
             if not self._claim_is_current(
-                connection, intent_scope_id=intent_scope_id, lease_id=lease_id
+                connection,
+                intent_scope_id=intent_scope_id,
+                lease_id=lease_id,
+                authority_now=authority_now,
             ):
                 raise ValueError("intent scope lease is no longer current")
             connection.execute(
@@ -3789,9 +3817,13 @@ class SQLiteStore:
         lease_id: str,
         action_id: str,
         state: IntentScopeState,
+        authority_now: datetime,
     ) -> None:
         if not self._claim_is_current(
-            connection, intent_scope_id=intent_scope_id, lease_id=lease_id
+            connection,
+            intent_scope_id=intent_scope_id,
+            lease_id=lease_id,
+            authority_now=authority_now,
         ):
             raise ValueError("intent scope lease is no longer current")
         connection.execute(
@@ -3859,6 +3891,7 @@ class SQLiteStore:
             deadline=work.intent.expires_at,
         )
         with self._immediate_transaction() as connection:
+            authority_now = self._current_time()
             existing = self._active_action_by_dedupe(connection, dedupe_key)
             if existing is None and legacy_dedupe_key is not None:
                 existing = self._active_action_by_dedupe(connection, legacy_dedupe_key)
@@ -3869,6 +3902,7 @@ class SQLiteStore:
                     lease_id=work.lease_id,
                     action_id=existing["action_id"],
                     state=IntentScopeState.COALESCED,
+                    authority_now=authority_now,
                 )
                 return self._action_from_row(existing), False
             try:
@@ -3887,6 +3921,7 @@ class SQLiteStore:
                     lease_id=work.lease_id,
                     action_id=existing["action_id"],
                     state=IntentScopeState.COALESCED,
+                    authority_now=authority_now,
                 )
                 return self._action_from_row(existing), False
             self._attach_scope_to_action(
@@ -3895,6 +3930,7 @@ class SQLiteStore:
                 lease_id=work.lease_id,
                 action_id=action.action_id,
                 state=IntentScopeState.ADMITTED,
+                authority_now=authority_now,
             )
         return action, True
 
@@ -3963,11 +3999,12 @@ class SQLiteStore:
     ) -> ActionLease | None:
         require_contract_key(adapter_key, "adapter_key")
         require_text(worker_id, "worker_id", max_length=256)
-        now = require_utc(now, "now")
+        require_utc(now, "now")
         lease_id = str(uuid4())
-        leased_until = now + _DEFAULT_LEASE
-        self._promote_due_actions(adapter_key=adapter_key, now=now)
+        self._promote_due_actions(adapter_key=adapter_key, now=self._current_time())
         with self._immediate_transaction() as connection:
+            lease_now = self._current_time()
+            leased_until = lease_now + _DEFAULT_LEASE
             while True:
                 row = connection.execute(
                     """
@@ -3986,7 +4023,7 @@ class SQLiteStore:
                     self._terminalize_action_contract_failure(
                         connection,
                         action_id=row["action_id"],
-                        now=now,
+                        authority_now=lease_now,
                     )
                     continue
                 break
@@ -4023,6 +4060,7 @@ class SQLiteStore:
         lease_id = require_uuid(lease_id, "lease_id")
         started_at = require_utc(started_at, "started_at")
         with self._immediate_transaction() as connection:
+            lease_now = self._current_time()
             row = connection.execute(
                 "SELECT state, lease_id, leased_until FROM adapter_actions WHERE action_id = ?",
                 (action_id,),
@@ -4033,7 +4071,7 @@ class SQLiteStore:
                 row["state"] != ActionState.LEASED.value
                 or row["lease_id"] != lease_id
                 or _dt(row["leased_until"]) is None
-                or _dt(row["leased_until"]) <= started_at
+                or _dt(row["leased_until"]) <= lease_now
             ):
                 raise ValueError("adapter action lease is not valid for logical start")
             connection.execute(
@@ -4053,7 +4091,6 @@ class SQLiteStore:
         action_id: str,
         lease_id: str,
         allowed_states: set[ActionState],
-        at: datetime,
     ) -> sqlite3.Row:
         row = connection.execute(
             """
@@ -4067,7 +4104,7 @@ class SQLiteStore:
         if ActionState(row["state"]) not in allowed_states:
             raise ActionLeaseLost("adapter action is not in a lease-authorized state")
         leased_until = _dt(row["leased_until"])
-        if leased_until is None or leased_until <= at:
+        if leased_until is None or leased_until <= self._current_time():
             raise ActionLeaseLost("adapter action lease has expired")
         return row
 
@@ -4080,7 +4117,6 @@ class SQLiteStore:
                 action_id=attempt.action_id,
                 lease_id=lease_id,
                 allowed_states={ActionState.RUNNING},
-                at=attempt_at,
             )
             result = connection.execute(
                 """
@@ -4138,8 +4174,9 @@ class SQLiteStore:
         action_id = require_uuid(action_id, "action_id")
         lease_id = require_uuid(lease_id, "lease_id")
         require_text(worker_id, "worker_id", max_length=256)
-        at = require_utc(at, "at")
+        require_utc(at, "at")
         with self._immediate_transaction() as connection:
+            lease_now = self._current_time()
             result = connection.execute(
                 """
                 UPDATE adapter_actions
@@ -4148,7 +4185,13 @@ class SQLiteStore:
                   AND state IN ('leased', 'running', 'retry_wait')
                   AND leased_until > ?
                 """,
-                (_utc_text(at + _DEFAULT_LEASE), action_id, lease_id, worker_id, _utc_text(at)),
+                (
+                    _utc_text(lease_now + _DEFAULT_LEASE),
+                    action_id,
+                    lease_id,
+                    worker_id,
+                    _utc_text(lease_now),
+                ),
             )
             if result.rowcount != 1:
                 raise ActionLeaseLost("adapter action lease is no longer current")
@@ -4211,7 +4254,6 @@ class SQLiteStore:
                 action_id=completion.action_id,
                 lease_id=lease_id,
                 allowed_states={ActionState.LEASED, ActionState.RUNNING, ActionState.RETRY_WAIT},
-                at=completion.completed_at,
             )
             connection.execute(
                 """
@@ -4504,7 +4546,12 @@ class SQLiteStore:
         return self._operational_event_from_row(row)
 
     def _guard_cancel(
-        self, connection: sqlite3.Connection, *, action_id: str, reason: str
+        self,
+        connection: sqlite3.Connection,
+        *,
+        action_id: str,
+        reason: str,
+        authority_now: datetime,
     ) -> GuardDecision:
         connection.execute(
             """
@@ -4513,7 +4560,12 @@ class SQLiteStore:
                 leased_until = NULL, error_class = ?, redacted_diagnostic = ?
             WHERE action_id = ?
             """,
-            (_utc_text(_now()), ErrorClass.LOCAL_CANCELLATION.value, _redact(reason), action_id),
+            (
+                _utc_text(authority_now),
+                ErrorClass.LOCAL_CANCELLATION.value,
+                _redact(reason),
+                action_id,
+            ),
         )
         self._refresh_action_parent_aggregates(connection, action_id=action_id)
         return GuardDecision(GuardDisposition.CANCEL, reason)
@@ -4523,7 +4575,7 @@ class SQLiteStore:
         connection: sqlite3.Connection,
         *,
         action_id: str,
-        now: datetime,
+        authority_now: datetime,
         reason: str = "malformed_action_contract",
     ) -> GuardDecision:
         row = connection.execute(
@@ -4550,7 +4602,7 @@ class SQLiteStore:
             WHERE action_id = ?
             """,
             (
-                _utc_text(now),
+                _utc_text(authority_now),
                 ErrorClass.ADAPTER_CONTRACT_MISMATCH.value,
                 _redact(reason),
                 action_id,
@@ -4566,7 +4618,7 @@ class SQLiteStore:
             action_id=action_id,
             error_class=ErrorClass.ADAPTER_CONTRACT_MISMATCH.value,
             summary=reason,
-            occurred_at=now,
+            occurred_at=authority_now,
         )
         self._refresh_action_parent_aggregates(connection, action_id=action_id)
         return GuardDecision(GuardDisposition.FAIL, reason)
@@ -4576,7 +4628,7 @@ class SQLiteStore:
         connection: sqlite3.Connection,
         *,
         action_id: str,
-        now: datetime,
+        authority_now: datetime,
     ) -> GuardDecision:
         reason = "action_deadline_expired"
         linked_scopes = connection.execute(
@@ -4592,7 +4644,7 @@ class SQLiteStore:
         expired_scope_ids = tuple(
             row["intent_scope_id"]
             for row in linked_scopes
-            if _dt(row["expires_at"]) is not None and _dt(row["expires_at"]) <= now
+            if _dt(row["expires_at"]) is not None and _dt(row["expires_at"]) <= authority_now
         )
         live_scope_ids = tuple(
             row["intent_scope_id"]
@@ -4622,7 +4674,7 @@ class SQLiteStore:
                     lease_worker_id = NULL, leased_until = NULL
                 WHERE intent_scope_id = ?
                 """,
-                (reason, _utc_text(now), intent_scope_id),
+                (reason, _utc_text(authority_now), intent_scope_id),
             )
         connection.execute(
             """
@@ -4632,7 +4684,7 @@ class SQLiteStore:
             WHERE action_id = ?
             """,
             (
-                _utc_text(now),
+                _utc_text(authority_now),
                 ErrorClass.LOCAL_CANCELLATION.value,
                 _redact(reason),
                 action_id,
@@ -4646,7 +4698,7 @@ class SQLiteStore:
         connection: sqlite3.Connection,
         *,
         action_id: str,
-        now: datetime,
+        authority_now: datetime,
     ) -> tuple[sqlite3.Row, ...]:
         scope_rows = connection.execute(
             """
@@ -4661,7 +4713,7 @@ class SQLiteStore:
         live_rows: list[sqlite3.Row] = []
         for scope_row in scope_rows:
             expires_at = _dt(scope_row["expires_at"])
-            if expires_at is None or expires_at > now:
+            if expires_at is None or expires_at > authority_now:
                 live_rows.append(scope_row)
                 continue
             connection.execute(
@@ -4714,6 +4766,7 @@ class SQLiteStore:
         lease_id = require_uuid(lease_id, "lease_id")
         now = require_utc(now, "now")
         with self._immediate_transaction() as connection:
+            authority_now = self._current_time()
             row = connection.execute(
                 """
                 SELECT action.*, system.enabled AS system_enabled,
@@ -4747,44 +4800,55 @@ class SQLiteStore:
                 return self._terminalize_action_contract_failure(
                     connection,
                     action_id=action_id,
-                    now=now,
+                    authority_now=authority_now,
                 )
-            if leased_until is None or leased_until <= now:
+            if leased_until is None or leased_until <= authority_now:
                 return GuardDecision(GuardDisposition.FAIL, "expired_action_lease")
-            if deadline is not None and deadline <= now:
+            if deadline is not None and deadline <= authority_now:
                 try:
                     return self._guard_expire_action(
                         connection,
                         action_id=action_id,
-                        now=now,
+                        authority_now=authority_now,
                     )
                 except (TypeError, ValueError):
                     return self._terminalize_action_contract_failure(
                         connection,
                         action_id=action_id,
-                        now=now,
+                        authority_now=authority_now,
                     )
             try:
                 active_scopes = self._prune_expired_action_scopes(
                     connection,
                     action_id=action_id,
-                    now=now,
+                    authority_now=authority_now,
                 )
             except (TypeError, ValueError):
                 return self._terminalize_action_contract_failure(
                     connection,
                     action_id=action_id,
-                    now=now,
+                    authority_now=authority_now,
                 )
             if not active_scopes:
                 return self._guard_cancel(
-                    connection, action_id=action_id, reason="no_live_originating_scope"
+                    connection,
+                    action_id=action_id,
+                    reason="no_live_originating_scope",
+                    authority_now=authority_now,
                 )
             if not row["system_enabled"]:
-                return self._guard_cancel(connection, action_id=action_id, reason="system_disabled")
+                return self._guard_cancel(
+                    connection,
+                    action_id=action_id,
+                    reason="system_disabled",
+                    authority_now=authority_now,
+                )
             if not row["binding_enabled"]:
                 return self._guard_cancel(
-                    connection, action_id=action_id, reason="binding_disabled"
+                    connection,
+                    action_id=action_id,
+                    reason="binding_disabled",
+                    authority_now=authority_now,
                 )
             if authorize_start:
                 current_binding_revision = _binding_revision(
@@ -4795,15 +4859,24 @@ class SQLiteStore:
                 )
                 if current_binding_revision != binding_revision:
                     return self._guard_cancel(
-                        connection, action_id=action_id, reason="binding_changed"
+                        connection,
+                        action_id=action_id,
+                        reason="binding_changed",
+                        authority_now=authority_now,
                     )
             if row["capability_enabled"] is None:
                 return self._guard_cancel(
-                    connection, action_id=action_id, reason="capability_missing"
+                    connection,
+                    action_id=action_id,
+                    reason="capability_missing",
+                    authority_now=authority_now,
                 )
             if not row["capability_enabled"]:
                 return self._guard_cancel(
-                    connection, action_id=action_id, reason="capability_disabled"
+                    connection,
+                    action_id=action_id,
+                    reason="capability_disabled",
+                    authority_now=authority_now,
                 )
             if row["operation_class"] != OperationClass.OBSERVE.value:
                 return GuardDecision(GuardDisposition.FAIL, "capability_not_observe")
@@ -4817,7 +4890,10 @@ class SQLiteStore:
                     ).fetchone()
                     if target is None or target["presence"] == PresenceState.ABSENT.value:
                         return self._guard_cancel(
-                            connection, action_id=action_id, reason="target_not_available"
+                            connection,
+                            action_id=action_id,
+                            reason="target_not_available",
+                            authority_now=authority_now,
                         )
                 elif scope.target.kind is TargetKind.CONFIGURED_SCOPE:
                     configured = connection.execute(
@@ -4829,7 +4905,10 @@ class SQLiteStore:
                     ).fetchone()
                     if configured is None or not configured["enabled"]:
                         return self._guard_cancel(
-                            connection, action_id=action_id, reason="configured_scope_disabled"
+                            connection,
+                            action_id=action_id,
+                            reason="configured_scope_disabled",
+                            authority_now=authority_now,
                         )
                 try:
                     interval = self.effective_interval(scope)
@@ -4839,7 +4918,7 @@ class SQLiteStore:
                 decision = decide_refresh(
                     requested_scope=scope,
                     requested_at=_dt(scope_row["requested_at"]),  # type: ignore[arg-type]
-                    now=now,
+                    now=authority_now,
                     minimum_interval=interval,
                     state=self.scope_policy_state(scope),
                     evidence=evidence,
@@ -4857,25 +4936,27 @@ class SQLiteStore:
                             """,
                             (
                                 _utc_text(now),
-                                _utc_text(now + _DEFAULT_LEASE),
+                                _utc_text(authority_now + _DEFAULT_LEASE),
                                 action_id,
                                 lease_id,
-                                _utc_text(now),
+                                _utc_text(authority_now),
                             ),
                         )
                         if result.rowcount != 1:  # pragma: no cover - transaction invariant
                             return GuardDecision(GuardDisposition.FAIL, "invalid_action_lease")
                     return GuardDecision(GuardDisposition.DISPATCH, "dispatch")
                 satisfying_ids.append(decision.satisfying_observation_id)
-            connection.execute(
+            result = connection.execute(
                 """
                 UPDATE adapter_actions
                 SET state = 'satisfied', completed_at = ?, lease_id = NULL, lease_worker_id = NULL,
                     leased_until = NULL
-                WHERE action_id = ?
+                WHERE action_id = ? AND state = 'leased' AND lease_id = ? AND leased_until > ?
                 """,
-                (_utc_text(now), action_id),
+                (_utc_text(now), action_id, lease_id, _utc_text(authority_now)),
             )
+            if result.rowcount != 1:
+                return GuardDecision(GuardDisposition.FAIL, "expired_action_lease")
             for scope_row, observation_id in zip(active_scopes, satisfying_ids, strict=True):
                 connection.execute(
                     """
@@ -4943,7 +5024,6 @@ class SQLiteStore:
                     action_id=batch.action_id,
                     lease_id=require_uuid(lease_id, "lease_id"),
                     allowed_states={ActionState.RUNNING},
-                    at=_now(),
                 )
 
     def _authority_capability_rows(

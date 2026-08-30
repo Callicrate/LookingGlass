@@ -2126,7 +2126,8 @@ def test_incidental_coverage_requires_enabled_capability_but_running_action_keep
 
 
 def test_action_linked_ingestion_requires_the_current_running_lease(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "state.sqlite3")
+    current_time = [datetime.now(UTC)]
+    store = SQLiteStore(tmp_path / "state.sqlite3", clock=lambda: current_time[0])
     seeded = SystemBootstrapService(store).configure_databricks_workspace(
         display_name="local",
         profile="DEFAULT",
@@ -2154,7 +2155,7 @@ def test_action_linked_ingestion_requires_the_current_running_lease(tmp_path) ->
         requested_scopes=(scope,),
     )
     run(store.enqueue(action))
-    first_started = datetime.now(UTC)
+    first_started = current_time[0]
     first = run(
         store.lease_next(
             adapter_key="databricks",
@@ -2171,6 +2172,7 @@ def test_action_linked_ingestion_requires_the_current_running_lease(tmp_path) ->
         )
     )
     reassigned_at = first.leased_until + timedelta(microseconds=1)
+    current_time[0] = reassigned_at
     current = run(
         store.lease_next(
             adapter_key="databricks",

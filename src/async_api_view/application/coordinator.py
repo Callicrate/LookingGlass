@@ -89,15 +89,16 @@ class DurableCoordinator:
 
     async def run_once(self, *, now: datetime | None = None) -> CoordinatorResult | None:
         """Process one durable scope, or return ``None`` when no scope is due."""
-        evaluation_time = now or datetime.now(UTC)
+        record_time = now or datetime.now(UTC)
+        authority_time = self.store.authority_time()
         work = await self.store.lease_next_intent_scope(
             worker_id=self.worker_id,
-            now=evaluation_time,
+            now=record_time,
             lease_duration=self.lease_duration,
         )
         if work is None:
             return None
-        if work.intent.expires_at is not None and work.intent.expires_at <= evaluation_time:
+        if work.intent.expires_at is not None and work.intent.expires_at <= authority_time:
             self.store.set_intent_scope_disposition(
                 intent_scope_id=work.intent_scope_id,
                 lease_id=work.lease_id,
@@ -138,7 +139,7 @@ class DurableCoordinator:
                 work=effective_work,
                 binding=binding,
                 capability=capability,
-                now=evaluation_time,
+                now=record_time,
             )
             return CoordinatorResult(
                 work.intent_scope_id,
@@ -203,7 +204,7 @@ class DurableCoordinator:
         decision = decide_refresh(
             requested_scope=effective_scope,
             requested_at=work.intent.requested_at,
-            now=evaluation_time,
+            now=authority_time,
             minimum_interval=interval,
             state=policy_state,
             evidence=evidence,
@@ -240,7 +241,7 @@ class DurableCoordinator:
             work=effective_work,
             binding=binding,
             capability=capability,
-            now=evaluation_time,
+            now=record_time,
         )
         state = IntentScopeState.ADMITTED if created else IntentScopeState.COALESCED
         return CoordinatorResult(

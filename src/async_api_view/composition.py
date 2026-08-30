@@ -1296,6 +1296,7 @@ def build_runtime(
     settings: ProjectSettings,
     *,
     runner: CliRunner | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> ApplicationRuntime:
     """Initialize durable configuration and compose the one-process application."""
     if any(
@@ -1313,7 +1314,11 @@ def build_runtime(
     )
     if len(set(config_ids)) != len(config_ids):
         raise ConfigError("Databricks system IDs must be unique")
-    store = SQLiteStore(settings.app.database_path)
+    store = (
+        SQLiteStore(settings.app.database_path)
+        if clock is None
+        else SQLiteStore(settings.app.database_path, clock=clock)
+    )
     try:
         return _compose_runtime(settings, store=store, runner=runner)
     except BaseException:
