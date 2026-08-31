@@ -488,23 +488,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         if args.command in local_only_commands:
             app_settings = _load_app(args.config)
-        else:
-            settings = _load(args.config)
+            if args.command == "authority-list":
+                with ExclusiveFileLock(_serve_lock_path(app_settings.database_path)):
+                    _authority_list(app_settings)
+            elif args.command in {"authority-retire", "authority-unretire"}:
+                with ExclusiveFileLock(_serve_lock_path(app_settings.database_path)):
+                    _set_authority_retired(
+                        app_settings,
+                        system_id=args.system_id,
+                        retired=args.command == "authority-retire",
+                    )
+            else:
+                destination = backup_sqlite_database(app_settings.database_path, args.output)
+                logger.info(
+                    "Created consistent SQLite backup at %s",
+                    _operator_diagnostic(destination),
+                )
+            return 0
+
+        settings = _load(args.config)
         if args.command == "init":
             with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
                 _initialize(settings)
         elif args.command == "doctor":
             asyncio.run(_doctor(settings))
-        elif args.command == "authority-list":
-            with ExclusiveFileLock(_serve_lock_path(app_settings.database_path)):
-                _authority_list(app_settings)
-        elif args.command in {"authority-retire", "authority-unretire"}:
-            with ExclusiveFileLock(_serve_lock_path(app_settings.database_path)):
-                _set_authority_retired(
-                    app_settings,
-                    system_id=args.system_id,
-                    retired=args.command == "authority-retire",
-                )
         elif args.command == "run-once":
             with ExclusiveFileLock(_serve_lock_path(settings.app.database_path)):
                 runtime = build_runtime(settings)
@@ -519,12 +526,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.max_cycles,
                 )
                 return EXIT_BOUNDED_INCOMPLETE
-        elif args.command == "backup":
-            destination = backup_sqlite_database(app_settings.database_path, args.output)
-            logger.info(
-                "Created consistent SQLite backup at %s",
-                _operator_diagnostic(destination),
-            )
         elif args.command == "serve":
             listeners = _reserve_loopback_sockets(
                 settings.app.port,

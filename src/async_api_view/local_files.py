@@ -8,6 +8,20 @@ import stat
 from pathlib import Path
 
 
+def _effective_user_id() -> int:
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is None:
+        raise OSError("POSIX user identity is unavailable")
+    return int(geteuid())
+
+
+def _set_descriptor_mode(descriptor: int, mode: int) -> None:
+    fchmod = getattr(os, "fchmod", None)
+    if fchmod is None:
+        raise OSError("POSIX descriptor hardening is unavailable")
+    fchmod(descriptor, mode)
+
+
 def absolute_local_path(path: str | Path) -> Path:
     """Return an absolute path without following filesystem redirects."""
 
@@ -105,7 +119,7 @@ class RegularFileGuard:
                 raise OSError("Rookery state must be a regular file")
             if details.st_nlink != 1:
                 raise OSError("Rookery state files must not have multiple hard links")
-            if details.st_uid != os.geteuid():
+            if details.st_uid != _effective_user_id():
                 raise OSError("Rookery state file owner does not match the current user")
             return details.st_dev, details.st_ino
         return regular_file_identity(self.path)
@@ -120,7 +134,7 @@ class RegularFileGuard:
         """Apply current-user protection to the guarded object, then reverify its path."""
 
         if self._descriptor is not None:
-            os.fchmod(self._descriptor, 0o600)
+            _set_descriptor_mode(self._descriptor, 0o600)
             details = os.fstat(self._descriptor)
             if stat.S_IMODE(details.st_mode) != 0o600:
                 raise OSError("Rookery state file permissions could not be restricted")
@@ -549,6 +563,8 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
             ace = wintypes.LPVOID()
             if not advapi32.GetAce(verified_acl, 0, ctypes.byref(ace)):
                 raise last_error("could not inspect the Rookery path access rule")
+            if ace.value is None:
+                raise OSError("Rookery path access rule pointer is unavailable")
             ace_address = int(ace.value)
             header = (ctypes.c_ubyte * 2).from_address(ace_address)
             mask = ctypes.c_uint32.from_address(ace_address + 4).value
@@ -568,7 +584,7 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
 
 def _harden_posix_path(path: Path, mode: int) -> None:
     details = path.stat(follow_symlinks=False)
-    if details.st_uid != os.geteuid():
+    if details.st_uid != _effective_user_id():
         raise OSError("Rookery path owner does not match the current user")
     os.chmod(path, mode, follow_symlinks=False)
     if stat.S_IMODE(path.stat(follow_symlinks=False).st_mode) != mode:

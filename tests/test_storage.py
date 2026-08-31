@@ -75,6 +75,12 @@ def _reapply_recorded_migration(store: SQLiteStore, version: str) -> None:
         store._validate_current_schema()
 
 
+@pytest.mark.parametrize("payload", ["{}", '"facet"', "[1]"])
+def test_stored_json_text_collections_reject_non_text_arrays(payload: str) -> None:
+    with pytest.raises(ValueError, match="stored JSON"):
+        sqlite_storage._json_text_tuple(payload)
+
+
 def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     for view in (
         "readable_action_activity_recency",
@@ -5062,6 +5068,11 @@ def test_regressed_databricks_local_time_uses_strict_store_receipt_order(tmp_pat
     projected = reopened.get_facet_sync(seeded.workspace_root_object_id, "metadata")
     assert projected is not None and projected.payload == {"value": "third"}
     assert run(reopened.ingest(third)).status is IngestionStatus.DUPLICATE
+    reopened._connection.execute(
+        "UPDATE observation_batches SET accepted_ids_json = '{}' WHERE batch_id = ?",
+        (third.batch_id,),
+    )
+    assert run(reopened.ingest(third)).status is IngestionStatus.REJECTED
 
 
 def test_concurrent_stores_serialize_receipt_replay_and_provenance(tmp_path) -> None:

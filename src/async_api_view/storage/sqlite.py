@@ -1138,6 +1138,22 @@ def _json_value(value: str) -> object:
     return validate_json(parsed, "stored JSON")
 
 
+def _json_array(value: str) -> list[object]:
+    parsed = _json_value(value)
+    if not isinstance(parsed, list):
+        raise ValueError("stored JSON is not an array")
+    return parsed
+
+
+def _json_text_tuple(value: str) -> tuple[str, ...]:
+    items: list[str] = []
+    for item in _json_array(value):
+        if not isinstance(item, str):
+            raise ValueError("stored JSON array contains non-text data")
+        items.append(item)
+    return tuple(items)
+
+
 def _batch_digest(batch: ObservationBatch) -> str:
     """Bind batch identity to its complete canonical envelope without storing raw input."""
     material = canonical_observation_batch_bytes(batch)
@@ -1192,7 +1208,7 @@ def _scope_from_row(row: sqlite3.Row, *, prefix: str = "") -> RefreshScope:
         facet=row[f"{prefix}facet"],
         capability_key=row[f"{prefix}capability_key"],
         coverage=RefreshCoverage(row[f"{prefix}coverage"]),
-        field_mask=tuple(_json_value(row[f"{prefix}field_mask_json"])),
+        field_mask=_json_text_tuple(row[f"{prefix}field_mask_json"]),
     )
 
 
@@ -3735,7 +3751,7 @@ class SQLiteStore:
     def _capability_from_row(row: sqlite3.Row) -> CapabilityBinding:
         coverage_policies = tuple(
             _coverage_policy_from_value(value)
-            for value in _json_value(row["coverage_policies_json"])
+            for value in _json_array(row["coverage_policies_json"])
         )
         return CapabilityBinding(
             capability_binding_id=row["capability_binding_id"],
@@ -3743,12 +3759,14 @@ class SQLiteStore:
             capability_key=row["capability_key"],
             capability_version=row["capability_version"],
             operation_class=OperationClass(row["operation_class"]),
-            target_kinds=tuple(TargetKind(item) for item in _json_value(row["target_kinds_json"])),
-            produced_facets=tuple(_json_value(row["produced_facets_json"])),
+            target_kinds=tuple(
+                TargetKind(item) for item in _json_text_tuple(row["target_kinds_json"])
+            ),
+            produced_facets=_json_text_tuple(row["produced_facets_json"]),
             enabled=bool(row["enabled"]),
             selection_priority=row["selection_priority"],
-            collateral_effects=tuple(_json_value(row["collateral_effects_json"])),
-            mitigations=tuple(_json_value(row["mitigations_json"])),
+            collateral_effects=_json_text_tuple(row["collateral_effects_json"]),
+            mitigations=_json_text_tuple(row["mitigations_json"]),
             coverage_policies=coverage_policies,
         )
 
@@ -6507,7 +6525,7 @@ class SQLiteStore:
         *,
         relationship: bool,
     ) -> bool:
-        if scope.target.kind.value not in _json_value(capability["target_kinds_json"]):
+        if scope.target.kind.value not in _json_text_tuple(capability["target_kinds_json"]):
             return False
         return any(
             policy.target_kind is scope.target.kind
@@ -6516,7 +6534,7 @@ class SQLiteStore:
             and (not relationship or AbsenceAuthority.RELATIONSHIP in policy.absence_authority)
             for policy in (
                 _coverage_policy_from_value(value)
-                for value in _json_value(capability["coverage_policies_json"])
+                for value in _json_array(capability["coverage_policies_json"])
             )
         )
 
@@ -6608,7 +6626,7 @@ class SQLiteStore:
                         scope,
                         relationship=False,
                     )
-                    and observation.facet in _json_value(capability["produced_facets_json"])
+                    and observation.facet in _json_text_tuple(capability["produced_facets_json"])
                     and (
                         self._cached_authority_target_object_id(
                             connection,
@@ -6928,8 +6946,8 @@ class SQLiteStore:
             matching_rows = tuple(
                 row
                 for row in capability_rows
-                if scope.target.kind.value in _json_value(row["target_kinds_json"])
-                and scope.facet in _json_value(row["produced_facets_json"])
+                if scope.target.kind.value in _json_text_tuple(row["target_kinds_json"])
+                and scope.facet in _json_text_tuple(row["produced_facets_json"])
             )
             if not matching_rows:
                 raise ValueError("coverage_not_supported_by_binding")
@@ -6943,7 +6961,7 @@ class SQLiteStore:
                     and set(declaration.absence_authority).issubset(policy.absence_authority)
                     for policy in (
                         _coverage_policy_from_value(value)
-                        for value in _json_value(row["coverage_policies_json"])
+                        for value in _json_array(row["coverage_policies_json"])
                     )
                 )
                 for row in matching_rows
@@ -7468,10 +7486,8 @@ class SQLiteStore:
         ):
             return False
         try:
-            accepted_ids = tuple(_json_value(prior["accepted_ids_json"]))
+            accepted_ids = _json_text_tuple(prior["accepted_ids_json"])
         except (TypeError, ValueError, json.JSONDecodeError):
-            return False
-        if not all(isinstance(item, str) for item in accepted_ids):
             return False
         accepted_id_set = set(accepted_ids)
         input_items = [
@@ -7690,11 +7706,15 @@ class SQLiteStore:
             except ValueError:
                 return IngestionResult(batch_id=batch.batch_id, status=IngestionStatus.REJECTED)
             if prior is not None:
+                try:
+                    prior_accepted_ids = _json_text_tuple(prior["accepted_ids_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    return IngestionResult(batch_id=batch.batch_id, status=IngestionStatus.REJECTED)
                 if prior["batch_digest"] == batch_digest:
                     return IngestionResult(
                         batch_id=batch.batch_id,
                         status=IngestionStatus.DUPLICATE,
-                        accepted_observation_ids=tuple(_json_value(prior["accepted_ids_json"])),
+                        accepted_observation_ids=prior_accepted_ids,
                         issue_count=prior["issue_count"],
                     )
                 if prior["batch_digest"] == "":
@@ -7722,7 +7742,7 @@ class SQLiteStore:
                         return IngestionResult(
                             batch_id=batch.batch_id,
                             status=IngestionStatus.DUPLICATE,
-                            accepted_observation_ids=tuple(_json_value(prior["accepted_ids_json"])),
+                            accepted_observation_ids=prior_accepted_ids,
                             issue_count=prior["issue_count"],
                         )
                 return IngestionResult(batch_id=batch.batch_id, status=IngestionStatus.REJECTED)

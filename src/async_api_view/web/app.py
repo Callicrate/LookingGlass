@@ -238,7 +238,15 @@ async def _parse_refresh_form(request: Request, csrf_token: str) -> RefreshReque
     if fields["target_kind"] not in UI_TARGET_KINDS:
         raise HTTPException(status_code=400, detail="Unsupported target kind")
     session = _local_session(request)
-    return RefreshRequest(**fields, ui_session_id=session.session_id)
+    target_kind = "configured_scope" if fields["target_kind"] == "configured_scope" else "object"
+    return RefreshRequest(
+        system_id=fields["system_id"],
+        target_kind=target_kind,
+        target_id=fields["target_id"],
+        capability_key=fields["capability_key"],
+        facet=fields["facet"],
+        ui_session_id=session.session_id,
+    )
 
 
 async def _parse_form(

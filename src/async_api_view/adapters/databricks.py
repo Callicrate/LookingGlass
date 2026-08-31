@@ -1321,20 +1321,26 @@ class CliRunner:
                     harden_private_file(snapshot_path)
                     process_environment["DATABRICKS_CONFIG_FILE"] = str(snapshot_path)
                 try:
-                    process_options = (
-                        {"creationflags": 0x00000004}
-                        if os.name == "nt"
-                        else {"start_new_session": True}
-                    )
-                    process = await asyncio.create_subprocess_exec(
-                        *argv,
-                        stdin=asyncio.subprocess.DEVNULL,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        env=process_environment,
-                        cwd=working_directory,
-                        **process_options,
-                    )
+                    if os.name == "nt":
+                        process = await asyncio.create_subprocess_exec(
+                            *argv,
+                            stdin=asyncio.subprocess.DEVNULL,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            env=process_environment,
+                            cwd=working_directory,
+                            creationflags=0x00000004,
+                        )
+                    else:
+                        process = await asyncio.create_subprocess_exec(
+                            *argv,
+                            stdin=asyncio.subprocess.DEVNULL,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            env=process_environment,
+                            cwd=working_directory,
+                            start_new_session=True,
+                        )
                 except OSError as exc:
                     raise CliRuntimeUnavailable("Databricks CLI process could not start") from exc
                 try:
@@ -2035,16 +2041,6 @@ def normalize(
     def evidence_id(label: str) -> str:
         return _id(action, f"delivery:{delivery_id}:{label}")
 
-    base = dict(
-        batch_id=_id(action, f"batch:{delivery_id}"),
-        system_id=action.system_id,
-        connection_binding_id=binding.binding_id,
-        adapter_key=DATABRICKS_ADAPTER_KEY,
-        adapter_version=DATABRICKS_ADAPTER_VERSION,
-        observed_at=observed_at,
-        received_at=observed_at,
-        action_id=action.action_id,
-    )
     facets: list[FacetObservation] = []
     relationships: list[RelationshipObservation] = []
     coverage: list[CoverageDeclaration] = []
@@ -2336,13 +2332,21 @@ def normalize(
         )
     else:  # defensive even though command registry is closed
         raise CommandRejected("unregistered Databricks capability")
-    artifacts = (
-        _content_artifacts(action, binding, target, payload)
-        if capability.endswith("content.read")
-        else ()
-    )
+    if capability.endswith("content.read"):
+        if not isinstance(payload, Mapping):
+            raise InvalidDownstreamResponse("Workspace content response must be an object")
+        artifacts = _content_artifacts(action, binding, target, payload)
+    else:
+        artifacts = ()
     batch = ObservationBatch(
-        **base,
+        batch_id=_id(action, f"batch:{delivery_id}"),
+        system_id=action.system_id,
+        connection_binding_id=binding.binding_id,
+        adapter_key=DATABRICKS_ADAPTER_KEY,
+        adapter_version=DATABRICKS_ADAPTER_VERSION,
+        observed_at=observed_at,
+        received_at=observed_at,
+        action_id=action.action_id,
         observed_at_is_local=True,
         facet_observations=tuple(
             replace(item, authorized_by=action.requested_scopes) for item in facets
