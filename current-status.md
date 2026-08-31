@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 20:32 ET
+Updated: 2026-08-30 20:51 ET
 
 ## Contents
 
@@ -20,9 +20,9 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Latest checks: Windows 697 passed / 8 platform skips; Ubuntu/WSL 698 passed / 7 platform skips. Format, standard/security/performance lint, lock/audit, constrained builds, exact distribution verification, and installed-wheel smoke pass on both.
 - Coverage: Windows 89.90% statements / 76.32% branch-only / 86.61% combined; Ubuntu/WSL 87.50% / 75.18% / 84.52%.
 - Runtime surface: 11 CLI commands and 11 HTTP routes, verified from source.
-- Version control: exact candidate `9de53e8` has a matching clean atomic bundle; the final residual review is now active.
+- Version control: local `main` is clean; the exact final atomic bundle is published after the residual-review closure commit.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
-- Active review round: `critical-reviews/20260830-203200.md` is challenging final cross-cutting residual risk and maintainability.
+- Latest review round: `critical-reviews/20260830-203200.md` is closed with no new surviving finding after the final cross-cutting residual challenge.
 - Latest checkpoint: `progress/20260830-201939.md`.
 - Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 19:59 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and published visual/hermetic closure as topic 40 post 16.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
@@ -73,7 +73,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - [x] Close hermetic test and verification-cleanup review.
 - [x] Close remaining static diagnostic-debt review.
 - [x] Close cross-surface release-candidate consistency review.
-- [ ] Close final residual-risk and maintainability review.
+- [x] Close final residual-risk and maintainability review.
 - [x] Pin each Databricks child to the exact verified profile snapshot.
 - [x] Stop materializing full canonical recovery queues at startup.
 - [x] Align web query validation with canonical storage grammar.
