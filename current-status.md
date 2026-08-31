@@ -1,6 +1,6 @@
 # Rookery project status
 
-Updated: 2026-08-30 20:51 ET
+Updated: 2026-08-30 21:23 ET
 
 ## Contents
 
@@ -23,8 +23,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Version control: local `main` is clean; the exact final atomic bundle is published after the residual-review closure commit.
 - Campaign status: active through Sunday, 2026-08-30 at 22:00 ET; the premature Saturday handoff has been superseded by the resumed autonomous improvement campaign.
 - Latest review round: `critical-reviews/20260830-203200.md` is closed with no new surviving finding after the final cross-cutting residual challenge.
-- Latest checkpoint: `progress/20260830-201939.md`.
-- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 19:59 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and published visual/hermetic closure as topic 40 post 16.
+- Latest checkpoint: `progress/20260830-212229.md`.
+- Murmuration: native project identity `project-a3c5f71ec6d12b` is active and `write_ready`; the 20:40 Tend pass reverified exact `openai/gpt-5.6-sol` provenance and published static/final consistency closure as topic 40 post 17.
 - Remote validation: intentionally not run; no credentials or live Databricks profile will be guessed.
 
 ## TODO
