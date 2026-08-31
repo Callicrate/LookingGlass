@@ -85,7 +85,7 @@ Not yet verified or intentionally deferred:
 ## First usable workflow
 
 The first usable slice uses Databricks as the first real adapter and API-worker test case.
-It proves one complete refresh path before broad object coverage, Linux support, or automatic scheduling is added.
+It proves one complete refresh path before broad object coverage, Linux-over-SSH adapter support, or automatic scheduling is added.
 
 ### Inputs
 
@@ -187,7 +187,7 @@ UI labels MAY use site, workspace, host, or another source-appropriate word.
 | Manual requests obey the same interval as automatic requests | Preserves one policy path and prevents a manual button from becoming a rate-limit bypass. | Accepted |
 | Auto-refresh exists only during its originating UI session | Prevents background polling after the user closes the client. | Accepted |
 | Stored content defaults to 365-day retention with normal override precedence | Makes content lifecycle explicit and locally configurable. | Accepted |
-| Databricks is the first adapter and end-to-end test case | Proves the generic contracts against a real CLI-backed system before Linux support is added. | Accepted |
+| Databricks is the first adapter and end-to-end test case | Proves the generic contracts against a real CLI-backed system before Linux-over-SSH adapter support is added. | Accepted |
 | Trusted local time drives freshness and cooldown | Remote clocks and timestamps are facts to display, not safe scheduling clocks. | Specified |
 | Logical modules can initially share one process | Proves the contracts without committing to distributed infrastructure. | Accepted |
 

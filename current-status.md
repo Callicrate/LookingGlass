@@ -209,6 +209,8 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 
 ## Evidence and decisions
 
+This section is a chronological historical ledger. Words such as “current,” “exact-current,” “absent,” and “active” in older bullets describe the checkpoint when that bullet was recorded; they are superseded by the timestamped **Current state** section above and must not be quoted as present status.
+
 - Existing implementation is intentionally observation-only and loopback-bound; preserve those constraints.
 - Runtime lifespan now starts its supervisor before probing external CLI compatibility, so an indefinitely blocked probe leaves authenticated cached state available and is cancelled during shutdown.
 - The post-fix reviewer cleared the runtime repair after requiring the lifespan regression itself to fail within a bounded timeout instead of risking a wedged CI run.
@@ -227,7 +229,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The real ignored database now carries application ID `1380929355` (`ROOK`), all 15 migrations, integrity `ok`, and zero foreign-key violations.
 - Pytest is locked at 9.1.1 beyond the 9.0.3 advisory fix; `uv audit --locked` is clean, runs on both CI operating systems, and uses pinned uv 0.12.1.
 - CI action tags were resolved against their official repositories and replaced with immutable commit SHAs; Dependabot is configured to propose weekly GitHub Actions updates.
-- The 08:40 Murmuration tend again found no scoped shared context and remained read-only because native project credentials are absent; notifications and BookStack remain gated.
+- The 08:40 Murmuration tend again found no scoped shared context and remained read-only because native project credentials were absent at that checkpoint; notifications and BookStack remain gated.
 - Independent release review confirmed both action SHAs match their official tag refs, pinned uv 0.12.1 supports the exact audit command, Dependabot syntax is coherent, and no mutable executable input was added.
 - Distribution verification now derives all 26 migrations/templates/static assets from source, requires one version-matched archive pair, rejects missing/unexpected wheel resources, and installs/imports/executes the wheel in an isolated venv.
 - The post-fix distribution review cleared missing-directory detection, source-derived `app.js` regression, sanitized checkout-independent imports, venv provenance, local subprocess waivers, both pytest launcher forms, and bounded cross-platform cleanup.
@@ -238,7 +240,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Independent standalone review cleared exclusive/racing writer behavior, exact template parity, path semantics, parent/hardlink/symlink refusal, installed upgrade/uninstall, preserved operator files, six-command help, and secret absence.
 - Windows and Ubuntu/WSL installed-wheel smoke now use pinned uv to create/install into the temporary venv, avoiding any system `ensurepip` package dependency while retaining checkout provenance checks.
 - Follow-up review reproduced and fixed Snap-shim dereferencing; direct Ubuntu Python 3.12 with `/snap/bin/uv` and Windows now pass the same 78/57/26 installed-distribution verification.
-- The 09:36 Murmuration tend again found no scoped context and stayed read-only: native identity is absent, notifications remain 403, and BookStack remains 401-gated.
+- The 09:36 Murmuration tend again found no scoped context and stayed read-only: native identity was absent at that checkpoint, notifications remain 403, and BookStack remains 401-gated.
 - Worker normalization now derives batch identity from the current lease/delivery rather than the whole action; a crash-after-ingestion regression proves recovered delivery is accepted and terminalizes correctly.
 - Every normalized evidence item is also delivery-scoped, eliminating cross-batch journal collisions while preserving action/ordinal attempt identity; post-fix recovery review found no remaining issue.
 - Every new facet/relationship item now proves an exact action scope or unambiguous enabled incidental capability before identity, journal, or projection writes; adversarial wrong-facet/target/relationship batches leave no residue.
@@ -263,7 +265,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The v10 drift regression proves failed startup preserves both duplicate overrides, all ten original ledger entries, absent later schema/indexes, the original drifted DDL, and markerless application ID; partial `0002` recovery and concurrent initialization remain green.
 - Independent review reproduced the rollback and cleared 39 storage tests plus 80 threaded and 48 process-level concurrent opens with no medium-or-higher finding.
 - The exact committed-head Ubuntu/WSL gate matches Windows at 364 tests and 88% combined coverage with clean locked audit, format, security/performance lint, constrained build, and 80/59/28 distribution verification.
-- The 12:25 Murmuration tend found no scoped Rookery context and remained read-only: the native identity profile is absent, notifications return 403, and BookStack remains 401-gated.
+- The 12:25 Murmuration tend found no scoped Rookery context and remained read-only: the native identity profile was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
 - A fresh adversarial audit proved a relationship/facet cross-kind observation-ID collision could authorize and persist the facet before the relationship was rejected.
 - The local repair preflights canonical `(item kind, item digest)` identities across the whole batch and rejects every participant in cross-kind or differing-payload collisions before identity, journal, or projection writes; 31 focused ingestion tests pass.
 - Independent collision review cleared exact duplicate/replay behavior, valid sibling isolation, accepted-ID ordering, residue-free rejection, and unchanged linear query growth with no medium-or-higher finding.
@@ -276,12 +278,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Refresh-credit selection now streams timestamp-ordered candidates and stops at the first scope match; a 50,000-row audit had measured 43.8 MiB from the former `fetchall()`, while 71 focused policy/coordinator/ingestion tests preserve semantics.
 - A documentation audit found that backup consistency was described without warning that restore remains unimplemented and unverified; the README now forbids live replacement/sidecar mixing and treats snapshots as protected recovery input rather than a tested recovery workflow.
 - Independent documentation review confirmed the warning matches online-backup behavior, does not imply an unsupported manual restore, and keeps atomically validated restore explicitly deferred.
-- The 13:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
+- The 13:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
 - A 10,000-child Workspace result normalized to about 15.3 MiB while storage rejected batches over 1 MiB; simply raising the cap would have created multi-second writer locks.
 - The local multipart repair shares exact canonical batch bytes, keeps facet/contains pairs indivisible, caps parts at 1,000,000 bytes/250 units beneath storage's 1 MiB guard, puts the root summary last, retains incomplete coverage on every part, and rejects multipart COMPLETE or oversized units before the first write.
 - A real 10,000-child worker/SQLite regression persists all children and edges across deterministic lease-fenced parts and records one partial action outcome; byte/unit limits are enforced deterministically while transaction timings remain diagnostic.
 - Independent high-severity review cleared the single-batch fast path after canonicalization/count enforcement: 251/600 children split, 10,000 produce 41 bounded parts, and 1,200→10,000 normalization scales 0.347s→3.222s without quadratic growth.
-- The 14:23 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
+- The 14:23 Murmuration tend found no scoped Rookery context and remained read-only: native identity was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
 - Final dispatch accepted `leased_until == now` even though another worker could reclaim at that exact boundary.
 - Final dispatch now rejects exact expiry and atomically renews the running lease; independent two-connection races proved exact-expiry reclaim and just-before-expiry mutual exclusion with no remaining medium-or-higher finding.
 - Unity Catalog schema/table/view/volume normalization discarded stable source UUIDs and keyed mutable qualified names, causing rename forks and same-name recreation merges.
@@ -323,7 +325,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Those six compatibility paths lift the exact Windows/Ubuntu gates to 438 passed plus one complementary platform skip and 89%/88% combined coverage.
 - The end-to-end lifecycle review found no medium-or-higher defect and reproduced only an unused legacy `mark_running()` equality gap at exact lease expiry.
 - Legacy start now rejects `leased_until == started_at`, matching the production final guard; independent re-review closed the low and exact cross-platform parity is 439 passed plus one complementary platform skip.
-- The 19:16 Murmuration tend again found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
+- The 19:16 Murmuration tend again found no scoped Rookery context and remained read-only: native identity was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
 - Shared JSON validation now rejects depth above 32, containers above 10,000 items, active-ancestor cycles, and total work above one million nodes while independently copying repeated non-cyclic references.
 - Post-construction malformed payloads now fail batch digesting as residue-free `REJECTED` results instead of escaping as recursion errors.
 - Independent re-review first caught a valid 896 KiB 50-table/1,000-column response exceeding the initial node budget; the corrected budget retains hard bounds and lets byte/unit chunking produce canonical <=1 MiB parts.
@@ -335,15 +337,15 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - The lifecycle port now distinguishes expected `ActionLeaseLost` fencing from `LifecyclePersistenceFailure`; attempt, completion, timed heartbeat, and multipart heartbeat storage faults reach runtime supervision, degrade refresh health, and emit one redacted idempotent outage event.
 - Real SQLite heartbeat fencing now rejects exact expiry and raises the domain fence rather than creating a false outage; record/complete and heartbeat persistence regressions are independently clear.
 - Storage defense-in-depth redaction now covers prefixed environment/JSON secret keys plus C0/C1 and bidi controls before durable attempts/events; exact cross-platform parity is 449 passed plus one complementary platform skip.
-- The 20:09 Murmuration tend again found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
+- The 20:09 Murmuration tend again found no scoped Rookery context and remained read-only: native identity was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
 - Documentation review reproduced a 429 with `Retry-After: 120` scheduling the old five-second local delay despite the architecture promise.
 - Raw bounded stderr now yields structured delta-seconds or HTTP-date guidance before redaction; rate-limit retries use the larger local/downstream delay up to 24 hours, while larger guidance disables automatic retry rather than retrying early.
 - Arbitrary-length numeric and overflow-prone date inputs fail closed without unsafe integer/date conversion; independent re-review is clear at exact 452-test Windows/Ubuntu parity.
 - Bounded guidance that reaches or exceeds the action deadline now disables automatic retry instead of leaving the action in `retry_wait` until a predictably rejected dispatch; exact cross-platform parity is 453 passed plus one complementary platform skip.
 - A final CI-determinism audit found no medium-or-higher issue and identified one unbounded mocked process-creation wait; it now times out, surfaces an already-failed task's original error, and cancels/drains a hung task.
-- The 21:00 Murmuration tend again found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
+- The 21:00 Murmuration tend again found no scoped Rookery context and remained read-only: native identity was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
 - The final 22:00 Murmuration tend found no scoped Rookery context and remained read-only; the plugin cache rotated during the pass, the current client was rediscovered safely, and no credentials were inferred.
-- The final monitored hold produced no worktree drift, external-state change, or new finding; exact-current tests, artifacts, CLI, database, dependency, lint, and Git evidence remained valid at handoff.
+- The final monitored hold produced no worktree drift, external-state change, or new finding; then-current tests, artifacts, CLI, database, dependency, lint, and Git evidence remained valid at handoff.
 - The 23:15 owner-authorized provisioning pass created matching non-staff BookStack and Discourse users for `project-a3c5f71ec6d12b`, added only the project/electorate forum groups, and installed an owner-only local profile with one protected ACL grant.
 - The native profile reports `write_ready=true`; both surface doctors pass, notifications authenticate, all six intended BookStack books are visible, and an empty create canary is denied with HTTP 403 by the read-only role.
 - Point-in-time BookStack and supported Discourse backups were completed before provisioning; temporary remote credential staging was removed after local verification.
@@ -361,10 +363,10 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Windows and Ubuntu/WSL end-to-end installed-wheel verification pass at 85 sdist entries, 62 wheel entries, and 30 non-code runtime assets; four focused audit-contract tests pass on each platform, and independent review found no medium-or-higher residual issue. Current Windows archive SHA-256 values are `B05FB8D45124C61A857B7B4BA1FD58E3D45117FA6683A717F02C110CC231B206` and `50B79E6D449E66D6DCB4293EB65A91D2541F0D60EA332F5FFD3B4C21A7C629F8`.
 - Dependabot now proposes weekly `uv` and GitHub Actions updates using current officially supported ecosystem keys; every update remains gated by locked audit, cross-platform tests, and installed-wheel verification.
 - Native Murmuration topic 40 records the complete critical-review remediation with exact commits, cross-platform evidence, and explicit limits; the topic was reread to verify project authorship and content.
-- The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
-- The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
-- The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
-- The 15:18 Murmuration tend found no scoped Rookery context and remained read-only: native identity is absent, notifications return 403, and BookStack remains 401-gated.
+- The 18:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
+- The 17:20 Murmuration tend found no scoped Rookery context and remained read-only: native identity was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
+- The 16:22 Murmuration tend found no scoped Rookery context and remained read-only: native identity was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
+- The 15:18 Murmuration tend found no scoped Rookery context and remained read-only: native identity was absent at that checkpoint, notifications return 403, and BookStack remains 401-gated.
 - The 07:40 Murmuration tend found no scoped shared context and stayed read-only: native writes/notifications remain unavailable, forum search was empty, and BookStack remains credential-gated.
 - Release audit reproduced incomplete asset verification, unconstrained isolated builds, a pytest advisory, missing standalone first-run guidance, and mutable CI action tags; clean-HEAD archives otherwise passed Twine, wheel-content, entrypoint, leakage, and runtime-dependency checks.
 - Stale cached state must remain visible and must not be represented as live truth.
@@ -544,12 +546,12 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - NTFS junctions now exercise all three Windows directory-reparse rejection paths without symlink privilege; the full Windows suite rises to 491 passes while skips fall from 11 to 8.
 - A fresh browser-product review found no medium-or-higher issue; disconnected/final intent indicators are now truthful and non-animated, unchanged `aria-live` text is not rewritten, and rendered Chrome QA confirms the disconnected state without layout shift.
 - The distribution verifier now rejects stale migration/template/static bytes even when filenames match, and `critical-reviews/` is excluded from source archives alongside other workspace-only audit surfaces.
-- Exact-current verification passes at 493/8 on Windows and 495/6 on Ubuntu/WSL; current archives are 85 sdist entries, 62 wheel entries, and 30 non-code runtime assets. Repeated Windows SHA-256 values are `34B3BFEF062FDC4B3C7D4CAC44814685AE643FDD6426F8A4E34E206F53640EEE` and `5A9067113C46D9679934CED7F8B267542110217D2EF29DFD2390A3134DA14B56`.
+- At that checkpoint, exact verification passes at 493/8 on Windows and 495/6 on Ubuntu/WSL; current archives are 85 sdist entries, 62 wheel entries, and 30 non-code runtime assets. Repeated Windows SHA-256 values are `34B3BFEF062FDC4B3C7D4CAC44814685AE643FDD6426F8A4E34E206F53640EEE` and `5A9067113C46D9679934CED7F8B267542110217D2EF29DFD2390A3134DA14B56`.
 - The 01:51 Murmuration Tend pass reconfirmed the native identity, project/forum bindings, owner profile, and authenticated forum health; topic 40 contains both the initial remediation report and its idempotent recovery follow-up as posts 1 and 2 by `project-a3c5f71ec6d12b`.
 - Fresh first-look review `critical-reviews/20260830-020602.md` inventories the live CLI/web/package/recovery surface and retains eight medium findings after independent adjudication; the current archives themselves are intact, and a constrained wheel rebuild from the sdist is already byte-identical to the direct wheel.
 - Recovery now quarantines malformed state-dependent timing at store reopen, runtime SQLite contention is bounded after startup, background batches yield, and pre-set wake events cannot be lost; focused independent review found no blocking defect.
 - Release verification now checks an exact Git-aware sdist manifest, every included source byte, unsafe archive members, the exact wheel package tree, metadata/dependencies/README, RECORD digests, installed assets, and byte-identical constrained sdist reconstruction.
-- Exact-current Windows and Ubuntu/WSL gates pass at 509/8 and 511/6; the honest branch-only percentages are 77.57% and 76.99%, not the prior combined percentages mislabeled as branch coverage.
+- At that checkpoint, exact Windows and Ubuntu/WSL gates pass at 509/8 and 511/6; the honest branch-only percentages are 77.57% and 76.99%, not the prior combined percentages mislabeled as branch coverage.
 - Final exact-sdist follow-up cleared missing/unexpected files, included-source byte parity, root/path validation before directory skipping, duplicate files, symlinks/hardlinks/special members, and the fixed Git subprocess. Repeated post-commit Windows archives are byte-identical at sdist `5C4334876A03332D72495E5993665222B56544B1E2C9DF429ECE341F76BC58DD` and wheel `C4EA4FDE7CC8147DE19D982E2E611031EF88F133D51E3AD300E3310D34A4A3F3`.
 - The 02:51 Murmuration Tend pass reconfirmed native identity/forum readiness and published the closed recovery/release evidence idempotently as topic 40, post 3 by `project-a3c5f71ec6d12b`; no curation or governance action was requested.
 - Historical status metrics now call coverage.py's aggregate percentage “combined coverage”; only separately computed branch-only percentages are labeled branch coverage.
@@ -576,7 +578,7 @@ Deliver a cleaner, more reliable, better-tested, and git-committed version of th
 - Migration `0021_intent_aggregate_indexes` removes the quadratic disabled-authority aggregate path; reviewer probes measured 10,000, 25,000, and 50,000 affected intents at 0.148 s, 0.423 s, and 0.812 s with linear VM steps.
 - Exact offline migration-0018 benchmarks through 250,000 action scopes are documented; the largest distinct-target fixture completed in 6.77 s with integrity intact.
 - The real store is backed up at `.local/backups/rookery-20260830-055944-pre-0021.sqlite3` and migrated through `0021`; backup and live state are `ROOK`, integrity `ok`, and foreign-key clean.
-- Exact-current verification passes at 547/8 on Windows and 549/6 on Ubuntu/WSL. The clean distribution contains 89 sdist entries, 66 wheel entries, and 34 installed runtime assets.
+- At that checkpoint, exact verification passes at 547/8 on Windows and 549/6 on Ubuntu/WSL. The clean distribution contains 89 sdist entries, 66 wheel entries, and 34 installed runtime assets.
 - Fresh review `critical-reviews/20260830-063705.md` reproduced one high selected-profile credential/route crossover and three medium local-recovery, TLS, and permissive-INI defects; storage and the prior clean operator/package surface remain medium-plus clear.
 - The local-recovery candidate gives backup/list/retire/unretire one bounded app-only parse while full remote commands remain strict; independent re-review is clear.
 - Strict selected-section preflight now excludes DEFAULT credentials, rejects quoted/noncanonical route and TLS keys, rejects continuation/multiline ambiguity, and applies pinned CLI comment precedence. Independent exploit re-review is clear.

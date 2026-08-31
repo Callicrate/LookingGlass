@@ -171,7 +171,7 @@ def _parser() -> argparse.ArgumentParser:
         authority.add_argument("--system-id", required=True, help="Local system UUID.")
     run_once = subparsers.add_parser(
         "run-once",
-        help="Process one bounded batch of eligible local work, then stop.",
+        help="Process a bounded number of eligible local work cycles, then stop.",
     )
     run_once.add_argument(
         "--max-cycles",
