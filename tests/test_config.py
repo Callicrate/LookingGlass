@@ -2,11 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from async_api_view.config import (
+from lookingglass.config import (
     AppSettings,
     ConfigError,
     DatabricksSystemSettings,
     ProjectSettings,
+    SshSystemSettings,
     load_app_settings,
     load_settings,
 )
@@ -287,6 +288,169 @@ workspace_root = "/"
     settings = load_settings(path)
 
     assert settings.databricks_systems[0].config_id is None
+
+
+def test_loads_ssh_configuration(tmp_path: Path) -> None:
+    path = write_config(
+        tmp_path,
+        """
+[app]
+database_path = "data/state.sqlite3"
+ssh_config_path = "ssh/config"
+ssh_known_hosts_path = "ssh/known_hosts"
+
+[[ssh]]
+id = "EdgeHost"
+name = "edge-host"
+host_alias = "edge.prod"
+path_root = "/srv/data/"
+""",
+    )
+
+    settings = load_settings(path)
+
+    assert settings.app.ssh_config_path == (tmp_path / "ssh/config").resolve()
+    assert settings.app.ssh_known_hosts_path == (tmp_path / "ssh/known_hosts").resolve()
+    assert settings.databricks_systems == ()
+    assert len(settings.ssh_systems) == 1
+    system = settings.ssh_systems[0]
+    assert system.config_id == "edgehost"
+    assert system.name == "edge-host"
+    assert system.host_alias == "edge.prod"
+    assert system.path_root == "/srv/data"
+    assert system.authority_fingerprint == "0" * 64
+
+
+def test_databricks_only_config_leaves_ssh_systems_empty(tmp_path: Path) -> None:
+    path = write_config(
+        tmp_path,
+        """
+[[databricks]]
+name = "workspace"
+profile = "TEST_PROFILE"
+workspace_root = "/"
+""",
+    )
+
+    settings = load_settings(path)
+
+    assert settings.ssh_systems == ()
+    assert settings.app.ssh_config_path is None
+    assert settings.app.ssh_known_hosts_path is None
+
+
+def test_app_only_loader_resolves_ssh_paths_relative_to_config(tmp_path: Path) -> None:
+    path = write_config(
+        tmp_path,
+        """
+[app]
+database_path = "data/state.sqlite3"
+ssh_config_path = "ssh/config"
+""",
+    )
+
+    app = load_app_settings(path)
+
+    assert app.ssh_config_path == (tmp_path / "ssh/config").resolve()
+    assert app.ssh_known_hosts_path is None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"name": ""}, "name"),
+        ({"host_alias": "-bad"}, "must start with a letter or digit"),
+        ({"host_alias": "edge;whoami"}, "letters"),
+        ({"path_root": "relative"}, "absolute POSIX path"),
+        ({"path_root": "/srv/../etc"}, "absolute POSIX path"),
+        ({"authority_fingerprint": "not-a-digest"}, "SHA-256"),
+    ],
+)
+def test_programmatic_ssh_settings_share_toml_safety_contract(
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    values: dict[str, object] = {
+        "name": "edge-host",
+        "host_alias": "edge.prod",
+        "path_root": "/srv/data",
+        "config_id": "edge",
+    }
+    values.update(overrides)
+
+    with pytest.raises(ConfigError, match=message):
+        SshSystemSettings(**values)  # type: ignore[arg-type]
+
+
+def test_programmatic_ssh_settings_normalize_identity_and_root() -> None:
+    settings = SshSystemSettings(
+        name="edge-host",
+        host_alias="edge.prod",
+        path_root="/srv/data/",
+        config_id="EdgeHost",
+        authority_fingerprint="A" * 64,
+    )
+
+    assert settings.path_root == "/srv/data"
+    assert settings.config_id == "edgehost"
+    assert settings.authority_fingerprint == "a" * 64
+
+
+def test_project_settings_reject_duplicate_ssh_identity(tmp_path: Path) -> None:
+    app = AppSettings(database_path=tmp_path / "state.sqlite3")
+    first = SshSystemSettings("edge", "edge.one", "/srv/one", "primary")
+
+    with pytest.raises(ConfigError, match="must be SshSystemSettings"):
+        ProjectSettings(app, (), ["not-ssh"])  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="SSH system names must be unique"):
+        ProjectSettings(
+            app,
+            (),
+            (first, SshSystemSettings("EDGE", "edge.two", "/srv/two", "secondary")),
+        )
+    with pytest.raises(ConfigError, match="SSH system IDs must be unique"):
+        ProjectSettings(
+            app,
+            (),
+            (first, SshSystemSettings("secondary", "edge.two", "/srv/two", "PRIMARY")),
+        )
+    with pytest.raises(ConfigError, match="SSH host authorities must be unique"):
+        ProjectSettings(
+            app,
+            (),
+            (first, SshSystemSettings("secondary", "edge.two", "/srv/one", "secondary")),
+        )
+
+
+def test_rejects_command_shaped_ssh_settings(tmp_path: Path) -> None:
+    path = write_config(
+        tmp_path,
+        """
+[[ssh]]
+name = "edge"
+host_alias = "edge.prod"
+path_root = "/srv/../etc"
+""",
+    )
+
+    with pytest.raises(ConfigError, match="absolute POSIX path"):
+        load_settings(path)
+
+
+def test_rejects_unknown_ssh_fields_that_could_hide_credentials(tmp_path: Path) -> None:
+    path = write_config(
+        tmp_path,
+        """
+[[ssh]]
+name = "edge"
+host_alias = "edge.prod"
+path_root = "/srv/data"
+identity_file = "/home/op/.ssh/id_ed25519"
+""",
+    )
+
+    with pytest.raises(ConfigError, match="unknown"):
+        load_settings(path)
 
 
 def test_rejects_duplicate_databricks_system_ids(tmp_path: Path) -> None:
