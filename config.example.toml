@@ -5,6 +5,8 @@ port = 8765
 worker_poll_seconds = 1.0
 cli_timeout_seconds = 30.0
 cli_output_limit_bytes = 8388608
+ssh_config_path = "./.ssh/config"
+ssh_known_hosts_path = "./.ssh/known_hosts"
 
 [[databricks]]
 id = "primary-workspace"
@@ -12,3 +14,10 @@ name = "primary-workspace"
 profile = "YOUR_PROFILE"
 authority_fingerprint = "0000000000000000000000000000000000000000000000000000000000000000"
 workspace_root = "/"
+
+[[ssh]]
+id = "primary-host"
+name = "primary-host"
+host_alias = "YOUR_SSH_HOST_ALIAS"
+authority_fingerprint = "0000000000000000000000000000000000000000000000000000000000000000"
+path_root = "/"

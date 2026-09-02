@@ -78,6 +78,10 @@ def test_init_config_creates_loadable_template_without_overwrite(tmp_path: Path)
     settings = load_settings(output)
     assert settings.app.database_path == output.parent / ".local" / "lookingglass.sqlite3"
     assert settings.databricks_systems[0].profile == "YOUR_PROFILE"
+    assert settings.app.ssh_config_path == output.parent / ".ssh" / "config"
+    assert settings.app.ssh_known_hosts_path == output.parent / ".ssh" / "known_hosts"
+    assert settings.ssh_systems[0].host_alias == "YOUR_SSH_HOST_ALIAS"
+    assert settings.ssh_systems[0].path_root == "/"
 
 
 def test_placeholder_authority_fails_before_database_creation(
@@ -159,6 +163,71 @@ def test_fingerprint_profile_prints_only_digest_without_loading_project(
     assert result == 0
     assert captured.out == f"{'a' * 64}\n"
     assert captured.err == ""
+
+
+def test_fingerprint_host_prints_only_digest_from_app_client_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    recorded: dict[str, object] = {}
+
+    def fake_fingerprint(alias: str, *, ssh_config_path: Path, known_hosts_path: Path) -> str:
+        recorded["alias"] = alias
+        recorded["ssh_config_path"] = ssh_config_path
+        recorded["known_hosts_path"] = known_hosts_path
+        return "b" * 64
+
+    monkeypatch.setattr(cli, "ssh_host_authority_fingerprint", fake_fingerprint)
+    monkeypatch.setattr(
+        cli,
+        "_load_app",
+        lambda _path: AppSettings(
+            database_path=tmp_path / "state.sqlite3",
+            ssh_config_path=tmp_path / "ssh_config",
+            ssh_known_hosts_path=tmp_path / "known_hosts",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load",
+        lambda _path: pytest.fail("fingerprint-host loaded the full project configuration"),
+    )
+
+    result = cli.main(["fingerprint-host", "--alias", "server"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.out == f"{'b' * 64}\n"
+    assert captured.err == ""
+    assert recorded == {
+        "alias": "server",
+        "ssh_config_path": tmp_path / "ssh_config",
+        "known_hosts_path": tmp_path / "known_hosts",
+    }
+
+
+def test_fingerprint_host_requires_configured_client_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_load_app",
+        lambda _path: AppSettings(database_path=tmp_path / "state.sqlite3"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "ssh_host_authority_fingerprint",
+        lambda *args, **kwargs: pytest.fail("fingerprinting ran without configured client paths"),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        result = cli.main(["fingerprint-host", "--alias", "server"])
+
+    assert result == 1
+    assert "ssh_config_path" in caplog.text
 
 
 def test_init_rejects_missing_config(tmp_path: Path) -> None:
@@ -998,6 +1067,62 @@ def test_run_once_drains_work_and_closes_store(
     assert worker.started
     assert coordinator.calls == 2
     assert worker.calls == 2
+    assert store.closed
+
+
+def test_run_once_drives_every_configured_worker_without_short_circuit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeStore:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeCoordinator:
+        async def run_once(self) -> object | None:
+            return None
+
+    class FakeWorker:
+        def __init__(self, work_cycles: int) -> None:
+            self._work_cycles = work_cycles
+            self.started = False
+            self.calls = 0
+
+        async def startup(self) -> None:
+            self.started = True
+
+        async def run_once(self) -> bool:
+            self.calls += 1
+            return self.calls <= self._work_cycles
+
+    store = FakeStore()
+    coordinator = FakeCoordinator()
+    # The first worker reports work on cycle 1; the second must still be
+    # driven that same cycle, so a short-circuiting `or` would leave it idle.
+    databricks_worker = FakeWorker(work_cycles=1)
+    ssh_worker = FakeWorker(work_cycles=1)
+    runtime = SimpleNamespace(
+        store=store,
+        coordinator=coordinator,
+        worker=databricks_worker,
+        workers=(databricks_worker, ssh_worker),
+    )
+    settings = ProjectSettings(
+        app=AppSettings(database_path=tmp_path / "state.sqlite3"),
+        databricks_systems=(),
+    )
+    monkeypatch.setattr(cli, "_load", lambda _path: settings)
+    monkeypatch.setattr(cli, "build_runtime", lambda _settings: runtime)
+
+    assert cli.main(["run-once"]) == 0
+    assert databricks_worker.started
+    assert ssh_worker.started
+    # Both workers report work on cycle 1 and idle on cycle 2, so both are
+    # invoked exactly twice — proving the second worker runs even when the
+    # first has already reported work.
+    assert databricks_worker.calls == 2
+    assert ssh_worker.calls == 2
     assert store.closed
 
 

@@ -21,6 +21,7 @@ from lookingglass.adapters.databricks import (
     databricks_profile_authority_fingerprint,
     redact_diagnostic,
 )
+from lookingglass.adapters.ssh import ssh_host_authority_fingerprint
 from lookingglass.composition import ApplicationRuntime, build_runtime
 from lookingglass.config import (
     AppSettings,
@@ -92,6 +93,8 @@ port = 8765
 worker_poll_seconds = 1.0
 cli_timeout_seconds = 30.0
 cli_output_limit_bytes = 8388608
+ssh_config_path = "./.ssh/config"
+ssh_known_hosts_path = "./.ssh/known_hosts"
 
 [[databricks]]
 id = "primary-workspace"
@@ -99,6 +102,13 @@ name = "primary-workspace"
 profile = "YOUR_PROFILE"
 authority_fingerprint = "0000000000000000000000000000000000000000000000000000000000000000"
 workspace_root = "/"
+
+[[ssh]]
+id = "primary-host"
+name = "primary-host"
+host_alias = "YOUR_SSH_HOST_ALIAS"
+authority_fingerprint = "0000000000000000000000000000000000000000000000000000000000000000"
+path_root = "/"
 """
 
 
@@ -150,6 +160,15 @@ def _parser() -> argparse.ArgumentParser:
         "--profile",
         required=True,
         help="Existing named profile in the standard Databricks CLI configuration.",
+    )
+    fingerprint_host = subparsers.add_parser(
+        "fingerprint-host",
+        help="Print the non-secret route-authority fingerprint for one SSH host alias.",
+    )
+    fingerprint_host.add_argument(
+        "--alias",
+        required=True,
+        help="Host alias resolved through the configured SSH client configuration.",
     )
     subparsers.add_parser("init", help="Initialize the database and configured systems.")
     subparsers.add_parser(
@@ -328,10 +347,16 @@ async def _run_once(
 ) -> bool:
     """Process a bounded batch and report whether the eligible queue became idle."""
 
-    await runtime.worker.startup()
+    workers = tuple(getattr(runtime, "workers", None) or (runtime.worker,))
+    for worker in workers:
+        await worker.startup()
     for _ in range(max_cycles):
         coordinated = await runtime.coordinator.run_once()
-        worked = await runtime.worker.run_once()
+        # Drive every adapter worker each cycle without short-circuiting, so a
+        # worker with pending work is never skipped because an earlier one
+        # already reported progress.
+        results = [await worker.run_once() for worker in workers]
+        worked = any(results)
         if coordinated is None and not worked:
             return True
     return False
@@ -473,6 +498,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "fingerprint-profile":
             fingerprint = databricks_profile_authority_fingerprint(args.profile)
+            sys.stdout.write(f"{fingerprint}\n")
+            return 0
+        if args.command == "fingerprint-host":
+            app_settings = _load_app(args.config)
+            if (
+                app_settings.ssh_config_path is None
+                or app_settings.ssh_known_hosts_path is None
+            ):
+                raise ConfigError(
+                    "SSH host fingerprinting requires app.ssh_config_path and "
+                    "app.ssh_known_hosts_path"
+                )
+            fingerprint = ssh_host_authority_fingerprint(
+                args.alias,
+                ssh_config_path=app_settings.ssh_config_path,
+                known_hosts_path=app_settings.ssh_known_hosts_path,
+            )
             sys.stdout.write(f"{fingerprint}\n")
             return 0
         if args.command == "serve":
