@@ -21,6 +21,13 @@ from lookingglass.adapters.databricks import (
     LifecyclePersistenceFailure,
     workspace_authority_fingerprint,
 )
+from lookingglass.adapters.ssh import (
+    CliExecution as SshCliExecution,
+)
+from lookingglass.adapters.ssh import (
+    SshInvocation,
+    SshRunner,
+)
 from lookingglass.application import SystemBootstrapService
 from lookingglass.cli import _run_once
 from lookingglass.composition import build_runtime
@@ -29,6 +36,7 @@ from lookingglass.config import (
     ConfigError,
     DatabricksSystemSettings,
     ProjectSettings,
+    SshSystemSettings,
 )
 from lookingglass.contracts import (
     ActionCompletion,
@@ -214,6 +222,90 @@ def settings(
                 authority_fingerprint=authority_fingerprint,
             ),
         ),
+    )
+
+
+class FakeSshRunner(SshRunner):
+    """Structured-argv SSH runner double that never launches a remote process."""
+
+    def __init__(
+        self, stdout: bytes, *, ssh_config_path: Path, known_hosts_path: Path
+    ) -> None:
+        super().__init__(ssh_config_path=ssh_config_path, known_hosts_path=known_hosts_path)
+        self.stdout = stdout
+        self.calls: list[SshInvocation] = []
+
+    async def doctor(self) -> None:
+        return None
+
+    def verify_host_authority(self, *, alias: str, expected_fingerprint: str) -> None:
+        assert alias
+        assert len(expected_fingerprint) == 64
+
+    async def run(self, invocation: SshInvocation, *, correlation_id: str) -> SshCliExecution:
+        self.calls.append(invocation)
+        return SshCliExecution(
+            correlation_id=correlation_id,
+            duration=timedelta(milliseconds=5),
+            exit_code=0,
+            stdout=self.stdout,
+            stderr=b"",
+        )
+
+
+def _ssh_find_record(entry_type: str, size: str, mtime: str, mode: str, name: str) -> bytes:
+    return f"{entry_type}\x1f{size}\x1f{mtime}\x1f{mode}\x1f{name}\x00".encode()
+
+
+def ssh_settings(
+    tmp_path: Path,
+    *,
+    name: str = "test-host",
+    host_alias: str = "server",
+    path_root: str = "/srv",
+    authority_fingerprint: str = "1" * 64,
+    worker_poll_seconds: float = 1.0,
+    include_databricks: bool = True,
+    ssh_client_paths: bool = True,
+) -> ProjectSettings:
+    databricks_systems = (
+        (
+            DatabricksSystemSettings(
+                config_id="test-workspace",
+                name="test-workspace",
+                profile="TEST_PROFILE",
+                workspace_root="/",
+                authority_fingerprint="1" * 64,
+            ),
+        )
+        if include_databricks
+        else ()
+    )
+    return ProjectSettings(
+        app=AppSettings(
+            database_path=tmp_path / "state.sqlite3",
+            worker_poll_seconds=worker_poll_seconds,
+            ssh_config_path=(tmp_path / "ssh_config") if ssh_client_paths else None,
+            ssh_known_hosts_path=(tmp_path / "known_hosts") if ssh_client_paths else None,
+        ),
+        databricks_systems=databricks_systems,
+        ssh_systems=(
+            SshSystemSettings(
+                config_id="test-host",
+                name=name,
+                host_alias=host_alias,
+                path_root=path_root,
+                authority_fingerprint=authority_fingerprint,
+            ),
+        ),
+    )
+
+
+def _fake_ssh_runner(tmp_path: Path, stdout: bytes = b"") -> FakeSshRunner:
+    return FakeSshRunner(
+        stdout,
+        ssh_config_path=tmp_path / "ssh_config",
+        known_hosts_path=tmp_path / "known_hosts",
     )
 
 
@@ -417,6 +509,118 @@ async def test_databricks_workspace_vertical_slice_is_durable_and_throttled(
     assert second.scopes[0].state == "deferred"
     assert second.scopes[0].eligible_at is not None
 
+    runtime.store.close()
+
+
+def test_databricks_only_runtime_has_no_ssh_worker(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    assert runtime.ssh_worker is None
+    assert runtime.workers == (runtime.worker,)
+    runtime.store.close()
+
+
+def test_ssh_host_placeholder_fingerprint_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="fingerprint-host"):
+        build_runtime(
+            ssh_settings(tmp_path, authority_fingerprint="0" * 64),
+            runner=FakeCliRunner(b"[]"),
+            ssh_runner=_fake_ssh_runner(tmp_path),
+        )
+
+
+def test_ssh_systems_require_configured_client_paths(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="ssh_config_path"):
+        build_runtime(
+            ssh_settings(tmp_path, ssh_client_paths=False),
+            runner=FakeCliRunner(b"[]"),
+            ssh_runner=_fake_ssh_runner(tmp_path),
+        )
+
+
+@pytest.mark.anyio
+async def test_ssh_host_configuration_is_seeded_and_composed(tmp_path: Path) -> None:
+    runtime = build_runtime(
+        ssh_settings(tmp_path),
+        runner=FakeCliRunner(b"[]"),
+        ssh_runner=_fake_ssh_runner(tmp_path),
+    )
+    assert runtime.ssh_worker is not None
+    assert runtime.workers == (runtime.worker, runtime.ssh_worker)
+
+    ssh_system = next(
+        system
+        for system in runtime.store.list_readable_systems()
+        if system.system_kind == "ssh.host"
+    )
+    binding = runtime.store.list_readable_connection_bindings(system_id=ssh_system.system_id)[0]
+    assert binding.adapter_key == "ssh"
+    assert set(binding.non_secret_settings) == {
+        "host_alias",
+        "authority_fingerprint",
+        "path_root",
+    }
+    assert binding.non_secret_settings["host_alias"] == "server"
+    assert binding.non_secret_settings["path_root"] == "/srv"
+    assert binding.non_secret_settings["authority_fingerprint"] == "1" * 64
+    runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_ssh_children_vertical_slice_is_durable_and_isolated(tmp_path: Path) -> None:
+    stdout = (
+        _ssh_find_record("d", "4096", "1693526400.0", "755", "logs")
+        + _ssh_find_record("f", "12", "1693526400.5", "644", "notes.txt")
+    )
+    ssh_runner = _fake_ssh_runner(tmp_path, stdout)
+    runtime = build_runtime(
+        ssh_settings(tmp_path),
+        runner=FakeCliRunner(b"[]"),
+        ssh_runner=ssh_runner,
+    )
+    runtime.worker_available = True
+
+    dashboard = await runtime.backend.dashboard()
+    refresh = next(
+        option
+        for option in dashboard.refresh_options
+        if option.capability_key == "ssh.fs.children.read"
+        and option.target_kind == "configured_scope"
+    )
+    intent_id = await runtime.backend.submit_refresh(
+        request=RefreshRequest(
+            system_id=refresh.system_id,
+            target_kind=refresh.target_kind,
+            target_id=refresh.target_id,
+            capability_key=refresh.capability_key,
+            facet=refresh.facet,
+        )
+    )
+    admitted = await runtime.coordinator.run_once()
+    assert admitted is not None
+    assert admitted.action_id is not None
+
+    # The Databricks worker must never lease an SSH action; the queue is keyed per adapter.
+    assert not await runtime.worker.run_once()
+    assert await runtime.ssh_worker.run_once()
+    assert len(ssh_runner.calls) == 1
+
+    refreshed = await runtime.backend.dashboard()
+    assert {item.name for item in refreshed.objects} >= {"/srv", "logs", "notes.txt"}
+    root_scope = runtime.store.get_configured_scope(refresh.target_id)
+    assert root_scope is not None
+    assert root_scope.object_id is not None
+    detail = await runtime.backend.object_detail(root_scope.object_id)
+    assert detail is not None
+    assert {child.name for child in detail.children} == {"logs", "notes.txt"}
+    membership_facet = next(
+        facet for facet in detail.object.facets if facet.name == "membership"
+    )
+    assert membership_facet.provenance_action_id == admitted.action_id
+
+    intent = await runtime.backend.intent(intent_id)
+    assert intent is not None
+    assert intent.terminal
+    assert intent.scopes[0].state in {"succeeded", "partial"}
     runtime.store.close()
 
 

@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import os
 import shutil
 import sqlite3
@@ -2374,6 +2375,76 @@ def test_restart_read_helpers_expose_scopes_and_catalogs_root_without_secrets(tm
         scopes = reopened.list_configured_scopes()
         assert {scope.display_name for scope in scopes} == {"/Shared", "Unity Catalog catalogs"}
         assert reopened.get_object_sync(seeded.unity_catalog_root_object_id) is not None
+
+
+def test_ssh_binding_and_identity_surface_through_readable_views(tmp_path) -> None:
+    """SSH-shaped bindings and authorities pass the storage read-integrity boundary."""
+    path = tmp_path / "state.sqlite3"
+    fingerprint = "a" * 64
+    with SQLiteStore(path) as store:
+        seeded = SystemBootstrapService(store).configure_ssh_host(
+            display_name="edge",
+            host_alias="server",
+            path_root="/srv",
+            authority_fingerprint=fingerprint,
+            enabled_capability_keys=("ssh.fs.children.read", "ssh.fs.metadata.read"),
+            now=NOW,
+        )
+        bindings = store.list_readable_connection_bindings(system_id=seeded.system.system_id)
+        assert len(bindings) == 1
+        binding = bindings[0]
+        assert binding.adapter_key == "ssh"
+        assert set(binding.non_secret_settings) == {
+            "host_alias",
+            "authority_fingerprint",
+            "path_root",
+        }
+        assert binding.secret_reference is None
+
+        authority_material = json.dumps(
+            [fingerprint, "server", "/srv"],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode()
+        authority_key = f"ssh-host-v1:{hashlib.sha256(authority_material).hexdigest()}"
+        store.upsert_configured_system_identity(
+            system_kind="ssh.host",
+            config_id="edge-host",
+            authority_key=authority_key,
+            system_id=seeded.system.system_id,
+            now=NOW,
+        )
+        assert (
+            store.get_readable_configured_system_identity(
+                system_kind="ssh.host",
+                config_id="edge-host",
+                authority_key=authority_key,
+            )
+            == seeded.system.system_id
+        )
+        # A mismatched authority (wrong path_root in the hashed material) must NOT
+        # surface through the readable identity view.
+        mismatched_material = json.dumps(
+            [fingerprint, "server", "/other"],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode()
+        mismatched_key = f"ssh-host-v1:{hashlib.sha256(mismatched_material).hexdigest()}"
+        store.upsert_configured_system_identity(
+            system_kind="ssh.host",
+            config_id="edge-host",
+            authority_key=mismatched_key,
+            system_id=seeded.system.system_id,
+            now=NOW,
+        )
+        assert (
+            store.get_readable_configured_system_identity(
+                system_kind="ssh.host",
+                config_id="edge-host",
+                authority_key=mismatched_key,
+            )
+            is None
+        )
 
 
 def test_object_page_search_escapes_wildcards_and_bounds_results(tmp_path) -> None:

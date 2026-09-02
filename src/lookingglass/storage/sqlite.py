@@ -253,7 +253,7 @@ _RUNTIME_EVENT_TYPES = frozenset(
 _RUNTIME_SUMMARY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:;()_-]{0,511}$")
 _CONFIG_ID = re.compile(r"\A[a-z0-9._-]{1,128}\Z")
 _AUTHORITY_FINGERPRINT = re.compile(r"\A[0-9a-f]{64}\Z")
-_AUTHORITY_KEY = re.compile(r"\Adatabricks-host-v1:[0-9a-f]{64}\Z")
+_AUTHORITY_KEY = re.compile(r"\A(?:databricks-host|ssh-host)-v1:[0-9a-f]{64}\Z")
 _ALERT_SEVERITIES = frozenset({"info", "warning", "error", "critical"})
 _COLLECTION_COVERAGE_RANK = {
     CollectionCoverage.UNKNOWN: 0,
@@ -934,27 +934,25 @@ def _stored_json_array_is_valid(value: object) -> int:
     return int(isinstance(parsed, list))
 
 
-def _stored_binding_settings_is_valid(value: object) -> int:
-    if not isinstance(value, str):
-        return 0
+def _stored_fingerprint_is_valid(fingerprint: object) -> bool:
+    return (
+        isinstance(fingerprint, str)
+        and _AUTHORITY_FINGERPRINT.fullmatch(fingerprint) is not None
+        and fingerprint != "0" * 64
+    )
+
+
+def _stored_databricks_binding_settings_is_valid(parsed: dict[str, object]) -> int:
     try:
-        parsed = _json_value(value)
-        if not isinstance(parsed, dict):
-            return 0
-        fingerprint = parsed.get("authority_fingerprint")
         profile = parsed.get("profile")
         workspace_root = parsed.get("workspace_root")
         if not isinstance(profile, str) or not isinstance(workspace_root, str):
             return 0
         require_text(profile, "stored profile", max_length=128)
         require_text(workspace_root, "stored workspace root", max_length=4096)
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except (TypeError, ValueError):
         return 0
-    if (
-        not isinstance(fingerprint, str)
-        or _AUTHORITY_FINGERPRINT.fullmatch(fingerprint) is None
-        or fingerprint == "0" * 64
-    ):
+    if not _stored_fingerprint_is_valid(parsed.get("authority_fingerprint")):
         return 0
     content_capture = parsed.get("content_capture_enabled")
     if content_capture is not None and not isinstance(content_capture, bool):
@@ -966,6 +964,38 @@ def _stored_binding_settings_is_valid(value: object) -> int:
         ):
             return 0
     return 1
+
+
+def _stored_ssh_binding_settings_is_valid(parsed: dict[str, object]) -> int:
+    try:
+        host_alias = parsed.get("host_alias")
+        path_root = parsed.get("path_root")
+        if not isinstance(host_alias, str) or not isinstance(path_root, str):
+            return 0
+        require_text(host_alias, "stored host alias", max_length=128)
+        require_text(path_root, "stored path root", max_length=4096)
+    except (TypeError, ValueError):
+        return 0
+    return int(_stored_fingerprint_is_valid(parsed.get("authority_fingerprint")))
+
+
+def _stored_binding_settings_is_valid(value: object) -> int:
+    if not isinstance(value, str):
+        return 0
+    try:
+        parsed = _json_value(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return 0
+    if not isinstance(parsed, dict):
+        return 0
+    # Dispatch on adapter shape. Each adapter's settings carry a disjoint,
+    # required key set (``workspace_root`` for Databricks, ``path_root`` for
+    # SSH); a blob matching neither shape is not a readable binding.
+    if "workspace_root" in parsed or "profile" in parsed:
+        return _stored_databricks_binding_settings_is_valid(parsed)
+    if "path_root" in parsed or "host_alias" in parsed:
+        return _stored_ssh_binding_settings_is_valid(parsed)
+    return 0
 
 
 def _stored_config_id_is_valid(value: object) -> int:
@@ -988,17 +1018,31 @@ def _stored_identity_matches_binding(authority_key: object, settings_json: objec
         if not isinstance(settings, dict):
             return 0
         fingerprint = settings.get("authority_fingerprint")
-        workspace_root = settings.get("workspace_root")
-        if not isinstance(fingerprint, str) or not isinstance(workspace_root, str):
+        if not isinstance(fingerprint, str):
             return 0
+        # The authority-key prefix authoritatively encodes the adapter; the
+        # hashed material mirrors each adapter's seeding in ``composition.py``.
+        if authority_key.startswith("ssh-host-v1:"):
+            host_alias = settings.get("host_alias")
+            path_root = settings.get("path_root")
+            if not isinstance(host_alias, str) or not isinstance(path_root, str):
+                return 0
+            fields: list[str] = [fingerprint, host_alias, path_root]
+            prefix = "ssh-host-v1:"
+        else:
+            workspace_root = settings.get("workspace_root")
+            if not isinstance(workspace_root, str):
+                return 0
+            fields = [fingerprint, workspace_root]
+            prefix = "databricks-host-v1:"
         material = json.dumps(
-            [fingerprint, workspace_root],
+            fields,
             ensure_ascii=True,
             separators=(",", ":"),
         ).encode()
     except (TypeError, ValueError, json.JSONDecodeError):
         return 0
-    expected = f"databricks-host-v1:{hashlib.sha256(material).hexdigest()}"
+    expected = f"{prefix}{hashlib.sha256(material).hexdigest()}"
     return int(authority_key == expected)
 
 

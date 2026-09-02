@@ -26,6 +26,22 @@ from lookingglass.adapters.databricks import (
     LifecyclePersistenceFailure,
     ResolvedTarget,
 )
+from lookingglass.adapters.ssh import (
+    CAPABILITIES as SSH_CAPABILITIES,
+)
+from lookingglass.adapters.ssh import (
+    CommandRejected as SshCommandRejected,
+)
+from lookingglass.adapters.ssh import (
+    LifecyclePersistenceFailure as SshLifecyclePersistenceFailure,
+)
+from lookingglass.adapters.ssh import (
+    ResolvedTarget as SshResolvedTarget,
+)
+from lookingglass.adapters.ssh import (
+    SshRunner,
+    SshWorker,
+)
 from lookingglass.application import DurableCoordinator, SystemBootstrapService
 from lookingglass.config import (
     PLACEHOLDER_AUTHORITY_FINGERPRINT,
@@ -229,6 +245,64 @@ class SQLiteDatabricksTargetResolver:
                 canonical_object_type=remote_object.object_type,
             )
         raise CommandRejected("capability does not support this object target")
+
+
+class SQLiteSshTargetResolver:
+    """Resolve only canonical/configured SSH targets into adapter-local paths."""
+
+    def __init__(self, store: SQLiteStore) -> None:
+        self._store = store
+
+    def _observed_path(self, remote_object: RemoteObject) -> str | None:
+        state = self._store.get_facet_sync(remote_object.object_id, "metadata")
+        payload = state.payload if state is not None else {}
+        path = payload.get("path")
+        if isinstance(path, str) and path:
+            return path
+        if remote_object.external_key.startswith("ssh:/"):
+            return remote_object.external_key.removeprefix("ssh:")
+        return None
+
+    async def resolve(
+        self,
+        *,
+        action: AdapterAction,
+        binding: ConnectionBinding,
+    ) -> SshResolvedTarget:
+        path_root = str(binding.non_secret_settings.get("path_root", ""))
+        if action.target.kind is TargetKind.CONFIGURED_SCOPE:
+            scope = self._store.get_configured_scope(action.target.target_id)
+            if scope is None or not scope.enabled or scope.system_id != action.system_id:
+                raise SshCommandRejected("configured target is unavailable")
+            if action.capability_key != "ssh.fs.children.read":
+                raise SshCommandRejected("capability does not support this configured target")
+            return SshResolvedTarget(
+                path=scope.display_name,
+                path_root=path_root,
+                display_name=scope.display_name,
+                canonical_object_id=scope.object_id,
+                canonical_object_type=scope.object_type,
+            )
+
+        if action.target.kind is not TargetKind.OBJECT:
+            raise SshCommandRejected("unsupported SSH target kind")
+        remote_object = self._store.get_object_sync(action.target.target_id)
+        if remote_object is None or remote_object.system_id != action.system_id:
+            raise SshCommandRejected("canonical target is unavailable")
+        if remote_object.presence is PresenceState.ABSENT:
+            raise SshCommandRejected("canonical target is absent")
+        if action.capability_key not in {"ssh.fs.children.read", "ssh.fs.metadata.read"}:
+            raise SshCommandRejected("capability does not support this object target")
+        path = self._observed_path(remote_object)
+        if path is None:
+            raise SshCommandRejected("SSH target has no observed path")
+        return SshResolvedTarget(
+            path=path,
+            path_root=path_root,
+            display_name=remote_object.display_name,
+            canonical_object_id=remote_object.object_id,
+            canonical_object_type=remote_object.object_type,
+        )
 
 
 class SQLiteWebBackend:
@@ -1184,6 +1258,22 @@ class SQLiteWebBackend:
 
 
 @dataclass(slots=True)
+class _WorkerSupervision:
+    """Mutable per-run background state for one adapter worker.
+
+    ``field`` names the :class:`ApplicationRuntime` attribute that holds the
+    live worker so the supervisor resolves it dynamically; tests reassign
+    ``runtime.worker`` after construction and expect the loop to observe it.
+    """
+
+    component: str
+    field: str
+    lifecycle_failure: type[BaseException]
+    started: bool = False
+    recovery_generation: int | None = None
+
+
+@dataclass(slots=True)
 class ApplicationRuntime:
     settings: ProjectSettings
     store: SQLiteStore
@@ -1193,16 +1283,35 @@ class ApplicationRuntime:
     backend: SQLiteWebBackend
     local_authorizer: LocalCallerAuthorizer
     app: FastAPI
+    ssh_worker: SshWorker | None = None
     worker_available: bool = False
     worker_error: str | None = None
     _stop_event: asyncio.Event | None = field(default=None, init=False)
     _wake_event: asyncio.Event | None = field(default=None, init=False)
     _background_task: asyncio.Task[None] | None = field(default=None, init=False)
-    _worker_started: bool = field(default=False, init=False)
+    _supervised: tuple[_WorkerSupervision, ...] = field(default=(), init=False)
     _lifecycle_closed: bool = field(default=False, init=False)
-    _worker_recovery_generation: int | None = field(default=None, init=False)
     _component_errors: dict[str, str] = field(default_factory=dict, init=False)
     _failure_counts: dict[str, int] = field(default_factory=dict, init=False)
+
+    def __post_init__(self) -> None:
+        supervised = [
+            _WorkerSupervision("worker", "worker", LifecyclePersistenceFailure),
+        ]
+        if self.ssh_worker is not None:
+            supervised.append(
+                _WorkerSupervision(
+                    "ssh-worker", "ssh_worker", SshLifecyclePersistenceFailure
+                )
+            )
+        self._supervised = tuple(supervised)
+
+    @property
+    def workers(self) -> tuple[Any, ...]:
+        return tuple(getattr(self, supervised.field) for supervised in self._supervised)
+
+    def _workers_ready(self) -> bool:
+        return all(supervised.started for supervised in self._supervised)
 
     def status(self) -> tuple[bool, str | None]:
         return self.worker_available, self.worker_error
@@ -1218,7 +1327,9 @@ class ApplicationRuntime:
         self._wake_event = asyncio.Event()
         self._component_errors.clear()
         self._failure_counts.clear()
-        self._worker_started = False
+        for supervised in self._supervised:
+            supervised.started = False
+            supervised.recovery_generation = None
         self.worker_available = False
         self.worker_error = "Worker compatibility check is in progress."
         self._background_task = asyncio.create_task(
@@ -1259,10 +1370,11 @@ class ApplicationRuntime:
             logger.warning("%s; retrying", summary)
             return
         logger.error("%s; retrying", summary)
-        event_type = {
-            "coordinator": "queue.coordinator.failed",
-            "worker": "queue.adapter_worker.failed",
-        }[component]
+        event_type = (
+            "queue.coordinator.failed"
+            if component == "coordinator"
+            else "queue.adapter_worker.failed"
+        )
         try:
             self.store.record_runtime_failure(
                 event_type=event_type,
@@ -1277,7 +1389,7 @@ class ApplicationRuntime:
             logger.info("%s recovered", component)
         self._component_errors.pop(component, None)
         self._failure_counts.pop(component, None)
-        self.worker_available = self._worker_started and not self._component_errors
+        self.worker_available = self._workers_ready() and not self._component_errors
         self.worker_error = next(reversed(self._component_errors.values()), None)
 
     def _retry_delay(self, component: str) -> float:
@@ -1301,16 +1413,23 @@ class ApplicationRuntime:
         if self._stop_event is None or self._wake_event is None:
             raise RuntimeError("runtime was not started")
         while not self._stop_event.is_set():
-            if not self._worker_started:
-                try:
-                    await self.worker.startup()
-                except Exception as exc:
-                    if isinstance(exc, LifecyclePersistenceFailure):
-                        self._worker_recovery_generation = self.worker.ingestion_generation + 1
-                    self._record_background_failure("worker", exc)
-                    await self._wait_for_activity(self._retry_delay("worker"))
+            startup_failed = False
+            for supervised in self._supervised:
+                if supervised.started:
                     continue
-                self._worker_started = True
+                worker = getattr(self, supervised.field)
+                try:
+                    await worker.startup()
+                except Exception as exc:
+                    if isinstance(exc, supervised.lifecycle_failure):
+                        supervised.recovery_generation = worker.ingestion_generation + 1
+                    self._record_background_failure(supervised.component, exc)
+                    await self._wait_for_activity(self._retry_delay(supervised.component))
+                    startup_failed = True
+                    break
+                supervised.started = True
+            if startup_failed:
+                continue
             worked = False
             try:
                 for _ in range(100):
@@ -1324,24 +1443,30 @@ class ApplicationRuntime:
                 continue
             self._record_component_recovery("coordinator")
             await asyncio.sleep(0)
-            try:
-                for _ in range(100):
-                    if not await self.worker.run_once():
-                        break
-                    worked = True
-            except Exception as exc:
-                self._worker_started = False
-                if isinstance(exc, LifecyclePersistenceFailure):
-                    self._worker_recovery_generation = self.worker.ingestion_generation + 1
-                self._record_background_failure("worker", exc)
-                await self._wait_for_activity(self._retry_delay("worker"))
+            worker_failed = False
+            for supervised in self._supervised:
+                worker = getattr(self, supervised.field)
+                try:
+                    for _ in range(100):
+                        if not await worker.run_once():
+                            break
+                        worked = True
+                except Exception as exc:
+                    supervised.started = False
+                    if isinstance(exc, supervised.lifecycle_failure):
+                        supervised.recovery_generation = worker.ingestion_generation + 1
+                    self._record_background_failure(supervised.component, exc)
+                    await self._wait_for_activity(self._retry_delay(supervised.component))
+                    worker_failed = True
+                    break
+                if (
+                    supervised.recovery_generation is None
+                    or worker.ingestion_generation >= supervised.recovery_generation
+                ):
+                    supervised.recovery_generation = None
+                    self._record_component_recovery(supervised.component)
+            if worker_failed:
                 continue
-            if (
-                self._worker_recovery_generation is None
-                or self.worker.ingestion_generation >= self._worker_recovery_generation
-            ):
-                self._worker_recovery_generation = None
-                self._record_component_recovery("worker")
             await asyncio.sleep(0)
             if worked:
                 continue
@@ -1352,6 +1477,7 @@ def build_runtime(
     settings: ProjectSettings,
     *,
     runner: CliRunner | None = None,
+    ssh_runner: SshRunner | None = None,
     clock: Callable[[], datetime] | None = None,
     available_bytes_probe: Callable[[], int] | None = None,
 ) -> ApplicationRuntime:
@@ -1363,6 +1489,20 @@ def build_runtime(
         raise ConfigError(
             "Databricks authority fingerprint is still the placeholder; run "
             "lookingglass fingerprint-profile and update authority_fingerprint"
+        )
+    if any(
+        system.authority_fingerprint == PLACEHOLDER_AUTHORITY_FINGERPRINT
+        for system in settings.ssh_systems
+    ):
+        raise ConfigError(
+            "SSH host authority fingerprint is still the placeholder; run "
+            "lookingglass fingerprint-host --alias <alias> and update authority_fingerprint"
+        )
+    if settings.ssh_systems and (
+        settings.app.ssh_config_path is None or settings.app.ssh_known_hosts_path is None
+    ):
+        raise ConfigError(
+            "SSH systems require app.ssh_config_path and app.ssh_known_hosts_path"
         )
     config_ids = tuple(
         canonical_config_id(system.config_id)
@@ -1379,7 +1519,7 @@ def build_runtime(
         minimum_write_headroom_bytes=reserve + settings.app.cli_output_limit_bytes,
     )
     try:
-        return _compose_runtime(settings, store=store, runner=runner)
+        return _compose_runtime(settings, store=store, runner=runner, ssh_runner=ssh_runner)
     except BaseException:
         store.close()
         raise
@@ -1458,6 +1598,76 @@ def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) ->
         capability_binding_ids=configured_capability_ids,
         scope_ids=configured_scope_ids,
     )
+    _apply_ssh_configuration(settings, store, bootstrap)
+
+
+def _apply_ssh_configuration(
+    settings: ProjectSettings, store: SQLiteStore, bootstrap: SystemBootstrapService
+) -> None:
+    store.repair_configuration_record_timestamps(system_kind="ssh.host")
+    configured_system_ids: set[str] = set()
+    configured_binding_ids: set[str] = set()
+    configured_capability_ids: set[str] = set()
+    configured_scope_ids: set[str] = set()
+    for system in settings.ssh_systems:
+        config_id = canonical_config_id(system.config_id) if system.config_id is not None else None
+        authority_material = json.dumps(
+            [system.authority_fingerprint, system.host_alias, system.path_root],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode()
+        authority_key = f"ssh-host-v1:{hashlib.sha256(authority_material).hexdigest()}"
+        legacy_stable = str(
+            uuid5(
+                NAMESPACE_URL,
+                # Deterministic namespace for the legacy (config-id-less) host identity.
+                "lookingglass/ssh/legacy/"
+                f"{system.name}/{system.authority_fingerprint}/{system.path_root}",
+            )
+        )
+        stable = legacy_stable
+        if config_id is not None:
+            mapped = store.get_readable_configured_system_identity(
+                system_kind="ssh.host",
+                config_id=config_id,
+                authority_key=authority_key,
+            )
+            stable = mapped or str(
+                uuid5(
+                    NAMESPACE_URL,
+                    # Deterministic namespace for the config-id-scoped authority identity.
+                    f"lookingglass/ssh/{config_id}/{authority_key}",
+                )
+            )
+        seeded = bootstrap.configure_ssh_host(
+            display_name=system.name,
+            host_alias=system.host_alias,
+            path_root=system.path_root,
+            authority_fingerprint=system.authority_fingerprint,
+            enabled_capability_keys=tuple(sorted(SSH_CAPABILITIES)),
+            system_id=stable,
+            connection_binding_id=str(uuid5(NAMESPACE_URL, f"{stable}/binding")),
+            root_object_id=str(uuid5(NAMESPACE_URL, f"{stable}/root")),
+            root_scope_id=str(uuid5(NAMESPACE_URL, f"{stable}/root-scope")),
+        )
+        if config_id is not None:
+            store.upsert_configured_system_identity(
+                system_kind="ssh.host",
+                config_id=config_id,
+                authority_key=authority_key,
+                system_id=seeded.system.system_id,
+            )
+        configured_system_ids.add(seeded.system.system_id)
+        configured_binding_ids.add(seeded.connection_binding_id)
+        configured_capability_ids.update(seeded.capability_binding_ids)
+        configured_scope_ids.add(seeded.root_scope.scope_id)
+    store.reconcile_configured_resources(
+        system_kind="ssh.host",
+        system_ids=configured_system_ids,
+        connection_binding_ids=configured_binding_ids,
+        capability_binding_ids=configured_capability_ids,
+        scope_ids=configured_scope_ids,
+    )
 
 
 def _compose_runtime(
@@ -1465,6 +1675,7 @@ def _compose_runtime(
     *,
     store: SQLiteStore,
     runner: CliRunner | None,
+    ssh_runner: SshRunner | None = None,
 ) -> ApplicationRuntime:
     with store.configuration_transaction():
         _apply_local_configuration(settings, store)
@@ -1493,6 +1704,26 @@ def _compose_runtime(
         runner=actual_runner,
         clock=store.authority_time,
     )
+    ssh_worker: SshWorker | None = None
+    if settings.ssh_systems:
+        actual_ssh_runner = ssh_runner or SshRunner(
+            ssh_config_path=settings.app.ssh_config_path,
+            known_hosts_path=settings.app.ssh_known_hosts_path,
+            timeout_seconds=settings.app.cli_timeout_seconds,
+            stdout_cap=settings.app.cli_output_limit_bytes,
+            stderr_cap=min(settings.app.cli_output_limit_bytes, 1024 * 1024),
+        )
+        ssh_worker = SshWorker(
+            worker_id="ssh-worker-local",
+            queue=store,
+            lifecycle=store,
+            guard=store,
+            bindings=store,
+            ingestion=ingestor,
+            targets=SQLiteSshTargetResolver(store),
+            runner=actual_ssh_runner,
+            clock=store.authority_time,
+        )
     local_authorizer = LocalCallerAuthorizer()
     app = create_app(
         backend,
@@ -1504,6 +1735,7 @@ def _compose_runtime(
         store=store,
         coordinator=coordinator,
         worker=worker,
+        ssh_worker=ssh_worker,
         runner=actual_runner,
         backend=backend,
         local_authorizer=local_authorizer,
