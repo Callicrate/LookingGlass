@@ -12,7 +12,7 @@ from typing import Literal, Protocol
 from unicodedata import category
 from uuid import UUID
 
-from async_api_view.contracts._validation import require_contract_key
+from lookingglass.contracts._validation import require_contract_key
 
 MAX_DISPLAY_LENGTH = 512
 DEFAULT_OBJECT_PAGE_SIZE = 50
@@ -391,6 +391,19 @@ class ActionHistoryView:
 
 
 @dataclass(frozen=True, slots=True)
+class ApiCapabilityView:
+    adapter_key: str
+    adapter_version: str
+    capability_key: str
+    capability_version: str
+    target_kinds: tuple[str, ...]
+    target_source_kinds: tuple[str, ...]
+    produced_facets: tuple[str, ...]
+    enabled: bool
+    collateral_effects: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class SystemView:
     system_id: str
     name: str
@@ -404,6 +417,7 @@ class SystemView:
     workspace_root: str = "Unknown"
     authority_label: str = "Legacy / unverified"
     retired: bool = False
+    api_capabilities: tuple[ApiCapabilityView, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

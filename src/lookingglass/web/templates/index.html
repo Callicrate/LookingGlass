@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Local cached view of remote system state and refresh activity.">
-  <title>Remote state · Rookery</title>
+  <title>Remote state · LookingGlass</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
@@ -13,7 +13,7 @@
   <a class="skip-link" href="#main">Skip to cached state</a>
   <header class="topbar">
     <div>
-      <p class="eyebrow">Rookery · local operational view</p>
+      <p class="eyebrow">LookingGlass · local operational view</p>
       <h1>Remote state</h1>
     </div>
     <div class="snapshot">
@@ -28,7 +28,7 @@
       <div>
         {% if view.disconnected %}
         <strong>Cached snapshot unavailable</strong>
-        <p>Rookery could not read local cached facts. No inventory or clear-state conclusion is shown.</p>
+        <p>LookingGlass could not read local cached facts. No inventory or clear-state conclusion is shown.</p>
         {% else %}
         <strong>Local cached snapshot</strong>
         <p>Facts stay readable while remote systems are unavailable. Refreshes are explicit and observation-only.</p>
@@ -120,6 +120,21 @@
             <div><dt>Last activity</dt><dd>None recorded</dd></div>
             {% endif %}
           </dl>
+          {% if system.api_capabilities %}
+          <div class="system-capabilities">
+            <strong>API capabilities</strong>
+            <ul>
+            {% for capability in system.api_capabilities %}
+              <li>
+                <code>{{ capability.adapter_key|display }}@{{ capability.adapter_version|display }}</code>
+                <code>{{ capability.capability_key|display }}@{{ capability.capability_version|display }}</code>
+                <span>{{ capability.produced_facets|join(', ')|display }} for {{ capability.target_source_kinds|join(', ')|display if capability.target_source_kinds else 'any declared source kind' }}</span>
+                {% if not capability.enabled %}<span class="warning">Disabled by adapter policy</span>{% endif %}
+              </li>
+            {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
         </article>
         {% endfor %}
       </div>
@@ -191,7 +206,7 @@
       {% else %}
       <div class="empty-state">
         <strong>{% if view.object_query %}No matching cached objects{% else %}No cached objects{% endif %}</strong>
-        <p>{% if view.object_query %}Try a different name prefix, or clear the filter.{% else %}Registered refreshes remain available below. Empty cache does not imply an empty remote system.{% endif %}</p>
+        <p>{% if view.object_query %}Try a different name prefix, or clear the filter.{% else %}Registered cache expansions remain available below. Empty cache does not imply an empty remote system.{% endif %}</p>
       </div>
       {% endif %}
     </section>
@@ -199,8 +214,8 @@
     <section aria-labelledby="refresh-heading">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Ordinary refresh path</p>
-          <h2 id="refresh-heading">Available refreshes</h2>
+          <p class="eyebrow">Expand the local view</p>
+          <h2 id="refresh-heading">Available cache expansions</h2>
         </div>
       </div>
       {% if view.refresh_options %}
@@ -220,13 +235,13 @@
             <span class="subtle">Scope: {{ option.target_kind|display|replace('_', ' ')|capitalize }}</span>
             <span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span>
           </div>
-          <button type="submit" {% if not option.enabled %}disabled aria-describedby="reason-{{ loop.index }}"{% endif %}>Request refresh</button>
+          <button type="submit" {% if not option.enabled %}disabled aria-describedby="reason-{{ loop.index }}"{% endif %}>Add to cache</button>
           {% if option.disabled_reason %}<span id="reason-{{ loop.index }}" class="warning">{{ option.disabled_reason|display }}</span>{% endif %}
         </form>
         {% endfor %}
       </div>
       {% else %}
-      <div class="empty-state"><strong>Refresh unavailable</strong><p>{{ view.refresh_empty_reason|display }}</p></div>
+      <div class="empty-state"><strong>No cache expansion available</strong><p>{{ view.refresh_empty_reason|display }}</p></div>
       {% endif %}
     </section>
     {% endif %}

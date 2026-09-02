@@ -365,7 +365,7 @@ def create_app(
         message = (
             display_text(exc.detail, limit=512)
             if isinstance(exc.detail, str)
-            else "Rookery could not complete this request."
+            else "LookingGlass could not complete this request."
         )
         retry_path = (
             request.url.path
@@ -395,7 +395,7 @@ def create_app(
         content = templates.get_template("error.html").render(
             status_code=500,
             heading="Local request failed",
-            message="Rookery could not complete this local request.",
+            message="LookingGlass could not complete this local request.",
             retry_path=request.url.path if request.method in {"GET", "HEAD"} else None,
             home_path="/",
             home_label="Return to dashboard",
@@ -428,7 +428,7 @@ def create_app(
                 status_code=500,
                 heading="Local access failed",
                 message=(
-                    "Open the activation page or restart the same Rookery serve command, "
+                    "Open the activation page or restart the same LookingGlass serve command, "
                     "preserving its configuration and options."
                 ),
                 retry_path="/bootstrap",
@@ -441,7 +441,7 @@ def create_app(
                 content = templates.get_template("bootstrap.html").render(
                     error=(
                         "Browser access is no longer valid. Stop and rerun the same "
-                        "async-api-view serve command, preserving --config and other options, "
+                        "lookingglass serve command, preserving --config and other options, "
                         "to issue a new link."
                         if cookie_token is not None
                         else None

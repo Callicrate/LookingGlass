@@ -6,10 +6,10 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from async_api_view.contracts import IntentScopeState, PresenceState, TargetKind
-from async_api_view.contracts.defaults import V1_TYPE_DEFINITION_BY_KEY
-from async_api_view.core import decide_refresh
-from async_api_view.storage import IntentScopeWork, SQLiteStore, StorageHeadroomUnavailable
+from lookingglass.contracts import IntentScopeState, PresenceState, TargetKind
+from lookingglass.contracts.defaults import V1_TYPE_DEFINITION_BY_KEY
+from lookingglass.core import decide_refresh
+from lookingglass.storage import IntentScopeWork, SQLiteStore, StorageHeadroomUnavailable
 
 _HEADROOM_RETRY_DELAY = timedelta(seconds=60)
 

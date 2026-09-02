@@ -3,9 +3,9 @@ requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "async-api-view"
-version = "0.1.0"
-description = "Rookery local canonical state and refresh service for remote systems"
+name = "lookingglass"
+version = "0.2.0"
+description = "LookingGlass local canonical state and refresh service for remote systems"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-async-api-view = "async_api_view.cli:main"
+lookingglass = "lookingglass.cli:main"
 
 [dependency-groups]
 dev = [
@@ -26,10 +26,10 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/async_api_view"]
+packages = ["src/lookingglass"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"docs/architecture.md" = "async_api_view/docs/architecture.md"
+"docs/architecture.md" = "lookingglass/docs/architecture.md"
 
 [tool.hatch.build.targets.sdist]
 exclude = [
@@ -47,7 +47,7 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source = ["async_api_view"]
+source = ["lookingglass"]
 
 [tool.coverage.report]
 fail_under = 80

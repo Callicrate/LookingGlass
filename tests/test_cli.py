@@ -11,10 +11,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from async_api_view import cli
-from async_api_view.config import AppSettings, ProjectSettings, load_settings
-from async_api_view.local_files import ExclusiveFileLock
-from async_api_view.web import LocalCallerAuthorizer
+from lookingglass import cli
+from lookingglass.config import AppSettings, ProjectSettings, load_settings
+from lookingglass.local_files import ExclusiveFileLock
+from lookingglass.web import LocalCallerAuthorizer
 
 
 def isolated_serve_port(monkeypatch: pytest.MonkeyPatch) -> int:
@@ -54,7 +54,7 @@ workspace_root = "/"
 
 
 def test_init_config_creates_loadable_template_without_overwrite(tmp_path: Path) -> None:
-    output = tmp_path / "standalone" / "rookery.toml"
+    output = tmp_path / "standalone" / "lookingglass.toml"
 
     created = cli.main(
         [
@@ -76,7 +76,7 @@ def test_init_config_creates_loadable_template_without_overwrite(tmp_path: Path)
         encoding="utf-8"
     )
     settings = load_settings(output)
-    assert settings.app.database_path == output.parent / ".local" / "rookery.sqlite3"
+    assert settings.app.database_path == output.parent / ".local" / "lookingglass.sqlite3"
     assert settings.databricks_systems[0].profile == "YOUR_PROFILE"
 
 
@@ -84,24 +84,24 @@ def test_placeholder_authority_fails_before_database_creation(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    config = tmp_path / "rookery.toml"
+    config = tmp_path / "lookingglass.toml"
     assert cli.main(["init-config", "--output", str(config)]) == 0
 
     result = cli.main(["--config", str(config), "init"])
 
     assert result == 1
     assert "fingerprint-profile" in caplog.text
-    assert not (tmp_path / ".local" / "rookery.sqlite3").exists()
+    assert not (tmp_path / ".local" / "lookingglass.sqlite3").exists()
     for command in ("authority-list", "authority-retire", "authority-unretire"):
         argv = ["--config", str(config), command]
         if command != "authority-list":
             argv.extend(("--system-id", "11111111-1111-4111-8111-111111111111"))
         assert cli.main(argv) == 1
-        assert not (tmp_path / ".local" / "rookery.sqlite3").exists()
+        assert not (tmp_path / ".local" / "lookingglass.sqlite3").exists()
 
 
 def test_racing_init_config_writers_publish_one_complete_template(tmp_path: Path) -> None:
-    output = tmp_path / "racing" / "rookery.toml"
+    output = tmp_path / "racing" / "lookingglass.toml"
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = tuple(
@@ -200,7 +200,7 @@ def test_doctor_interrupt_is_a_controlled_exit(
     monkeypatch.setattr(cli, "_doctor", interrupted)
 
     assert cli.main(["doctor"]) == 130
-    assert "Rookery command interrupted" in caplog.text
+    assert "LookingGlass command interrupted" in caplog.text
     assert "Traceback" not in caplog.text
 
 
@@ -213,7 +213,7 @@ def test_usage_error_sanitizes_hostile_argument(
     captured = capsys.readouterr()
     assert raised.value.code == 2
     assert captured.out == ""
-    assert "usage: async-api-view" in captured.err
+    assert "usage: lookingglass" in captured.err
     assert "opaque" not in captured.err
     assert "\x1b" not in captured.err
     assert "\u202e" not in captured.err
@@ -404,7 +404,7 @@ def test_serve_closes_runtime_store_when_server_start_fails(
         lambda _port, *, backlog: listeners,
     )
 
-    def fail_server(server: cli._RookeryServer, **_kwargs: object) -> None:
+    def fail_server(server: cli._LookingGlassServer, **_kwargs: object) -> None:
         assert server.config.access_log is False
         logging.getLogger("uvicorn.error").error(
             "Traceback (most recent call last):\ntoken=opaque C:\\Users\\person\\app.py"
@@ -422,7 +422,7 @@ def test_serve_closes_runtime_store_when_server_start_fails(
     assert bootstrap_token not in captured.err
     assert "opaque" not in caplog.text
     assert "Traceback" not in caplog.text
-    assert "Rookery application startup failed" in caplog.text
+    assert "LookingGlass application startup failed" in caplog.text
     assert all(listener.closed for listener in listeners)
 
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from async_api_view.contracts import IngestionResult, ObservationBatch
-from async_api_view.storage import SQLiteStore
+from lookingglass.contracts import IngestionResult, ObservationBatch
+from lookingglass.storage import SQLiteStore
 
 
 class SQLiteObservationIngestor:

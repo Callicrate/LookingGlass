@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from async_api_view.contracts import (
+from lookingglass.contracts import (
     ActionState,
     AdapterAction,
     FacetState,

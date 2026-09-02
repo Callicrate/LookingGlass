@@ -16,8 +16,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from async_api_view.application import DurableCoordinator, SystemBootstrapService
-from async_api_view.contracts import (
+from lookingglass.application import DurableCoordinator, SystemBootstrapService
+from lookingglass.contracts import (
     ActionAttempt,
     ActionCompletion,
     ActionLeaseLost,
@@ -45,9 +45,9 @@ from async_api_view.contracts import (
     TargetRef,
     UpdateMode,
 )
-from async_api_view.storage import SQLiteStore, backup_sqlite_database
-from async_api_view.storage import sqlite as sqlite_storage
-from async_api_view.storage.sqlite import _redact
+from lookingglass.storage import SQLiteStore, backup_sqlite_database
+from lookingglass.storage import sqlite as sqlite_storage
+from lookingglass.storage.sqlite import _redact
 
 NOW = datetime(2026, 8, 24, 12, tzinfo=UTC)
 
@@ -118,11 +118,15 @@ def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
     ):
         store._connection.execute(f'DROP TRIGGER "{trigger}"')
     store._connection.execute(
+        "ALTER TABLE capability_bindings DROP COLUMN target_source_kinds_json"
+    )
+    store._connection.execute(
         """
         DELETE FROM schema_migrations
         WHERE version IN (
             '0024_corruption_containment', '0025_authority_read_plans',
-            '0026_lazy_scope_warning', '0027_migration_provenance'
+            '0026_lazy_scope_warning', '0027_migration_provenance',
+            '0028_capability_target_source_kinds'
         )
         """
     )
@@ -169,6 +173,7 @@ def test_migrations_reopen_with_durable_wal_state(tmp_path) -> None:
             "0025_authority_read_plans",
             "0026_lazy_scope_warning",
             "0027_migration_provenance",
+            "0028_capability_target_source_kinds",
         ]
         child_plan = reopened._connection.execute(
             """
@@ -237,7 +242,11 @@ def test_legacy_migration_provenance_adoption_is_explicit(tmp_path) -> None:
     with SQLiteStore(path) as store:
         store._connection.execute("DROP TABLE migration_provenance")
         store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = '0027_migration_provenance'"
+            "ALTER TABLE capability_bindings DROP COLUMN target_source_kinds_json"
+        )
+        store._connection.execute(
+            "DELETE FROM schema_migrations "
+            "WHERE version IN ('0027_migration_provenance', '0028_capability_target_source_kinds')"
         )
 
     with SQLiteStore(path) as adopted:
@@ -247,7 +256,7 @@ def test_legacy_migration_provenance_adoption_is_explicit(tmp_path) -> None:
             ).fetchall()
         )
 
-        assert basis_counts == {"executed": 1, "ledger_adopted": 26}
+        assert basis_counts == {"executed": 2, "ledger_adopted": 26}
 
 
 def test_legacy_provenance_adoption_repairs_relationship_read_projection(tmp_path) -> None:
@@ -287,7 +296,11 @@ def test_legacy_provenance_adoption_repairs_relationship_read_projection(tmp_pat
         )
         store._connection.execute("DROP TABLE migration_provenance")
         store._connection.execute(
-            "DELETE FROM schema_migrations WHERE version = '0027_migration_provenance'"
+            "ALTER TABLE capability_bindings DROP COLUMN target_source_kinds_json"
+        )
+        store._connection.execute(
+            "DELETE FROM schema_migrations "
+            "WHERE version IN ('0027_migration_provenance', '0028_capability_target_source_kinds')"
         )
         store._connection.execute("DELETE FROM relationship_read_index")
 
@@ -345,7 +358,7 @@ def test_historical_migration_byte_drift_fails_before_database_mutation(
         _clear_migration_caches()
 
     with sqlite3.connect(path) as check:
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 28
         assert (
             check.execute(
                 "SELECT COUNT(*) FROM systems WHERE display_name = 'provenance-probe'"
@@ -400,7 +413,7 @@ def test_failed_pending_migration_persists_neither_ledger_nor_provenance(
         pass
     migrations = tmp_path / "failed-migrations"
     shutil.copytree(sqlite_storage._MIGRATIONS_DIR, migrations)
-    pending = migrations / "0028_failure.sql"
+    pending = migrations / "0029_failure.sql"
     pending.write_text(
         "CREATE TABLE should_roll_back (value TEXT);\nINSERT INTO missing_table VALUES (1);\n",
         encoding="utf-8",
@@ -482,14 +495,14 @@ def test_unexpected_schema_objects_fail_immutable_preflight_without_mutation(
 
 
 def test_existing_empty_database_file_initializes_after_read_only_preflight(tmp_path) -> None:
-    path = tmp_path / "state" / "rookery.sqlite3"
+    path = tmp_path / "state" / "lookingglass.sqlite3"
     path.parent.mkdir()
     path.touch()
 
     with SQLiteStore(path) as store:
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 28
         )
 
 
@@ -497,14 +510,14 @@ def test_new_database_is_migrated_and_marked_before_wal_activation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    path = tmp_path / "state" / "rookery.sqlite3"
+    path = tmp_path / "state" / "lookingglass.sqlite3"
     original = SQLiteStore._enable_wal_mode
 
     def verify_before_wal(store: SQLiteStore) -> None:
         assert store._connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert store._connection.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
         assert (
-            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
+            store._connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 28
         )
         original(store)
 
@@ -521,7 +534,7 @@ def test_unrelated_sqlite_schema_is_rejected_before_ledger_mutation(tmp_path) ->
     unrelated.commit()
     unrelated.close()
 
-    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized LookingGlass store"):
         SQLiteStore(path)
 
     check = sqlite3.connect(path)
@@ -554,7 +567,7 @@ def test_foreign_sqlite_rejection_preserves_delete_mode_bytes_and_sidecar_absenc
     original = path.read_bytes()
     original_mode = stat.S_IMODE(path.stat().st_mode)
 
-    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized LookingGlass store"):
         SQLiteStore(path)
 
     assert path.read_bytes() == original
@@ -590,7 +603,7 @@ def test_foreign_sqlite_rejection_does_not_change_windows_dacl(tmp_path: Path) -
         capture_output=True,
     )
 
-    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized LookingGlass store"):
         SQLiteStore(path)
 
     subprocess.run(  # noqa: S603 - absolute Windows system executable
@@ -619,14 +632,16 @@ def test_existing_database_preflight_uses_immutable_read_only_uri(
 
     monkeypatch.setattr(sqlite_storage.sqlite3, "connect", track_connect)
 
-    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized LookingGlass store"):
         SQLiteStore(path)
 
     assert opened == [f"{path.as_uri()}?mode=ro&immutable=1"]
 
 
-def test_unmarked_rookery_with_wal_sidecar_fails_without_sidecar_mutation(tmp_path: Path) -> None:
-    path = tmp_path / "state" / "rookery.sqlite3"
+def test_unmarked_lookingglass_with_wal_sidecar_fails_without_sidecar_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state" / "lookingglass.sqlite3"
     with SQLiteStore(path):
         pass
     markerless = sqlite3.connect(path)
@@ -652,7 +667,7 @@ def test_database_identity_change_before_write_open_fails_without_wal_transition
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    path = tmp_path / "state" / "rookery.sqlite3"
+    path = tmp_path / "state" / "lookingglass.sqlite3"
     with SQLiteStore(path):
         pass
     calls = 0
@@ -663,7 +678,7 @@ def test_database_identity_change_before_write_open_fails_without_wal_transition
         nonlocal calls
         calls += 1
         if calls == 3:
-            raise OSError("Rookery state file identity changed while guarded")
+            raise OSError("LookingGlass state file identity changed while guarded")
         original_verify(guard)
 
     def reject_write_open(database: object, *args: object, **kwargs: object):
@@ -690,7 +705,7 @@ def test_unrelated_view_only_schema_is_not_treated_as_empty(tmp_path) -> None:
     unrelated.commit()
     unrelated.close()
 
-    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized LookingGlass store"):
         SQLiteStore(path)
 
     check = sqlite3.connect(path)
@@ -715,7 +730,7 @@ def test_foreign_application_id_is_rejected_before_schema_creation(tmp_path) -> 
     foreign.execute("PRAGMA application_id = 12345")
     foreign.close()
 
-    with pytest.raises(sqlite3.DatabaseError, match="not a recognized Rookery store"):
+    with pytest.raises(sqlite3.DatabaseError, match="not a recognized LookingGlass store"):
         SQLiteStore(path)
 
     check = sqlite3.connect(path)
@@ -729,14 +744,14 @@ def test_foreign_application_id_is_rejected_before_schema_creation(tmp_path) -> 
         check.close()
 
 
-def test_markerless_incomplete_rookery_schema_is_rejected_before_migration(tmp_path) -> None:
-    path = tmp_path / "incomplete-rookery.sqlite3"
+def test_markerless_incomplete_lookingglass_schema_is_rejected_before_migration(tmp_path) -> None:
+    path = tmp_path / "incomplete-lookingglass.sqlite3"
     legacy = sqlite3.connect(path)
     legacy.executescript(
         "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL);"
     )
     legacy.executescript(
-        Path("src/async_api_view/storage/migrations/0001_initial.sql").read_text(encoding="utf-8")
+        Path("src/lookingglass/storage/migrations/0001_initial.sql").read_text(encoding="utf-8")
     )
     legacy.execute(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
@@ -799,7 +814,7 @@ def test_current_ledger_missing_later_table_fails_without_mutation(tmp_path) -> 
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 28
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -837,7 +852,7 @@ def test_current_ledger_missing_unique_index_fails_without_mutation(tmp_path) ->
     check = sqlite3.connect(path)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0x524F4F4B
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 28
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -872,7 +887,7 @@ def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_pa
 
     check = sqlite3.connect(path)
     try:
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 28
         assert (
             check.execute(
                 "SELECT display_name FROM systems WHERE system_id = ?",
@@ -892,7 +907,7 @@ def test_current_ledger_missing_projection_trigger_fails_without_mutation(tmp_pa
 
 def test_drifted_migration_prefix_rolls_back_all_later_mutations(tmp_path) -> None:
     path = tmp_path / "drifted-prefix.sqlite3"
-    migrations = sorted(Path("src/async_api_view/storage/migrations").glob("*.sql"))
+    migrations = sorted(Path("src/lookingglass/storage/migrations").glob("*.sql"))
     legacy = sqlite3.connect(path)
     legacy.execute(
         "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
@@ -1019,14 +1034,14 @@ def test_online_backup_captures_live_wal_and_never_overwrites(tmp_path) -> None:
     with pytest.raises(FileExistsError, match="already exists"):
         backup_sqlite_database(source, destination)
     assert destination.read_bytes() == original
-    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+    assert list(destination.parent.glob(".lookingglass-backup-*.tmp")) == []
 
 
 def test_backup_requires_snapshot_size_plus_recovery_reserve(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = tmp_path / "state" / "rookery.sqlite3"
-    destination = tmp_path / "backups" / "rookery.sqlite3"
+    source = tmp_path / "state" / "lookingglass.sqlite3"
+    destination = tmp_path / "backups" / "lookingglass.sqlite3"
     with SQLiteStore(source):
         pass
     with sqlite3.connect(source) as connection:
@@ -1045,7 +1060,7 @@ def test_backup_requires_snapshot_size_plus_recovery_reserve(
         backup_sqlite_database(source, destination)
 
     assert not destination.exists()
-    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+    assert list(destination.parent.glob(".lookingglass-backup-*.tmp")) == []
     available[0] = required
     assert backup_sqlite_database(source, destination) == destination.resolve()
 
@@ -1063,7 +1078,7 @@ def test_backup_rejects_foreign_sqlite_before_destination_creation(tmp_path: Pat
         foreign.close()
     original = source.read_bytes()
 
-    with pytest.raises(RuntimeError, match="recognized Rookery store"):
+    with pytest.raises(RuntimeError, match="recognized LookingGlass store"):
         backup_sqlite_database(source, destination)
 
     assert source.read_bytes() == original
@@ -1072,9 +1087,9 @@ def test_backup_rejects_foreign_sqlite_before_destination_creation(tmp_path: Pat
     assert not Path(f"{source}-shm").exists()
 
 
-def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path) -> None:
-    source = tmp_path / "state" / "rookery.sqlite3"
-    destination = tmp_path / "backups" / "rookery.sqlite3"
+def test_backup_preserves_recognized_markerless_lookingglass_identity(tmp_path: Path) -> None:
+    source = tmp_path / "state" / "lookingglass.sqlite3"
+    destination = tmp_path / "backups" / "lookingglass.sqlite3"
     with SQLiteStore(source):
         pass
     markerless = sqlite3.connect(source)
@@ -1089,14 +1104,14 @@ def test_backup_preserves_recognized_markerless_rookery_identity(tmp_path: Path)
     check = sqlite3.connect(destination)
     try:
         assert check.execute("PRAGMA application_id").fetchone()[0] == 0
-        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 27
+        assert check.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 28
     finally:
         check.close()
 
 
 def test_backup_preserves_pre_migration_schema_for_upgrade_rollback(tmp_path: Path) -> None:
-    source = tmp_path / "state" / "rookery.sqlite3"
-    destination = tmp_path / "backups" / "rookery.sqlite3"
+    source = tmp_path / "state" / "lookingglass.sqlite3"
+    destination = tmp_path / "backups" / "lookingglass.sqlite3"
     source.parent.mkdir()
     legacy = sqlite3.connect(source)
     try:
@@ -1104,9 +1119,7 @@ def test_backup_preserves_pre_migration_schema_for_upgrade_rollback(tmp_path: Pa
             "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
         )
         legacy.executescript(
-            Path("src/async_api_view/storage/migrations/0001_initial.sql").read_text(
-                encoding="utf-8"
-            )
+            Path("src/lookingglass/storage/migrations/0001_initial.sql").read_text(encoding="utf-8")
         )
         legacy.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
@@ -1136,11 +1149,11 @@ def test_state_database_sidecars_and_backups_are_posix_private(tmp_path: Path) -
     state_directory = tmp_path / "state"
     state_directory.mkdir(mode=0o777)
     state_directory.chmod(0o777)
-    database = state_directory / "rookery.sqlite3"
+    database = state_directory / "lookingglass.sqlite3"
     backup_directory = tmp_path / "backups"
     backup_directory.mkdir(mode=0o777)
     backup_directory.chmod(0o777)
-    destination = backup_directory / "rookery.sqlite3"
+    destination = backup_directory / "lookingglass.sqlite3"
 
     with SQLiteStore(database) as store:
         store._connection.execute("PRAGMA wal_autocheckpoint = 0")
@@ -1167,12 +1180,12 @@ def test_state_database_sidecars_and_backups_replace_permissive_windows_security
     tmp_path: Path,
 ) -> None:
     state_directory = tmp_path / "state"
-    database = state_directory / "rookery.sqlite3"
+    database = state_directory / "lookingglass.sqlite3"
     with SQLiteStore(database):
         pass
     backup_directory = tmp_path / "backups"
     backup_directory.mkdir()
-    destination = backup_directory / "rookery.sqlite3"
+    destination = backup_directory / "lookingglass.sqlite3"
     icacls = Path(os.environ["SYSTEMROOT"]) / "System32" / "icacls.exe"
     for path in (state_directory, database, backup_directory):
         grant = "*S-1-1-0:(OI)(CI)F" if path.is_dir() else "*S-1-1-0:F"
@@ -1206,15 +1219,15 @@ def test_state_database_sidecars_and_backups_replace_permissive_windows_security
             / "powershell.exe"
         )
         owner_script = (
-            "if($env:ROOKERY_ACL_TEST_DIRECTORY -eq '1'){"
+            "if($env:LOOKINGGLASS_ACL_TEST_DIRECTORY -eq '1'){"
             "$acl=(New-Object System.IO.DirectoryInfo("
-            "$env:ROOKERY_ACL_TEST_PATH)).GetAccessControl()}else{"
+            "$env:LOOKINGGLASS_ACL_TEST_PATH)).GetAccessControl()}else{"
             "$acl=(New-Object System.IO.FileInfo("
-            "$env:ROOKERY_ACL_TEST_PATH)).GetAccessControl()};"
+            "$env:LOOKINGGLASS_ACL_TEST_PATH)).GetAccessControl()};"
             "$ownerSid=$acl.GetOwner("
             "[System.Security.Principal.SecurityIdentifier]).Value;"
             "$currentSid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;"
-            "if($ownerSid -ne $currentSid){throw 'Rookery path owner mismatch'}"
+            "if($ownerSid -ne $currentSid){throw 'LookingGlass path owner mismatch'}"
         )
         for ordinal, path in enumerate((*paths, backup_directory, destination)):
             saved_acl = tmp_path / f"state-acl-{ordinal}.txt"
@@ -1227,8 +1240,8 @@ def test_state_database_sidecars_and_backups_replace_permissive_windows_security
             assert "D:P" in sddl
             assert ";;;WD)" not in sddl
             owner_environment = dict(os.environ)
-            owner_environment["ROOKERY_ACL_TEST_PATH"] = str(path)
-            owner_environment["ROOKERY_ACL_TEST_DIRECTORY"] = str(int(path.is_dir()))
+            owner_environment["LOOKINGGLASS_ACL_TEST_PATH"] = str(path)
+            owner_environment["LOOKINGGLASS_ACL_TEST_DIRECTORY"] = str(int(path.is_dir()))
             owner_result = subprocess.run(  # noqa: S603 - absolute Windows system executable
                 (
                     str(powershell),
@@ -1246,7 +1259,7 @@ def test_state_database_sidecars_and_backups_replace_permissive_windows_security
 
 
 def test_database_hard_links_are_rejected_before_open(tmp_path: Path) -> None:
-    database = tmp_path / "state" / "rookery.sqlite3"
+    database = tmp_path / "state" / "lookingglass.sqlite3"
     with SQLiteStore(database):
         pass
     alias = tmp_path / "state" / "alias.sqlite3"
@@ -1316,7 +1329,7 @@ def test_posix_directory_guard_detects_path_replacement(tmp_path: Path) -> None:
 
 def test_database_in_git_worktree_root_is_rejected_before_creation(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
-    database = tmp_path / "rookery.sqlite3"
+    database = tmp_path / "lookingglass.sqlite3"
 
     with pytest.raises(OSError, match="dedicated private directory"):
         SQLiteStore(database)
@@ -1328,7 +1341,7 @@ def test_backup_destination_directory_redirect_is_rejected(
     tmp_path: Path,
     create_directory_redirect,
 ) -> None:
-    source = tmp_path / "state" / "rookery.sqlite3"
+    source = tmp_path / "state" / "lookingglass.sqlite3"
     with SQLiteStore(source):
         pass
     redirected = tmp_path / "redirected"
@@ -1352,7 +1365,7 @@ def test_database_directory_redirect_is_rejected_before_creation(
     create_directory_redirect(link, redirected)
 
     with pytest.raises(OSError, match="filesystem redirect"):
-        SQLiteStore(link / "rookery.sqlite3")
+        SQLiteStore(link / "lookingglass.sqlite3")
 
     assert list(redirected.iterdir()) == []
 
@@ -1362,7 +1375,7 @@ def test_database_sidecar_redirect_is_rejected_before_wal_open(
     tmp_path: Path,
     suffix: str,
 ) -> None:
-    database = tmp_path / "state" / "rookery.sqlite3"
+    database = tmp_path / "state" / "lookingglass.sqlite3"
     with SQLiteStore(database):
         pass
     unrelated = tmp_path / f"unrelated{suffix}"
@@ -1385,7 +1398,7 @@ def test_database_sidecar_hard_link_is_rejected_before_wal_open(
     tmp_path: Path,
     suffix: str,
 ) -> None:
-    database = tmp_path / "state" / "rookery.sqlite3"
+    database = tmp_path / "state" / "lookingglass.sqlite3"
     with SQLiteStore(database):
         pass
     unrelated = tmp_path / f"unrelated{suffix}"
@@ -1418,15 +1431,15 @@ def test_backup_publication_race_preserves_competing_file(
         backup_sqlite_database(source, destination)
 
     assert destination.read_bytes() == b"competing backup"
-    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+    assert list(destination.parent.glob(".lookingglass-backup-*.tmp")) == []
 
 
 def test_backup_post_link_replacement_is_not_reported_or_deleted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "state" / "rookery.sqlite3"
-    destination = tmp_path / "backups" / "rookery.sqlite3"
+    source = tmp_path / "state" / "lookingglass.sqlite3"
+    destination = tmp_path / "backups" / "lookingglass.sqlite3"
     with SQLiteStore(source):
         pass
     original_link = sqlite_storage.os.link
@@ -1442,7 +1455,7 @@ def test_backup_post_link_replacement_is_not_reported_or_deleted(
         backup_sqlite_database(source, destination)
 
     assert destination.read_bytes() == b"competing backup"
-    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+    assert list(destination.parent.glob(".lookingglass-backup-*.tmp")) == []
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX guarded-hardening replacement regression")
@@ -1450,8 +1463,8 @@ def test_backup_guarded_hardening_rejects_and_preserves_post_link_competitor(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "state" / "rookery.sqlite3"
-    destination = tmp_path / "backups" / "rookery.sqlite3"
+    source = tmp_path / "state" / "lookingglass.sqlite3"
+    destination = tmp_path / "backups" / "lookingglass.sqlite3"
     with SQLiteStore(source):
         pass
     original_harden = sqlite_storage.RegularFileGuard.harden
@@ -1468,15 +1481,15 @@ def test_backup_guarded_hardening_rejects_and_preserves_post_link_competitor(
         backup_sqlite_database(source, destination)
 
     assert destination.read_bytes() == b"competing backup"
-    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+    assert list(destination.parent.glob(".lookingglass-backup-*.tmp")) == []
 
 
 def test_backup_flushes_snapshot_and_publication_metadata_before_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "state" / "rookery.sqlite3"
-    destination = tmp_path / "backups" / "rookery.sqlite3"
+    source = tmp_path / "state" / "lookingglass.sqlite3"
+    destination = tmp_path / "backups" / "lookingglass.sqlite3"
     with SQLiteStore(source):
         pass
     events: list[tuple[str, str]] = []
@@ -1518,15 +1531,15 @@ def test_backup_durability_failure_publishes_nothing(
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
 ) -> None:
-    source = tmp_path / "state" / "rookery.sqlite3"
-    destination = tmp_path / "backups" / "rookery.sqlite3"
+    source = tmp_path / "state" / "lookingglass.sqlite3"
+    destination = tmp_path / "backups" / "lookingglass.sqlite3"
     with SQLiteStore(source):
         pass
 
     if failure == "file":
 
         def fail_file_sync(guard: sqlite_storage.RegularFileGuard) -> None:
-            if guard.path.name.startswith(".rookery-backup-"):
+            if guard.path.name.startswith(".lookingglass-backup-"):
                 raise OSError("injected file synchronization failure")
 
         monkeypatch.setattr(sqlite_storage.RegularFileGuard, "sync", fail_file_sync)
@@ -1541,7 +1554,7 @@ def test_backup_durability_failure_publishes_nothing(
         backup_sqlite_database(source, destination)
 
     assert not destination.exists()
-    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+    assert list(destination.parent.glob(".lookingglass-backup-*.tmp")) == []
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX final-directory-sync race regression")
@@ -1549,8 +1562,8 @@ def test_backup_final_directory_sync_rejects_and_preserves_competitor(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "state" / "rookery.sqlite3"
-    destination = tmp_path / "backups" / "rookery.sqlite3"
+    source = tmp_path / "state" / "lookingglass.sqlite3"
+    destination = tmp_path / "backups" / "lookingglass.sqlite3"
     with SQLiteStore(source):
         pass
     original_sync = sqlite_storage.PrivateDirectoryGuard.sync
@@ -1574,7 +1587,7 @@ def test_backup_final_directory_sync_rejects_and_preserves_competitor(
         backup_sqlite_database(source, destination)
 
     assert destination.read_bytes() == b"competing backup"
-    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+    assert list(destination.parent.glob(".lookingglass-backup-*.tmp")) == []
 
 
 def test_backup_wraps_malformed_source_and_cleans_temporary_file(tmp_path) -> None:
@@ -1586,7 +1599,7 @@ def test_backup_wraps_malformed_source_and_cleans_temporary_file(tmp_path) -> No
         backup_sqlite_database(source, destination)
 
     assert not destination.exists()
-    assert list(destination.parent.glob(".rookery-backup-*.tmp")) == []
+    assert list(destination.parent.glob(".lookingglass-backup-*.tmp")) == []
 
 
 @pytest.mark.parametrize(
@@ -1850,7 +1863,7 @@ def test_existing_v1_database_upgrades_scope_capability_columns(tmp_path) -> Non
     legacy.executescript(
         "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL);"
     )
-    migration = Path("src/async_api_view/storage/migrations/0001_initial.sql").read_text(
+    migration = Path("src/lookingglass/storage/migrations/0001_initial.sql").read_text(
         encoding="utf-8"
     )
     legacy.executescript(migration)
@@ -1952,6 +1965,7 @@ def test_concurrent_store_initialization_serializes_migrations(tmp_path) -> None
         "0025_authority_read_plans",
         "0026_lazy_scope_warning",
         "0027_migration_provenance",
+        "0028_capability_target_source_kinds",
     )
     assert versions == (expected,) * workers
 
@@ -2214,7 +2228,7 @@ def test_migration_failure_rolls_back_schema_and_ledger(tmp_path, monkeypatch) -
         "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL);"
     )
     legacy.executescript(
-        Path("src/async_api_view/storage/migrations/0001_initial.sql").read_text(encoding="utf-8")
+        Path("src/lookingglass/storage/migrations/0001_initial.sql").read_text(encoding="utf-8")
     )
     legacy.execute(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
@@ -2259,7 +2273,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
         "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL);"
     )
     legacy.executescript(
-        Path("src/async_api_view/storage/migrations/0001_initial.sql").read_text(encoding="utf-8")
+        Path("src/lookingglass/storage/migrations/0001_initial.sql").read_text(encoding="utf-8")
     )
     legacy.execute(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
@@ -2299,6 +2313,7 @@ def test_reopen_repairs_legacy_partial_0002_before_recording_ledger(tmp_path) ->
             "0025_authority_read_plans",
             "0026_lazy_scope_warning",
             "0027_migration_provenance",
+            "0028_capability_target_source_kinds",
         ]
         for table in ("refresh_credit", "refresh_intent_scopes", "adapter_action_scopes"):
             if table == "refresh_credit":

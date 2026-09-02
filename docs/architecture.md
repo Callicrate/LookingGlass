@@ -45,6 +45,7 @@ The current slice exposes manual refreshes through one generic refresh intent.
 Planned Phase 4 automatic refreshes will create that same intent rather than introducing a second execution path.
 A generic coordinator validates, coalesces, defers, or admits that intent using only canonical local data.
 An API-specific adapter worker is the only component allowed to resolve credentials, understand a downstream API or CLI, and contact a remote system.
+Each adapter declares which canonical source kinds and facets a capability can observe, so the client can offer a generic “add to cache” choice without constructing an API request itself.
 The worker returns normalized observations, which are accepted even when an equivalent targeted refresh would have been throttled.
 
 The pivotal modeling choice is **facet-level state and freshness**.
@@ -69,6 +70,7 @@ Implemented and covered by automated tests:
 - object-over-system-over-type refresh policy and failed-action cooldown;
 - durable SQLite intents, actions, leases, observations, projections, and alertable failures;
 - generic local-only coordination and idempotent observation ingestion;
+- adapter-neutral capability declarations, including target source kinds, produced facets, coverage policy, collateral effects, and data-driven cache-expansion controls;
 - closed Databricks CLI command mapping, bounded execution, error redaction, and Workspace/Unity Catalog metadata normalizers;
 - loopback operational UI with bounded inventory, containment, alert-history, action-activity, and per-action attempt pages, object facet/provenance detail, registered refresh controls, intent polling, ephemeral local-caller authorization, per-session CSRF, Origin/Host checks, stale/error states, and output escaping;
 - local configuration, installed-document export, initialization, doctor, one-shot worker, online backup, and serve commands;
@@ -181,6 +183,7 @@ UI labels MAY use site, workspace, host, or another source-appropriate word.
 | One object identity with independently fresh facets | Prevents metadata, content, status, and configuration from being falsely treated as equally current. | Specified |
 | Bounded observation journal plus current projection | Preserves provenance and recovery without requiring full event sourcing. | Specified |
 | Generic intents and adapter-owned actions | Keeps UI and generic scheduling independent from vendor commands and credentials. | Specified |
+| Capability-declared cache expansion | Lets users add a supported facet or collection to local state through a registered API capability, then maintain it through the ordinary refresh path. | Implemented |
 | Local-only admission decisions | Makes refresh eligibility deterministic and testable without a remote call. | Required by brief |
 | Version 1 exposes only remote observation capabilities | Remote API workers update local knowledge but never offer intentional remote state changes. | Accepted |
 | Version 1 is local and single-user | Avoids premature tenancy, network-service authorization, and distributed deployment requirements. | Accepted |
@@ -1081,7 +1084,7 @@ A capability binding MUST declare:
 - namespaced key and version;
 - compatible adapter and core contract versions;
 - valid system kinds;
-- valid target kinds and object types;
+- valid target kinds and adapter-owned source kinds;
 - canonical input schema;
 - facets and relationships it may produce;
 - possible collection coverage;
@@ -1095,6 +1098,20 @@ A capability binding MUST declare:
 Vendor endpoints, CLI syntax, and raw command arguments remain adapter code, not generic capability data.
 The coordinator MUST reject any capability not classified as `observe`.
 Configuration cannot convert an observing capability into a remote state-change operation.
+
+### Cache expansion
+
+The local model is deliberately universal: every adapter reports canonical objects, relationships, facets, observations, and refresh scopes.
+An adapter-specific `source_kind` distinguishes API resources that share a canonical object type.
+For example, a Databricks Unity Catalog catalog and schema are both `generic_object` records locally, but their source kinds determine which registered API capability can observe their next collection.
+
+When a user views a system or object, the client MUST show the enabled adapter capabilities that match its target kind and source kind.
+Selecting one means “add this declared facet or collection to the local cache”, not “run an arbitrary API query”.
+The client creates an ordinary `RefreshIntent`; the coordinator applies normal deduplication and cadence; the adapter retrieves and normalizes the observation; and future refresh policy treats the new facet or collection like every other cached fact.
+
+An adapter for a different backend, such as an allowlisted SSH Linux host, follows the same contract.
+It can expose file metadata, approved file content, or service status as distinct capabilities without changing the generic coordinator, queue, storage, or UI request shape.
+Its own capability declaration and worker remain responsible for host allowlists, authentication, command safety, rate limits, and source-specific read limits.
 
 ### Capability evolution
 
@@ -1152,6 +1169,7 @@ An object-level indicator SHOULD be derived from the facets relevant to the curr
 ### Interaction safety
 
 - A refresh control MUST submit a generic intent and return a local receipt.
+- A cache-expansion control MUST be derived from a registered observation capability and MUST identify the adapter, target source kind, facets, and declared collateral effects.
 - A receipt for multiple facets MUST expose every `RefreshIntentScope`, its disposition, evidence, action, and next eligible time.
 - A too-soon manual request MUST show the effective interval and the object, system, or type policy that supplied it.
 - To request an earlier call, the user changes the ordinary object or system interval override and lets the deferred scope re-evaluate; the client MUST NOT offer a force bypass.
@@ -1209,7 +1227,7 @@ The versioned capability contract includes the following keys. Registration pres
 |---|---|
 | `databricks.workspace.children.read` | Configured Workspace folder to membership plus child folder/file metadata |
 | `databricks.workspace.metadata.read` | Known Workspace object to folder/file metadata |
-| `databricks.workspace.content.read` | Deferred: known Workspace file/notebook to one retained `file.content` artifact; the current worker rejects this key before CLI execution |
+| `databricks.workspace.content.read` | Disabled unless content capture is explicitly enabled; known Workspace file/notebook to one retained `file.content` artifact |
 | `databricks.uc.catalogs.read` | Configured metastore/workspace scope to catalog metadata and relationships |
 | `databricks.uc.schemas.read` | Known catalog to schema metadata and relationships |
 | `databricks.uc.relations.read` | Known schema to table/view metadata and relationships |
@@ -1228,7 +1246,7 @@ Jobs, clusters, pipelines, warehouses, serving endpoints, and other Databricks s
 Their canonical types remain available for later adapter capabilities.
 
 The certified Databricks CLI 0.298.0 exposes the relevant `workspace`, `catalogs`, `schemas`, `tables`, and `volumes` metadata commands, structured JSON output, and named profiles.
-The adapter MUST accept only releases that passed the complete offline Rookery compatibility harness. Startup verifies the exact certified version and every reachable leaf command's usage plus required profile/output/format flags. A newer release is a review candidate, not automatically compatible.
+The adapter MUST accept only releases that passed the complete offline LookingGlass compatibility harness. Startup verifies the exact certified version and every reachable leaf command's usage plus required profile/output/format flags. A newer release is a review candidate, not automatically compatible.
 Successful certification binds the executable's file identity, size, high-resolution modification time, and SHA-256 digest. Every mapped dispatch rechecks that witness; changed bytes invalidate certification and must pass the complete doctor contract before any profile snapshot or mapped process starts.
 The initial witness MUST match the platform-specific binary digest derived from Databricks' published 0.298.0 checksum manifest before the executable runs. Compatibility output alone cannot establish executable origin.
 
@@ -1247,7 +1265,7 @@ The CLI runner MUST:
 - pass the profile and JSON-output selection as separate structured arguments;
 - resolve the executable only through explicit absolute `PATH` entries and run from a fresh empty directory beneath a private per-user root whose full ancestor chain contains no CLI-recognized bundle configuration;
 - remove inherited Databricks and bundle override variables so the named profile remains authoritative while ordinary home, trust-store, proxy, and cloud SDK settings remain available;
-- bind each mapped child process to a minimal snapshot derived from the same guarded standard-configuration parse whose route fingerprint passed authority verification, containing only the selected profile's own case-sensitive keys, using a private temporary file and a Rookery-owned child-only `DATABRICKS_CONFIG_FILE`;
+- bind each mapped child process to a minimal snapshot derived from the same guarded standard-configuration parse whose route fingerprint passed authority verification, containing only the selected profile's own case-sensitive keys, using a private temporary file and an LookingGlass-owned child-only `DATABRICKS_CONFIG_FILE`;
 - treat `DEFAULT` as an ordinary explicit CLI profile rather than an inheritance source, reject the reserved `__settings__` section as a profile, and reject selected profiles that disable TLS certificate verification;
 - hold a private per-command lock while that snapshot exists, remove it before releasing the lock on ordinary exit, and perform a bounded locked recovery scan before every later command so newly crash-retained snapshots are removed only after acquiring their abandoned locks while concurrent invocations remain untouched;
 - own the complete CLI process tree through a dedicated POSIX process group or Windows kill-on-close Job Object, terminate descendants on timeout, cancellation, output overflow, and cleanup, and bound process/reader draining before releasing the snapshot or runtime lock;
@@ -1280,14 +1298,14 @@ The adapter owns:
 - Databricks-specific error and rate behavior;
 - redaction of CLI diagnostics.
 
-Unity Catalog schemas, relations, and volumes use their typed source UUIDs when the CLI supplies them. Qualified names remain mutable display/dispatch facts and do not define those objects' identity. Historical name-key objects and responses without a source UUID remain separate: Rookery does not auto-merge them into typed identities because rename versus delete/recreate cannot be proven retrospectively.
+Unity Catalog schemas, relations, and volumes use their typed source UUIDs when the CLI supplies them. Qualified names remain mutable display/dispatch facts and do not define those objects' identity. Historical name-key objects and responses without a source UUID remain separate: LookingGlass does not auto-merge them into typed identities because rename versus delete/recreate cannot be proven retrospectively.
 
 Databricks observations may consume API quota and create authentication, access, or audit records.
 The adapter spike MUST verify and record those collateral effects for each capability before it is enabled.
 
 ### Remote server adapter
 
-The version 1 server target is a Linux host reached over SSH.
+The next adapter target is a Linux host reached over SSH.
 The server adapter supports only configured hosts, filesystem roots, and service identifiers.
 SSH details do not enter the canonical refresh request.
 
@@ -1415,16 +1433,16 @@ Operating-system account and terminal permissions protect this bootstrap channel
 It MUST NOT expose a network-accessible multi-user interface without a new authentication, authorization, tenancy, and content-access design.
 
 The configured SQLite parent and each backup destination parent are dedicated current-user state directories, not shared folders or Git worktree roots.
-Rookery MUST reject redirects and multiply hard-linked state files, establish current-user ownership, and restrict directories/files to `0700`/`0600` on POSIX or protected current-user DACLs on Windows.
-Before any write-capable open, WAL transition, sidecar creation, migration, repair, or backup publication for an existing database, Rookery MUST validate its application identity and minimum schema through an immutable read-only connection that does not open WAL shared state.
-The installed build MUST bind one canonical, contiguous migration inventory to the exact packaged SQL bytes and MUST reject any present durable migration provenance that differs before applying new changes. Provenance rows are immutable through the normal schema. `executed` and `ledger_adopted` basis labels plus their local timestamps are descriptive database metadata, not an authenticated audit against an owner who can rewrite the SQLite file; `ledger_adopted` MUST NOT be presented as proof that historical DML bytes executed. Before legacy adoption, Rookery MUST repair rebuildable migration-derived read state needed by the current runtime and pass current schema, SQLite integrity, and foreign-key validation in the same startup transaction.
+LookingGlass MUST reject redirects and multiply hard-linked state files, establish current-user ownership, and restrict directories/files to `0700`/`0600` on POSIX or protected current-user DACLs on Windows.
+Before any write-capable open, WAL transition, sidecar creation, migration, repair, or backup publication for an existing database, LookingGlass MUST validate its application identity and minimum schema through an immutable read-only connection that does not open WAL shared state.
+The installed build MUST bind one canonical, contiguous migration inventory to the exact packaged SQL bytes and MUST reject any present durable migration provenance that differs before applying new changes. Provenance rows are immutable through the normal schema. `executed` and `ledger_adopted` basis labels plus their local timestamps are descriptive database metadata, not an authenticated audit against an owner who can rewrite the SQLite file; `ledger_adopted` MUST NOT be presented as proof that historical DML bytes executed. Before legacy adoption, LookingGlass MUST repair rebuildable migration-derived read state needed by the current runtime and pass current schema, SQLite integrity, and foreign-key validation in the same startup transaction.
 New and markerless stores MUST migrate and persist the `ROOK` application ID in rollback-journal mode before enabling WAL; an unmarked store with WAL/SHM sidecars MUST fail closed until its owning version cleanly checkpoints it.
 If that preflight identifies foreign SQLite state, startup and backup MUST leave its bytes, journal mode, and sidecar set unchanged.
 A successful backup MUST synchronize the validated snapshot file and final publication metadata before returning; a failed or unsupported durability barrier MUST publish no claimed recovery copy.
 
 Before a new refresh intent, action admission, or final remote dispatch, the current implementation MUST preserve write headroom for one bounded result plus a recovery floor of at least 64 MiB or twice the configured CLI output cap, whichever is larger. Low or unprovable caller-available capacity disables new refreshes and defers queued/running admission without blocking cached reads, terminalization, failure reporting, or shutdown. This is an application admission fence, not an operating-system reservation; `SQLITE_FULL` handling remains required.
 
-Before creating an online-backup temporary file, Rookery MUST derive snapshot bytes from SQLite page metadata and require that amount plus a 64 MiB caller-available destination reserve. Sparse-file logical length is not backup-size authority, and failed preflight MUST publish no destination.
+Before creating an online-backup temporary file, LookingGlass MUST derive snapshot bytes from SQLite page metadata and require that amount plus a 64 MiB caller-available destination reserve. Sparse-file logical length is not backup-size authority, and failed preflight MUST publish no destination.
 
 There is no force-refresh permission in version 1.
 Refresh and retention policy changes are ordinary attributable local configuration changes.
@@ -1527,7 +1545,7 @@ Adapter implementation configuration includes:
 The committed `uv.lock` is the dependency authority for source-checkout verification and reproducible release smoke.
 CI installs the locked development graph without installing the local project and runs source tools with synchronization disabled, so no build backend executes before the explicitly hash-constrained build step.
 Installed-wheel verification MUST export the hash-pinned runtime-only graph from that lock, install it before the wheel, install the wheel without dependency resolution, check installed compatibility, and audit the exact installed versions.
-Each standalone wheel release MUST include the exact hash-bearing runtime constraints exported from the reviewed lock. Documented install/upgrade commands MUST populate a private Python 3.12 environment with hash-required, source-build-disabled dependencies before installing the Rookery wheel without dependency resolution. The pair still requires index access, a complete trusted cache, or a separately reviewed wheelhouse and MUST NOT claim to be a self-contained offline bundle.
+Each standalone wheel release MUST include the exact hash-bearing runtime constraints exported from the reviewed lock. Documented install/upgrade commands MUST populate a private Python 3.12 environment with hash-required, source-build-disabled dependencies before installing the LookingGlass wheel without dependency resolution. The pair still requires index access, a complete trusted cache, or a separately reviewed wheelhouse and MUST NOT claim to be a self-contained offline bundle.
 A stopped upgrade MUST build and smoke a fresh relocatable sibling environment, then replace the active environment through a recoverable rename while retaining the prior environment for rollback. In-place dependency installation is insufficient because removed packages and executable `.pth` hooks can survive.
 A clean release verification MUST publish a commit-qualified SHA-256 manifest covering the sdist, wheel, and runtime constraints. CI artifact names MUST include the full source commit, and standalone guidance MUST require digest verification before install so equal package versions from different reviewed heads remain distinguishable.
 A verified release pair MUST bind every packaged module and asset to current source bytes, validate wheel dependency metadata and RECORD digests, and reproduce the direct wheel byte-for-byte from the sdist under the same constrained backend graph.

@@ -7,9 +7,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
-import async_api_view.storage.sqlite as sqlite_storage
-from async_api_view.application import DurableCoordinator, SystemBootstrapService
-from async_api_view.contracts import (
+import lookingglass.storage.sqlite as sqlite_storage
+from lookingglass.application import DurableCoordinator, SystemBootstrapService
+from lookingglass.contracts import (
     ActionCompletion,
     ActionOutcome,
     AdapterAction,
@@ -27,7 +27,7 @@ from async_api_view.contracts import (
     TargetKind,
     TargetRef,
 )
-from async_api_view.storage import SQLiteStore
+from lookingglass.storage import SQLiteStore
 
 NOW = datetime(2026, 8, 24, 12, tzinfo=UTC)
 
@@ -119,9 +119,13 @@ def _rewind_nonnull_queue_id_migration(store: SQLiteStore) -> None:
         DELETE FROM schema_migrations
         WHERE version IN (
             '0024_corruption_containment', '0025_authority_read_plans',
-            '0026_lazy_scope_warning', '0027_migration_provenance'
+            '0026_lazy_scope_warning', '0027_migration_provenance',
+            '0028_capability_target_source_kinds'
         )
         """
+    )
+    store._connection.execute(
+        "ALTER TABLE capability_bindings DROP COLUMN target_source_kinds_json"
     )
 
 
@@ -1505,10 +1509,10 @@ def test_refresh_override_wakes_only_matching_deferred_scopes(tmp_path) -> None:
 
 
 def test_owned_core_never_imports_adapter_code() -> None:
-    source_root = Path("src/async_api_view")
+    source_root = Path("src/lookingglass")
     for package in ("storage", "application", "ingestion"):
         for path in (source_root / package).rglob("*.py"):
-            assert "async_api_view.adapters" not in path.read_text(encoding="utf-8")
+            assert "lookingglass.adapters" not in path.read_text(encoding="utf-8")
 
 
 def test_capability_hints_select_distinct_uc_actions_and_evidence_does_not_cross(tmp_path) -> None:

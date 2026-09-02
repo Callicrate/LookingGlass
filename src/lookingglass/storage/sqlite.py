@@ -25,7 +25,7 @@ from functools import cache
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
-from async_api_view.contracts import (
+from lookingglass.contracts import (
     AbsenceAuthority,
     ActionAttempt,
     ActionCompletion,
@@ -69,7 +69,7 @@ from async_api_view.contracts import (
     UpdateMode,
     canonical_observation_batch_bytes,
 )
-from async_api_view.contracts._validation import (
+from lookingglass.contracts._validation import (
     canonical_json_bytes,
     require_contract_key,
     require_text,
@@ -77,9 +77,9 @@ from async_api_view.contracts._validation import (
     require_uuid,
     validate_json,
 )
-from async_api_view.contracts.defaults import V1_TYPE_DEFINITION_BY_KEY
-from async_api_view.core import decide_refresh, resolve_refresh_interval, scope_covers
-from async_api_view.local_files import (
+from lookingglass.contracts.defaults import V1_TYPE_DEFINITION_BY_KEY
+from lookingglass.core import decide_refresh, resolve_refresh_interval, scope_covers
+from lookingglass.local_files import (
     PrivateDirectoryGuard,
     RegularFileGuard,
     absolute_local_path,
@@ -106,9 +106,10 @@ from .models import (
 
 _MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 _MIGRATION_MANIFEST = "MANIFEST.sha256"
-_MIGRATION_MANIFEST_SHA256 = "05109034bd281e999d66242c73ac9cd1272fd08c6d9083d0bfca31af064968de"
-_MIGRATION_HEAD = "0027_migration_provenance"
+_MIGRATION_MANIFEST_SHA256 = "ac906f8aca8218802b940954e4728da007f1dc6f32547f4feb43ca8b5ce949ce"
+_MIGRATION_HEAD = "0028_capability_target_source_kinds"
 _MIGRATION_FILENAME = re.compile(r"\A(?P<ordinal>[0-9]{4})_[a-z0-9_]+\.sql\Z")
+# Legacy persisted marker retained so LookingGlass recognizes existing databases.
 _APPLICATION_ID = 0x524F4F4B  # ASCII "ROOK"
 _DEFAULT_LEASE = timedelta(seconds=60)
 _SQLITE_STARTUP_BUSY_TIMEOUT_MS = 5_000
@@ -155,20 +156,20 @@ def _migration_resources() -> tuple[_MigrationResource, ...]:
         manifest_payload = manifest_path.read_bytes()
         manifest_text = manifest_payload.decode("ascii")
     except (OSError, UnicodeError) as exc:
-        raise RuntimeError("Rookery migration manifest is unavailable") from exc
+        raise RuntimeError("LookingGlass migration manifest is unavailable") from exc
     if not manifest_text.endswith("\n") or "\r" in manifest_text:
-        raise RuntimeError("Rookery migration manifest has noncanonical line endings")
+        raise RuntimeError("LookingGlass migration manifest has noncanonical line endings")
     if hashlib.sha256(manifest_payload).hexdigest() != _MIGRATION_MANIFEST_SHA256:
-        raise RuntimeError("Rookery migration manifest does not match this build")
+        raise RuntimeError("LookingGlass migration manifest does not match this build")
     expected: list[tuple[str, str]] = []
     for line in manifest_text.splitlines():
         match = re.fullmatch(r"([0-9a-f]{64})  ([0-9]{4}_[a-z0-9_]+\.sql)", line)
         if match is None:
-            raise RuntimeError("Rookery migration manifest is malformed")
+            raise RuntimeError("LookingGlass migration manifest is malformed")
         expected.append((match.group(2), match.group(1)))
     paths = tuple(sorted(_MIGRATIONS_DIR.glob("*.sql"), key=lambda path: path.name))
     if tuple(path.name for path in paths) != tuple(name for name, _digest in expected):
-        raise RuntimeError("Rookery migration resources do not match the manifest")
+        raise RuntimeError("LookingGlass migration resources do not match the manifest")
     resources: list[_MigrationResource] = []
     previous_chain = bytes(32)
     seen_digests: set[str] = set()
@@ -178,17 +179,18 @@ def _migration_resources() -> tuple[_MigrationResource, ...]:
     ):
         filename = _MIGRATION_FILENAME.fullmatch(path.name)
         if filename is None or int(filename.group("ordinal")) != expected_ordinal:
-            raise RuntimeError("Rookery migration ordinals must be unique and contiguous")
+            raise RuntimeError("LookingGlass migration ordinals must be unique and contiguous")
         payload = path.read_bytes()
         payload.decode("utf-8")
         content_sha256 = hashlib.sha256(payload).hexdigest()
         if content_sha256 != manifest_digest or content_sha256 in seen_digests:
-            raise RuntimeError("Rookery migration bytes do not match the manifest")
+            raise RuntimeError("LookingGlass migration bytes do not match the manifest")
         seen_digests.add(content_sha256)
         version = path.stem
         chain_material = b"".join(
             (
-                b"rookery-migration-chain-v1\0",
+                # Domain separator for the migration-provenance chain digest.
+                b"lookingglass-migration-chain-v1\0",
                 previous_chain,
                 expected_ordinal.to_bytes(4, "big"),
                 version.encode("utf-8"),
@@ -210,9 +212,9 @@ def _migration_resources() -> tuple[_MigrationResource, ...]:
             )
         )
     if not resources:
-        raise RuntimeError("Rookery migration manifest is empty")
+        raise RuntimeError("LookingGlass migration manifest is empty")
     if resources[-1].version != _MIGRATION_HEAD:
-        raise RuntimeError("Rookery migration manifest head is incompatible")
+        raise RuntimeError("LookingGlass migration manifest head is incompatible")
     return tuple(resources)
 
 
@@ -370,7 +372,7 @@ def _schema_signature_through(
 
     with closing(sqlite3.connect(":memory:")) as reference:
         reference.create_function(
-            "rookery_canonicalize_timestamp",
+            "lookingglass_canonicalize_timestamp",
             1,
             _stored_timestamp_canonical_value,
             deterministic=True,
@@ -420,7 +422,7 @@ def _schema_ddl_through(
 
     with closing(sqlite3.connect(":memory:")) as reference:
         reference.create_function(
-            "rookery_canonicalize_timestamp",
+            "lookingglass_canonicalize_timestamp",
             1,
             _stored_timestamp_canonical_value,
             deterministic=True,
@@ -469,7 +471,7 @@ def _initial_schema_signature() -> tuple[tuple[str, frozenset[tuple[str, str, in
 def _current_schema_signature() -> tuple[tuple[str, frozenset[tuple[str, str, int, int]]], ...]:
     migrations = _migration_resources()
     if not migrations:  # pragma: no cover - source packaging invariant
-        raise RuntimeError("Rookery migrations are unavailable")
+        raise RuntimeError("LookingGlass migrations are unavailable")
     return _schema_signature_through(migrations[-1].version)
 
 
@@ -538,7 +540,7 @@ def _validate_migration_provenance(
             resource.version == "0027_migration_provenance"
             for resource in resources[: len(versions)]
         ):
-            raise sqlite3.DatabaseError("Rookery migration provenance is missing")
+            raise sqlite3.DatabaseError("LookingGlass migration provenance is missing")
         return False
     rows = connection.execute(
         """
@@ -548,7 +550,7 @@ def _validate_migration_provenance(
         """
     ).fetchall()
     if len(rows) != len(versions):
-        raise sqlite3.DatabaseError("Rookery migration provenance is incomplete")
+        raise sqlite3.DatabaseError("LookingGlass migration provenance is incomplete")
     for row, resource, version in zip(
         rows,
         resources[: len(versions)],
@@ -564,7 +566,9 @@ def _validate_migration_provenance(
             or row["basis"] not in {"executed", "ledger_adopted"}
             or not _stored_timestamp_is_canonical(row["recorded_at"])
         ):
-            raise sqlite3.DatabaseError("Rookery migration provenance does not match this build")
+            raise sqlite3.DatabaseError(
+                "LookingGlass migration provenance does not match this build"
+            )
     return True
 
 
@@ -573,7 +577,7 @@ def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind
 
     application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
     if application_id not in {0, _APPLICATION_ID}:
-        raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
+        raise sqlite3.DatabaseError("SQLite database is not a recognized LookingGlass store")
     schema_objects = tuple(
         (row["name"], row["type"])
         for row in connection.execute(
@@ -585,11 +589,11 @@ def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind
     )
     if not schema_objects:
         if application_id == _APPLICATION_ID:
-            raise sqlite3.DatabaseError("Rookery database schema is missing")
+            raise sqlite3.DatabaseError("LookingGlass database schema is missing")
         return _DatabaseKind.EMPTY
     tables = {name for name, object_type in schema_objects if object_type == "table"}
     if not tables or "schema_migrations" not in tables:
-        raise sqlite3.DatabaseError("SQLite database is not a recognized Rookery store")
+        raise sqlite3.DatabaseError("SQLite database is not a recognized LookingGlass store")
     ledger_columns = tuple(
         row["name"]
         for row in connection.execute(
@@ -597,7 +601,7 @@ def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind
         ).fetchall()
     )
     if ledger_columns != ("version", "applied_at"):
-        raise sqlite3.DatabaseError("Rookery migration ledger is incompatible")
+        raise sqlite3.DatabaseError("LookingGlass migration ledger is incompatible")
     versions = tuple(
         row["version"]
         for row in connection.execute(
@@ -607,19 +611,19 @@ def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind
     resources = _migration_resources()
     known_versions = tuple(migration.version for migration in resources)
     if versions != known_versions[: len(versions)]:
-        raise sqlite3.DatabaseError("Rookery migration ledger contains an unknown version")
+        raise sqlite3.DatabaseError("LookingGlass migration ledger contains an unknown version")
     _validate_migration_provenance(connection, versions=versions, resources=resources)
     if not versions:
         if tables != {"schema_migrations"}:
-            raise sqlite3.DatabaseError("Rookery database schema is incomplete")
+            raise sqlite3.DatabaseError("LookingGlass database schema is incomplete")
         if set(_schema_ddl(connection)) != {("table", "schema_migrations")}:
-            raise sqlite3.DatabaseError("Rookery migration ledger schema is incompatible")
+            raise sqlite3.DatabaseError("LookingGlass migration ledger schema is incompatible")
         return _kind_for_application_id(application_id)
     if versions[0] != "0001_initial":
-        raise sqlite3.DatabaseError("Rookery initial migration is not recorded")
+        raise sqlite3.DatabaseError("LookingGlass initial migration is not recorded")
     initial_schema = dict(_initial_schema_signature())
     if not set(initial_schema).issubset(tables):
-        raise sqlite3.DatabaseError("Rookery initial database schema is incomplete")
+        raise sqlite3.DatabaseError("LookingGlass initial database schema is incomplete")
     for table_name, expected_signature in initial_schema.items():
         actual_signature = {
             (
@@ -634,7 +638,7 @@ def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind
             )
         }
         if not expected_signature.issubset(actual_signature):
-            raise sqlite3.DatabaseError(f"Rookery {table_name} schema is incompatible")
+            raise sqlite3.DatabaseError(f"LookingGlass {table_name} schema is incompatible")
     expected_ddl = {
         (object_type, name): (table_name, sql)
         for object_type, name, table_name, sql in _schema_ddl_through(versions[-1])
@@ -643,7 +647,7 @@ def _validate_database_identity(connection: sqlite3.Connection) -> _DatabaseKind
     allowed_runtime_indexes = {("index", name) for name in _REQUIRED_RUNTIME_INDEXES}
     unexpected = set(actual_ddl) - set(expected_ddl) - allowed_runtime_indexes
     if unexpected:
-        raise sqlite3.DatabaseError("Rookery database contains an unexpected schema object")
+        raise sqlite3.DatabaseError("LookingGlass database contains an unexpected schema object")
     return _kind_for_application_id(application_id)
 
 
@@ -661,7 +665,7 @@ def _preflight_existing_database(path: Path) -> tuple[RegularFileGuard, _Databas
             os.path.lexists(sidecar) for sidecar in (Path(f"{path}-wal"), Path(f"{path}-shm"))
         ):
             raise sqlite3.DatabaseError(
-                "unmarked Rookery databases with WAL sidecars cannot be adopted safely"
+                "unmarked LookingGlass databases with WAL sidecars cannot be adopted safely"
             )
         guard.verify()
         return guard, kind
@@ -674,7 +678,7 @@ def _prepare_state_directory(path: Path) -> Path:
     """Reserve one dedicated private directory without restricting a Git worktree root."""
 
     if os.path.lexists(path / ".git"):
-        raise OSError("Rookery state and backup files require a dedicated private directory")
+        raise OSError("LookingGlass state and backup files require a dedicated private directory")
     return prepare_private_directory(path)
 
 
@@ -712,10 +716,10 @@ def backup_sqlite_database(source_path: str | Path, destination_path: str | Path
         source_guard, source_kind = _preflight_existing_database(source)
         if source_kind is _DatabaseKind.EMPTY:
             source_guard.close()
-            raise sqlite3.DatabaseError("Rookery backup source is not initialized")
+            raise sqlite3.DatabaseError("LookingGlass backup source is not initialized")
     except sqlite3.Error as exc:
         raise RuntimeError(
-            "could not create a consistent SQLite backup from a recognized Rookery store"
+            "could not create a consistent SQLite backup from a recognized LookingGlass store"
         ) from exc
     source_directory_guard: PrivateDirectoryGuard | None = None
     destination_directory_guard: PrivateDirectoryGuard | None = None
@@ -741,7 +745,7 @@ def backup_sqlite_database(source_path: str | Path, destination_path: str | Path
             source_connection.execute("PRAGMA query_only = ON")
             source_connection.execute("PRAGMA busy_timeout = 5000")
             if _validate_database_identity(source_connection) is not source_kind:
-                raise OSError("Rookery backup source changed after immutable preflight")
+                raise OSError("LookingGlass backup source changed after immutable preflight")
             source_guard.verify()
 
             destination_directory = _prepare_state_directory(destination.parent)
@@ -763,7 +767,7 @@ def backup_sqlite_database(source_path: str | Path, destination_path: str | Path
                     "Backup requires its SQLite snapshot size plus a 64 MiB safety reserve"
                 )
             with tempfile.NamedTemporaryFile(
-                prefix=".rookery-backup-",
+                prefix=".lookingglass-backup-",
                 suffix=".sqlite3.tmp",
                 dir=destination.parent,
                 delete=False,
@@ -783,7 +787,7 @@ def backup_sqlite_database(source_path: str | Path, destination_path: str | Path
                         raise RuntimeError("backup failed its SQLite integrity check")
                     destination_connection.row_factory = sqlite3.Row
                     if _validate_database_identity(destination_connection) is not source_kind:
-                        raise RuntimeError("backup changed the Rookery database identity")
+                        raise RuntimeError("backup changed the LookingGlass database identity")
                 temporary_guard.harden()
                 temporary_guard.sync()
                 destination_directory_guard.verify()
@@ -1342,74 +1346,74 @@ class SQLiteStore:
             return tracked
 
         self._connection.create_function(
-            "rookery_is_canonical_timestamp",
+            "lookingglass_is_canonical_timestamp",
             1,
             _stored_timestamp_is_canonical,
             deterministic=True,
         )
         self._connection.create_function(
-            "rookery_canonicalize_timestamp",
+            "lookingglass_canonicalize_timestamp",
             1,
             _stored_timestamp_canonical_value,
             deterministic=True,
         )
         self._connection.create_function(
-            "rookery_read_is_timestamp",
+            "lookingglass_read_is_timestamp",
             1,
             tracked_read_validator(_stored_timestamp_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_is_uuid",
+            "lookingglass_read_is_uuid",
             1,
             tracked_read_validator(_stored_uuid_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_is_contract_key",
+            "lookingglass_read_is_contract_key",
             1,
             tracked_read_validator(_stored_contract_key_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_is_json_object",
+            "lookingglass_read_is_json_object",
             1,
             tracked_read_validator(_stored_json_object_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_is_json_array",
+            "lookingglass_read_is_json_array",
             1,
             tracked_read_validator(_stored_json_array_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_is_binding_settings",
+            "lookingglass_read_is_binding_settings",
             1,
             tracked_read_validator(_stored_binding_settings_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_is_config_id",
+            "lookingglass_read_is_config_id",
             1,
             tracked_read_validator(_stored_config_id_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_is_authority_key",
+            "lookingglass_read_is_authority_key",
             1,
             tracked_read_validator(_stored_authority_key_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_identity_matches_binding",
+            "lookingglass_read_identity_matches_binding",
             2,
             tracked_read_validator(_stored_identity_matches_binding),
         )
         self._connection.create_function(
-            "rookery_read_is_capability",
+            "lookingglass_read_is_capability",
             13,
             tracked_read_validator(_stored_capability_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_is_text",
+            "lookingglass_read_is_text",
             2,
             tracked_read_validator(_stored_text_is_valid),
         )
         self._connection.create_function(
-            "rookery_read_timestamp_order_is_valid",
+            "lookingglass_read_timestamp_order_is_valid",
             2,
             tracked_read_validator(_stored_timestamp_order_is_valid),
         )
@@ -1419,7 +1423,7 @@ class SQLiteStore:
             return None
 
         self._connection.create_function(
-            "rookery_read_corruption",
+            "lookingglass_read_corruption",
             0,
             mark_read_corruption,
         )
@@ -1429,7 +1433,9 @@ class SQLiteStore:
                 self._connection.execute(f"PRAGMA busy_timeout = {_SQLITE_STARTUP_BUSY_TIMEOUT_MS}")
                 live_kind = _validate_database_identity(self._connection)
                 if live_kind is not preflight_kind and live_kind is not _DatabaseKind.MARKED:
-                    raise OSError("Rookery database identity changed after immutable preflight")
+                    raise OSError(
+                        "LookingGlass database identity changed after immutable preflight"
+                    )
                 self._file_guard.verify()
                 self._connection.execute("PRAGMA foreign_keys = ON")
                 self._connection.execute("PRAGMA synchronous = FULL")
@@ -1439,7 +1445,7 @@ class SQLiteStore:
                     ).fetchone()
                     if journal_mode is None or str(journal_mode[0]).lower() != "delete":
                         raise sqlite3.DatabaseError(
-                            "unmarked Rookery database could not enter rollback journal mode"
+                            "unmarked LookingGlass database could not enter rollback journal mode"
                         )
                 self._harden_storage_files()
             # Validation closes the same transaction that applies every migration and
@@ -1513,12 +1519,12 @@ class SQLiteStore:
         lease_queries = (
             """
             SELECT MAX(lease_authority_at) AS lease_authority_at FROM refresh_intent_scopes
-            WHERE state = 'leased' AND rookery_is_canonical_timestamp(lease_authority_at) = 1
+            WHERE state = 'leased' AND lookingglass_is_canonical_timestamp(lease_authority_at) = 1
             """,
             """
             SELECT MAX(leased_until) AS leased_until FROM adapter_actions
             WHERE state IN ('leased', 'running')
-              AND rookery_is_canonical_timestamp(leased_until) = 1
+              AND lookingglass_is_canonical_timestamp(leased_until) = 1
             """,
         )
         intent_lease = connection.execute(lease_queries[0]).fetchone()
@@ -1595,7 +1601,7 @@ class SQLiteStore:
 
     def _harden_storage_files(self) -> None:
         if self._directory_guard is None:  # pragma: no cover - initialization invariant
-            raise RuntimeError("Rookery state directory is not guarded")
+            raise RuntimeError("LookingGlass state directory is not guarded")
         self._directory_guard.verify()
         self._file_guard.verify()
         harden_private_file(self.database_path)
@@ -1666,11 +1672,11 @@ class SQLiteStore:
             WHERE intent_scope_id IS NULL OR (
                 state = 'leased' AND (
                     lease_id IS NULL OR lease_worker_id IS NULL
-                    OR rookery_is_canonical_timestamp(leased_until) = 0
+                    OR lookingglass_is_canonical_timestamp(leased_until) = 0
                 )
             ) OR (
                 state = 'deferred' AND eligible_at IS NOT NULL
-                AND rookery_is_canonical_timestamp(eligible_at) = 0
+                AND lookingglass_is_canonical_timestamp(eligible_at) = 0
             ) OR state NOT IN (
                 'queued', 'leased', 'deferred', 'coalesced', 'admitted',
                 'satisfied', 'rejected', 'expired', 'cancelled'
@@ -1708,10 +1714,10 @@ class SQLiteStore:
             WHERE action_id IS NULL OR (
                 state IN ('leased', 'running') AND (
                     lease_id IS NULL OR lease_worker_id IS NULL
-                    OR rookery_is_canonical_timestamp(leased_until) = 0
+                    OR lookingglass_is_canonical_timestamp(leased_until) = 0
                 )
             ) OR (
-                state = 'retry_wait' AND rookery_is_canonical_timestamp(retry_at) = 0
+                state = 'retry_wait' AND lookingglass_is_canonical_timestamp(retry_at) = 0
             ) OR state NOT IN (
                 'ready', 'leased', 'running', 'retry_wait', 'satisfied',
                 'succeeded', 'partial', 'failed', 'cancelled'
@@ -1873,9 +1879,13 @@ class SQLiteStore:
             self._reconcile_adopted_relationship_projection(connection)
             integrity = connection.execute("PRAGMA integrity_check").fetchone()
             if integrity is None or integrity[0] != "ok":
-                raise sqlite3.DatabaseError("Rookery migration adoption failed integrity check")
+                raise sqlite3.DatabaseError(
+                    "LookingGlass migration adoption failed integrity check"
+                )
             if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-                raise sqlite3.DatabaseError("Rookery migration adoption found foreign-key errors")
+                raise sqlite3.DatabaseError(
+                    "LookingGlass migration adoption found foreign-key errors"
+                )
         recorded_at = _utc_text(_now())
         for migration in resources:
             if migration.version not in initial_versions | executed_versions:
@@ -1972,7 +1982,7 @@ class SQLiteStore:
             )
         }
         if not set(current_schema).issubset(tables):
-            raise sqlite3.DatabaseError("Rookery current database schema is incomplete")
+            raise sqlite3.DatabaseError("LookingGlass current database schema is incomplete")
         for table_name, expected_signature in current_schema.items():
             actual_signature = {
                 (
@@ -1987,10 +1997,12 @@ class SQLiteStore:
                 )
             }
             if not expected_signature.issubset(actual_signature):
-                raise sqlite3.DatabaseError(f"Rookery current {table_name} schema is incompatible")
+                raise sqlite3.DatabaseError(
+                    f"LookingGlass current {table_name} schema is incompatible"
+                )
         migrations = _migration_resources()
         if not migrations:  # pragma: no cover - source packaging invariant
-            raise RuntimeError("Rookery migrations are unavailable")
+            raise RuntimeError("LookingGlass migrations are unavailable")
         expected_ddl = {
             (object_type, name): (table_name, sql)
             for object_type, name, table_name, sql in _schema_ddl_through(
@@ -2003,11 +2015,11 @@ class SQLiteStore:
         actual_ddl.pop(("table", "schema_migrations"), None)
         unexpected = set(actual_ddl) - set(expected_ddl)
         if unexpected:
-            raise sqlite3.DatabaseError("Rookery current schema has an unexpected object")
+            raise sqlite3.DatabaseError("LookingGlass current schema has an unexpected object")
         for identity, expected in expected_ddl.items():
             if actual_ddl.get(identity) != expected:
                 raise sqlite3.DatabaseError(
-                    f"Rookery current schema object {identity[1]} is incompatible"
+                    f"LookingGlass current schema object {identity[1]} is incompatible"
                 )
 
     def _repair_required_runtime_indexes(self) -> None:
@@ -2490,46 +2502,46 @@ class SQLiteStore:
             floor_text = connection.execute(
                 """
                 SELECT MAX(value) FROM (
-                    SELECT rookery_canonicalize_timestamp(record_created_at) AS value
+                    SELECT lookingglass_canonicalize_timestamp(record_created_at) AS value
                     FROM systems WHERE system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(record_updated_at)
+                    SELECT lookingglass_canonicalize_timestamp(record_updated_at)
                     FROM systems WHERE system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(record_created_at)
+                    SELECT lookingglass_canonicalize_timestamp(record_created_at)
                     FROM connection_bindings WHERE system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(record_updated_at)
+                    SELECT lookingglass_canonicalize_timestamp(record_updated_at)
                     FROM connection_bindings WHERE system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(capability.record_created_at)
+                    SELECT lookingglass_canonicalize_timestamp(capability.record_created_at)
                     FROM capability_bindings AS capability
                     JOIN connection_bindings AS binding
                       ON binding.binding_id = capability.connection_binding_id
                     WHERE binding.system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(capability.record_updated_at)
+                    SELECT lookingglass_canonicalize_timestamp(capability.record_updated_at)
                     FROM capability_bindings AS capability
                     JOIN connection_bindings AS binding
                       ON binding.binding_id = capability.connection_binding_id
                     WHERE binding.system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(record_created_at)
+                    SELECT lookingglass_canonicalize_timestamp(record_created_at)
                     FROM configured_scopes WHERE system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(record_updated_at)
+                    SELECT lookingglass_canonicalize_timestamp(record_updated_at)
                     FROM configured_scopes WHERE system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(record_created_at)
+                    SELECT lookingglass_canonicalize_timestamp(record_created_at)
                     FROM adapter_actions WHERE system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(started_at)
+                    SELECT lookingglass_canonicalize_timestamp(started_at)
                     FROM adapter_actions WHERE system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(completed_at)
+                    SELECT lookingglass_canonicalize_timestamp(completed_at)
                     FROM adapter_actions WHERE system_id = ?
                     UNION ALL
-                    SELECT rookery_canonicalize_timestamp(retired_at)
+                    SELECT lookingglass_canonicalize_timestamp(retired_at)
                     FROM retired_system_authorities WHERE system_id = ?
                 )
                 """,
@@ -2646,12 +2658,12 @@ class SQLiteStore:
                 """
                 UPDATE systems SET
                     record_created_at = CASE
-                        WHEN rookery_is_canonical_timestamp(record_created_at) = 1
+                        WHEN lookingglass_is_canonical_timestamp(record_created_at) = 1
                         THEN record_created_at
-                        WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                        WHEN lookingglass_is_canonical_timestamp(record_updated_at) = 1
                         THEN record_updated_at ELSE ? END,
                     record_updated_at = CASE
-                        WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                        WHEN lookingglass_is_canonical_timestamp(record_updated_at) = 1
                         THEN record_updated_at ELSE ? END
                 WHERE system_kind = ?
                 """,
@@ -2677,12 +2689,12 @@ class SQLiteStore:
                     f"""
                     UPDATE {table_name} SET
                         record_created_at = CASE
-                            WHEN rookery_is_canonical_timestamp(record_created_at) = 1
+                            WHEN lookingglass_is_canonical_timestamp(record_created_at) = 1
                             THEN record_created_at
-                            WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                            WHEN lookingglass_is_canonical_timestamp(record_updated_at) = 1
                             THEN record_updated_at ELSE ? END,
                         record_updated_at = CASE
-                            WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                            WHEN lookingglass_is_canonical_timestamp(record_updated_at) = 1
                             THEN record_updated_at ELSE ? END
                     WHERE {system_condition}
                     """,  # noqa: S608 - fixed table and condition fragments
@@ -2719,19 +2731,19 @@ class SQLiteStore:
             ):
                 connection.executemany(
                     f"""UPDATE {table_name} SET record_created_at = CASE
-                            WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                            WHEN lookingglass_is_canonical_timestamp(record_updated_at) = 1
                             THEN record_updated_at ELSE ? END
                         WHERE {id_column} = ?
-                          AND rookery_is_canonical_timestamp(record_created_at) = 0""",  # noqa: S608 - fixed identifiers
+                          AND lookingglass_is_canonical_timestamp(record_created_at) = 0""",  # noqa: S608 - fixed identifiers
                     ((timestamp, value) for value in desired_ids),
                 )
             connection.executemany(
                 """
                 UPDATE configured_system_identities SET record_created_at = CASE
-                    WHEN rookery_is_canonical_timestamp(record_updated_at) = 1
+                    WHEN lookingglass_is_canonical_timestamp(record_updated_at) = 1
                     THEN record_updated_at ELSE ? END
                 WHERE system_id = ?
-                  AND rookery_is_canonical_timestamp(record_created_at) = 0
+                  AND lookingglass_is_canonical_timestamp(record_created_at) = 0
                 """,
                 ((timestamp, value) for value in desired_systems),
             )
@@ -2877,7 +2889,8 @@ class SQLiteStore:
                 """
                 SELECT connection_binding_id, capability_key, capability_version,
                        operation_class, target_kinds_json, produced_facets_json,
-                       coverage_policies_json, coverage_policy_initialized
+                       target_source_kinds_json, coverage_policies_json,
+                       coverage_policy_initialized
                 FROM capability_bindings WHERE capability_binding_id = ?
                 """,
                 (capability.capability_binding_id,),
@@ -2893,6 +2906,12 @@ class SQLiteStore:
                 )
                 if any(stored != requested for stored, requested in immutable_values):
                     raise ValueError("capability version contract is immutable")
+                stored_target_kinds = existing["target_source_kinds_json"]
+                target_kinds = _json_text(
+                    list(capability.target_source_kinds), field_name="target_source_kinds"
+                )
+                if stored_target_kinds not in ("[]", target_kinds):
+                    raise ValueError("capability target source kinds require a version change")
                 stored_policy = existing["coverage_policies_json"]
                 if (
                     existing["coverage_policy_initialized"]
@@ -2905,10 +2924,11 @@ class SQLiteStore:
                     capability_binding_id, connection_binding_id, capability_key,
                     capability_version, operation_class, target_kinds_json,
                     produced_facets_json, coverage_policies_json,
-                    coverage_policy_initialized, enabled, selection_priority,
+                    target_source_kinds_json, coverage_policy_initialized, enabled,
+                    selection_priority,
                     collateral_effects_json, mitigations_json, record_created_at,
                     record_updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(capability_binding_id) DO UPDATE SET
                     connection_binding_id = excluded.connection_binding_id,
                     capability_key = excluded.capability_key,
@@ -2917,6 +2937,7 @@ class SQLiteStore:
                     target_kinds_json = excluded.target_kinds_json,
                     produced_facets_json = excluded.produced_facets_json,
                     coverage_policies_json = excluded.coverage_policies_json,
+                    target_source_kinds_json = excluded.target_source_kinds_json,
                     coverage_policy_initialized = 1,
                     enabled = excluded.enabled,
                     selection_priority = excluded.selection_priority,
@@ -2933,6 +2954,9 @@ class SQLiteStore:
                     target_kinds_json,
                     produced_facets_json,
                     coverage_policies_json,
+                    _json_text(
+                        list(capability.target_source_kinds), field_name="target_source_kinds"
+                    ),
                     int(capability.enabled),
                     capability.selection_priority,
                     _json_text(
@@ -3764,6 +3788,7 @@ class SQLiteStore:
             ),
             produced_facets=_json_text_tuple(row["produced_facets_json"]),
             enabled=bool(row["enabled"]),
+            target_source_kinds=_json_text_tuple(row["target_source_kinds_json"]),
             selection_priority=row["selection_priority"],
             collateral_effects=_json_text_tuple(row["collateral_effects_json"]),
             mitigations=_json_text_tuple(row["mitigations_json"]),

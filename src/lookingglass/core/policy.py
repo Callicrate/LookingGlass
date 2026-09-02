@@ -6,10 +6,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from async_api_view.contracts._validation import JSONDTO, require_utc
-from async_api_view.contracts.defaults import V1_TYPE_DEFINITION_BY_KEY
-from async_api_view.contracts.enums import PolicyLevel, RefreshDecisionKind
-from async_api_view.contracts.models import (
+from lookingglass.contracts._validation import JSONDTO, require_utc
+from lookingglass.contracts.defaults import V1_TYPE_DEFINITION_BY_KEY
+from lookingglass.contracts.enums import PolicyLevel, RefreshDecisionKind
+from lookingglass.contracts.models import (
     QualifyingObservation,
     RefreshIntervalOverride,
     RefreshScope,

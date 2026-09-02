@@ -44,12 +44,12 @@ SDIST_EXCLUDED_PREFIXES = (
 )
 SDIST_EXCLUDED_FILES = {"current-status.md"}
 RUNTIME_ASSET_DIRECTORIES = (
-    Path("async_api_view/storage/migrations"),
-    Path("async_api_view/web/templates"),
-    Path("async_api_view/web/static"),
+    Path("lookingglass/storage/migrations"),
+    Path("lookingglass/web/templates"),
+    Path("lookingglass/web/static"),
 )
 EXTERNAL_PACKAGE_FILES = {
-    "async_api_view/docs/architecture.md": Path("docs/architecture.md"),
+    "lookingglass/docs/architecture.md": Path("docs/architecture.md"),
 }
 
 
@@ -310,7 +310,7 @@ def untracked_release_sources() -> tuple[str, ...]:
 
 
 def expected_runtime_assets(source_root: Path = Path("src")) -> frozenset[str]:
-    package_root = source_root / "async_api_view"
+    package_root = source_root / "lookingglass"
     assets: set[str] = set()
     for relative_directory in RUNTIME_ASSET_DIRECTORIES:
         source_directory = source_root / relative_directory
@@ -344,14 +344,14 @@ def expected_runtime_assets(source_root: Path = Path("src")) -> frozenset[str]:
 def expected_package_sources(source_root: Path = Path("src")) -> dict[str, Path]:
     """Map every expected wheel package path to its current authoritative source."""
 
-    package_root = source_root / "async_api_view"
+    package_root = source_root / "lookingglass"
     if not package_root.is_dir():
         raise RuntimeError("runtime package source directory is unavailable")
     if source_root == Path("src"):
         sources = {
             name.removeprefix("src/"): Path(name)
             for name in _git_file_names("--cached")
-            if name.startswith("src/async_api_view/") and Path(name).is_file()
+            if name.startswith("src/lookingglass/") and Path(name).is_file()
         }
     else:
         sources = {
@@ -486,7 +486,7 @@ def verify_wheel_package_files(
     """Require one exact, source-current package tree inside the wheel."""
 
     with ZipFile(wheel_archive) as archive:
-        actual = {name for name in archive.namelist() if name.startswith("async_api_view/")}
+        actual = {name for name in archive.namelist() if name.startswith("lookingglass/")}
         expected = set(expected_sources)
         if actual != expected:
             raise RuntimeError(
@@ -596,7 +596,7 @@ def _venv_python(environment: Path) -> Path:
 
 def _venv_cli(environment: Path) -> Path:
     return environment / (
-        "Scripts/async-api-view.exe" if sys.platform == "win32" else "bin/async-api-view"
+        "Scripts/lookingglass.exe" if sys.platform == "win32" else "bin/lookingglass"
     )
 
 
@@ -616,7 +616,7 @@ def locked_installed_requirements(freeze_output: str) -> tuple[str, ...]:
         if not requirement:
             continue
         local_name = requirement.split("@", 1)[0].strip().casefold().replace("_", "-")
-        if local_name == "async-api-view":
+        if local_name == "lookingglass":
             continue
         name, separator, version = requirement.partition("==")
         if (
@@ -828,7 +828,7 @@ def smoke_pinned_cli_environment(
         )
         wheel.writestr(
             f"{metadata_root}/WHEEL",
-            "Wheel-Version: 1.0\nGenerator: rookery-verifier\n"
+            "Wheel-Version: 1.0\nGenerator: lookingglass-verifier\n"
             "Root-Is-Purelib: true\nTag: py3-none-any\n",
         )
         wheel.writestr(f"{metadata_root}/RECORD", records)
@@ -883,10 +883,10 @@ def smoke_installed_wheel(
     expected_assets: frozenset[str],
 ) -> None:
     relative_assets = tuple(
-        Path(asset).relative_to("async_api_view").as_posix() for asset in sorted(expected_assets)
+        Path(asset).relative_to("lookingglass").as_posix() for asset in sorted(expected_assets)
     )
     project_root = Path.cwd().resolve()
-    with TemporaryDirectory(prefix="rookery-wheel-smoke-") as temporary:
+    with TemporaryDirectory(prefix="lookingglass-wheel-smoke-") as temporary:
         runtime_constraints = Path(temporary) / "runtime-constraints.txt"
         environment = Path(temporary) / "venv"
         process_environment = {
@@ -917,7 +917,7 @@ def smoke_installed_wheel(
             timeout=30,
         )
         constraints_text = runtime_constraints.read_text(encoding="utf-8")
-        if "--hash=sha256:" not in constraints_text or "async-api-view==" in constraints_text:
+        if "--hash=sha256:" not in constraints_text or "lookingglass==" in constraints_text:
             raise RuntimeError("locked runtime constraints are incomplete")
         tracked_constraints = project_root / "runtime-constraints.txt"
         if runtime_constraints.read_bytes() != tracked_constraints.read_bytes():
@@ -1001,7 +1001,7 @@ def smoke_installed_wheel(
         audit_project.mkdir()
         (audit_project / "pyproject.toml").write_text(
             "[project]\n"
-            'name = "rookery-installed-audit"\n'
+            'name = "lookingglass-installed-audit"\n'
             'version = "0"\n'
             'requires-python = ">=3.12,<3.13"\n'
             f"dependencies = {json.dumps(installed_requirements)}\n",
@@ -1033,7 +1033,7 @@ def smoke_installed_wheel(
         audited_requirements = {
             f"{package['name'].casefold().replace('_', '-')}=={package['version']}"
             for package in audit_lock.get("package", [])
-            if package.get("name") != "rookery-installed-audit"
+            if package.get("name") != "lookingglass-installed-audit"
         }
         expected_requirements = {
             f"{requirement.partition('==')[0].casefold().replace('_', '-')}=="
@@ -1049,13 +1049,13 @@ def smoke_installed_wheel(
         smoke = (
             "from importlib.resources import files; from pathlib import Path; "
             "from datetime import UTC,datetime; from uuid import uuid4; "
-            "import async_api_view, async_api_view.composition; "
-            "from async_api_view.contracts import ObservationBatch; "
+            "import lookingglass, lookingglass.composition; "
+            "from lookingglass.contracts import ObservationBatch; "
             f"assets={json.dumps(relative_assets)}; "
             f"venv=Path({json.dumps(str(environment.resolve()))}); "
-            "location=Path(async_api_view.__file__).resolve(); "
+            "location=Path(lookingglass.__file__).resolve(); "
             "assert location.is_relative_to(venv), location; "
-            "root=files('async_api_view'); "
+            "root=files('lookingglass'); "
             "now=datetime(2026,8,30,tzinfo=UTC); "
             "batch=ObservationBatch(uuid4(),uuid4(),uuid4(),'databricks','1',"
             "now,now,(),(),(),None,'1'); "
@@ -1099,10 +1099,10 @@ def smoke_installed_wheel(
             )
         ):
             raise RuntimeError("installed CLI help is missing required commands")
-        if "Rookery" not in help_result.stdout or "async-api-view" not in help_result.stdout:
+        if "LookingGlass" not in help_result.stdout or "lookingglass" not in help_result.stdout:
             raise RuntimeError("installed CLI help does not map the product and command names")
-        config = Path(temporary) / "rookery.toml"
-        architecture = Path(temporary) / "rookery-architecture.md"
+        config = Path(temporary) / "lookingglass.toml"
+        architecture = Path(temporary) / "lookingglass-architecture.md"
         for command in (
             (str(cli), "init-config", "--output", str(config)),
             (str(cli), "export-docs", "--output", str(architecture)),
@@ -1125,7 +1125,7 @@ def smoke_installed_wheel(
             text=True,
             timeout=30,
         )
-        database = Path(temporary) / ".local" / "rookery.sqlite3"
+        database = Path(temporary) / ".local" / "lookingglass.sqlite3"
         if (
             rejected.returncode != 1
             or database.exists()
@@ -1167,7 +1167,7 @@ def smoke_installed_wheel(
 def _wheel_migration_provenance(wheel_archive: Path) -> tuple[tuple[object, ...], ...]:
     """Derive deterministic provenance directly from packaged bytes, outside runtime code."""
 
-    prefix = "async_api_view/storage/migrations/"
+    prefix = "lookingglass/storage/migrations/"
     manifest_name = f"{prefix}MANIFEST.sha256"
     with ZipFile(wheel_archive) as archive:
         manifest = archive.read(manifest_name).decode("ascii")
@@ -1195,7 +1195,8 @@ def _wheel_migration_provenance(wheel_archive: Path) -> tuple[tuple[object, ...]
             chain_sha256 = hashlib.sha256(
                 b"".join(
                     (
-                        b"rookery-migration-chain-v1\0",
+                        # Must match the legacy persisted migration-chain domain separator.
+                        b"lookingglass-migration-chain-v1\0",
                         previous_chain,
                         ordinal.to_bytes(4, "big"),
                         version.encode("utf-8"),
@@ -1221,7 +1222,7 @@ def verify_sdist_rebuild(source_archive: Path, wheel_archive: Path) -> None:
         if key.upper() not in {"PYTHONHOME", "PYTHONPATH"}
     }
     process_environment["PYTHONNOUSERSITE"] = "1"
-    with TemporaryDirectory(prefix="rookery-sdist-rebuild-") as temporary:
+    with TemporaryDirectory(prefix="lookingglass-sdist-rebuild-") as temporary:
         output = Path(temporary) / "dist"
         _run_owned(
             [
@@ -1296,7 +1297,7 @@ def publish_release_evidence(
         if artifact.read_bytes() != snapshots[artifact]:
             raise RuntimeError("verified release artifact changed before publication")
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
-    bundle = distribution_dir / f"rookery-{project['version']}-{commit}-verified"
+    bundle = distribution_dir / f"lookingglass-{project['version']}-{commit}-verified"
     manifest_name = "SHA256SUMS.txt"
     artifact_names = (source_archive.name, wheel_archive.name, published_constraints.name)
     artifact_bytes = (
@@ -1313,7 +1314,7 @@ def publish_release_evidence(
         f"{hashlib.sha256(content).hexdigest()}  {name}"
         for name, content in zip(artifact_names, artifact_bytes, strict=True)
     )
-    with TemporaryDirectory(prefix=".rookery-evidence-", dir=distribution_dir) as temporary:
+    with TemporaryDirectory(prefix=".lookingglass-evidence-", dir=distribution_dir) as temporary:
         temporary_bundle = Path(temporary) / "bundle"
         temporary_bundle.mkdir()
         temporary_source = temporary_bundle / source_archive.name
@@ -1340,7 +1341,7 @@ def publish_release_evidence(
         else:
             temporary_bundle.replace(bundle)
     published_constraints.write_bytes(artifact_bytes[2])
-    for stale in distribution_dir.glob("rookery-*-SHA256SUMS.txt"):
+    for stale in distribution_dir.glob("lookingglass-*-SHA256SUMS.txt"):
         stale.unlink()
     return bundle / manifest_name
 
@@ -1358,7 +1359,7 @@ def main() -> None:
         wheel_archive: wheel_archive.read_bytes(),
         runtime_constraints: runtime_constraints.read_bytes(),
     }
-    with TemporaryDirectory(prefix="rookery-verify-snapshot-") as temporary:
+    with TemporaryDirectory(prefix="lookingglass-verify-snapshot-") as temporary:
         snapshot_root = Path(temporary)
         snapshot_source = snapshot_root / source_archive.name
         snapshot_wheel = snapshot_root / wheel_archive.name

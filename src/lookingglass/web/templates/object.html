@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Cached object facets, containment relationships, and refresh actions.">
-  <title>{{ view.object.name|display }} · Rookery</title>
+  <title>{{ view.object.name|display }} · LookingGlass</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/app.js" defer></script>
@@ -111,7 +111,7 @@
     </section>
 
     <section aria-labelledby="refresh-heading">
-      <div class="section-heading"><div><p class="eyebrow">Ordinary refresh path</p><h2 id="refresh-heading">Object refreshes</h2></div></div>
+      <div class="section-heading"><div><p class="eyebrow">Expand the local view</p><h2 id="refresh-heading">Object cache expansions</h2></div></div>
       {% if view.refresh_options %}
       <div class="refresh-list">
         {% for option in view.refresh_options %}
@@ -123,13 +123,13 @@
           <input type="hidden" name="capability_key" value="{{ option.capability_key|display }}">
           <input type="hidden" name="facet" value="{{ option.facet|display }}">
           <div><strong>{{ option.label|display }}</strong><span class="subtle"><code>{{ option.capability_key|display }}</code> · facet {{ option.facet|display }}</span><code class="subtle">System {{ option.system_id|display }}</code><span class="subtle">Collateral effects: {{ option.collateral_effects|display }}</span></div>
-          <button type="submit" {% if not option.enabled %}disabled aria-describedby="object-reason-{{ loop.index }}"{% endif %}>Request refresh</button>
+          <button type="submit" {% if not option.enabled %}disabled aria-describedby="object-reason-{{ loop.index }}"{% endif %}>Add to cache</button>
           {% if option.disabled_reason %}<span id="object-reason-{{ loop.index }}" class="warning">{{ option.disabled_reason|display }}</span>{% endif %}
         </form>
         {% endfor %}
       </div>
       {% else %}
-      <div class="empty-state"><strong>No object refresh available</strong><p>{{ view.refresh_empty_reason|display }}</p></div>
+      <div class="empty-state"><strong>No object cache expansion available</strong><p>{{ view.refresh_empty_reason|display }}</p></div>
       {% endif %}
     </section>
   </main>

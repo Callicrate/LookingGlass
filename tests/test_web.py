@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from async_api_view.web import (
+from lookingglass.web import (
     ActionActivityView,
     ActionAttemptView,
     ActionDetailView,
@@ -39,7 +39,7 @@ from async_api_view.web import (
     SystemView,
     create_app,
 )
-from async_api_view.web.models import display_text
+from lookingglass.web.models import display_text
 
 NOW = datetime(2026, 8, 24, 14, 35, 9, tzinfo=UTC)
 DETAIL_ID = "11111111-1111-4111-8111-111111111111"
@@ -235,7 +235,7 @@ def assert_html_error_shell(
 ) -> None:
     assert response.status_code == status
     assert response.headers["content-type"].startswith("text/html")
-    assert f"<title>{heading} · Rookery</title>" in response.text
+    assert f"<title>{heading} · LookingGlass</title>" in response.text
     assert '<main id="main"' in response.text
     assert 'role="alert"' in response.text
     assert heading in response.text
@@ -279,7 +279,7 @@ def test_bootstrap_is_public_single_use_and_rotates_a_fixation_cookie() -> None:
     app = create_app(backend, allowed_hosts=("testserver",))
     client = TestClient(app, base_url="http://testserver")
     token = app.state.local_authorizer.take_bootstrap_token()
-    client.cookies.set("rookery_session", "A" * 43)
+    client.cookies.set("lookingglass_session", "A" * 43)
 
     page = client.get("/bootstrap")
     static = client.get("/static/bootstrap.js")
@@ -302,7 +302,7 @@ def test_bootstrap_is_public_single_use_and_rotates_a_fixation_cookie() -> None:
     assert response.headers["location"] == "/"
     assert token not in str(response.headers)
     cookie = response.headers["set-cookie"]
-    assert "rookery_session=" in cookie
+    assert "lookingglass_session=" in cookie
     assert "HttpOnly" in cookie
     assert "SameSite=strict" in cookie
     assert "; Secure" not in cookie
@@ -347,7 +347,7 @@ def test_process_unique_browser_host_isolates_cookie_from_other_loopback_service
         client.cookies.jar.add_cookie_header(request)
         return request.get_header("Cookie", "")
 
-    assert "rookery_session=" in cookie_header(f"http://{authorizer.browser_host}:9999/")
+    assert "lookingglass_session=" in cookie_header(f"http://{authorizer.browser_host}:9999/")
     assert cookie_header("http://127.0.0.1:9999/") == ""
     assert cookie_header("http://localhost:9999/") == ""
     assert cookie_header("http://unrelated.localhost:9999/") == ""
@@ -437,7 +437,7 @@ def test_expired_browser_session_is_denied_and_cookie_is_cleared() -> None:
 
     assert denied.status_code == 403
     assert "Unlock this browser" in denied.text
-    assert "async-api-view serve" in denied.text
+    assert "lookingglass serve" in denied.text
     assert "--config" in denied.text
     assert "Max-Age=0" in denied.headers["set-cookie"]
     assert denied_mutation.status_code == 403
@@ -466,7 +466,7 @@ def test_expired_browser_post_renders_recovery_shell() -> None:
     assert denied.status_code == 403
     assert denied.headers["content-type"].startswith("text/html")
     assert "Unlock this browser" in denied.text
-    assert "async-api-view serve" in denied.text
+    assert "lookingglass serve" in denied.text
     assert "--config" in denied.text
     assert "Max-Age=0" in denied.headers["set-cookie"]
     assert backend.submitted == []
@@ -691,12 +691,12 @@ def test_empty_dashboard_explains_unknown_state() -> None:
     assert "No systems configured" in response.text
     assert "No cached objects" in response.text
     assert "No operational alerts recorded" in response.text
-    assert "Refresh unavailable" in response.text
+    assert "No cache expansion available" in response.text
     assert "View history" in response.text
     assert "View activity" in response.text
-    assert "Refresh options" in response.text
-    assert "<title>Remote state · Rookery</title>" in response.text
-    assert "Rookery · local operational view" in response.text
+    assert "Available cache expansions" in response.text
+    assert "<title>Remote state · LookingGlass</title>" in response.text
+    assert "LookingGlass · local operational view" in response.text
     assert "Async API View" not in response.text
 
 
@@ -719,7 +719,8 @@ def test_dashboard_renders_cached_record_isolation_as_a_nonblocking_warning() ->
     view = replace(
         ready_dashboard(),
         integrity_warning=(
-            "Rookery isolated malformed cached records; healthy cached state remains available."
+            "LookingGlass isolated malformed cached records; "
+            "healthy cached state remains available."
         ),
     )
 
@@ -783,7 +784,7 @@ def test_dashboard_exposes_readable_linked_fact_provenance() -> None:
     assert "Observation observation-1" in response.text
     assert f'href="/actions/{ACTION_ID}"' in response.text
     assert "Producing action" in response.text
-    assert "Request refresh" in response.text
+    assert "Add to cache" in response.text
     assert "Raw content is not displayed" in response.text
     assert "raw secret file contents" not in response.text
 
@@ -886,7 +887,7 @@ def test_object_page_shows_facets_containment_and_refresh_controls() -> None:
     assert f"/objects/{CHILD_ID}" in response.text
     assert "Data workspace" in response.text
     assert "databricks.workspace.folder" in response.text
-    assert "Object refreshes" in response.text
+    assert "Object cache expansions" in response.text
     assert f"System {OBJECT_OPTION.system_id}" in response.text
     assert 'value="file"' in response.text
     assert "Raw content is not displayed" in response.text
@@ -1751,7 +1752,7 @@ def test_unexpected_authorization_failure_uses_closed_secure_error_shell(
 
     assert response.status_code == 500
     assert response.headers["content-type"].startswith("text/html")
-    assert "<title>Local access failed · Rookery</title>" in response.text
+    assert "<title>Local access failed · LookingGlass</title>" in response.text
     assert 'role="alert"' in response.text
     assert 'href="/bootstrap"' in response.text
     assert "Return to dashboard" not in response.text
@@ -1799,7 +1800,7 @@ def test_first_party_script_avoids_dangerous_dom_sinks() -> None:
     script_path = (
         __import__("pathlib").Path(__file__).parents[1]
         / "src"
-        / "async_api_view"
+        / "lookingglass"
         / "web"
         / "static"
         / "app.js"

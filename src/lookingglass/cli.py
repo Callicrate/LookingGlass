@@ -16,21 +16,21 @@ from typing import NoReturn
 
 import uvicorn
 
-from async_api_view.adapters import CliRunner
-from async_api_view.adapters.databricks import (
+from lookingglass.adapters import CliRunner
+from lookingglass.adapters.databricks import (
     databricks_profile_authority_fingerprint,
     redact_diagnostic,
 )
-from async_api_view.composition import ApplicationRuntime, build_runtime
-from async_api_view.config import (
+from lookingglass.composition import ApplicationRuntime, build_runtime
+from lookingglass.config import (
     AppSettings,
     ConfigError,
     ProjectSettings,
     load_app_settings,
     load_settings,
 )
-from async_api_view.local_files import ExclusiveFileLock, absolute_local_path
-from async_api_view.storage import SQLiteStore, backup_sqlite_database
+from lookingglass.local_files import ExclusiveFileLock, absolute_local_path
+from lookingglass.storage import SQLiteStore, backup_sqlite_database
 
 logger = logging.getLogger(__name__)
 DEFAULT_RUN_ONCE_CYCLES = 10_000
@@ -65,14 +65,14 @@ class _SanitizedUvicornFilter(logging.Filter):
             or "Traceback (most recent call last)" in message
             or "Exception in 'lifespan' protocol" in message
         ):
-            record.msg = "Rookery application component failed"
+            record.msg = "LookingGlass application component failed"
             record.args = ()
             record.exc_info = None
             record.exc_text = None
         return True
 
 
-class _RookeryServer(uvicorn.Server):
+class _LookingGlassServer(uvicorn.Server):
     """Disclose browser activation only after application startup succeeds."""
 
     def __init__(self, config: uvicorn.Config, *, on_started: Callable[[], None]) -> None:
@@ -86,7 +86,7 @@ class _RookeryServer(uvicorn.Server):
 
 
 _EXAMPLE_CONFIG = """[app]
-database_path = "./.local/rookery.sqlite3"
+database_path = "./.local/lookingglass.sqlite3"
 host = "127.0.0.1"
 port = 8765
 worker_poll_seconds = 1.0
@@ -104,11 +104,8 @@ workspace_root = "/"
 
 def _parser() -> argparse.ArgumentParser:
     parser = _OperatorArgumentParser(
-        prog="async-api-view",
-        description=(
-            "Rookery local state viewer and refresher, distributed as the "
-            "async-api-view compatibility command."
-        ),
+        prog="lookingglass",
+        description=("LookingGlass local state viewer and refresher."),
     )
     parser.add_argument(
         "--config",
@@ -139,9 +136,9 @@ def _parser() -> argparse.ArgumentParser:
     export_docs.add_argument(
         "--output",
         type=Path,
-        default=Path("rookery-architecture.md"),
+        default=Path("lookingglass-architecture.md"),
         help=(
-            "New Markdown path (default: rookery-architecture.md); never overwrites an "
+            "New Markdown path (default: lookingglass-architecture.md); never overwrites an "
             "existing path."
         ),
     )
@@ -237,7 +234,7 @@ def _initialize_config(output: Path) -> None:
 
 
 def _architecture_text() -> str:
-    packaged = files("async_api_view").joinpath("docs", "architecture.md")
+    packaged = files("lookingglass").joinpath("docs", "architecture.md")
     if packaged.is_file():
         return packaged.read_text(encoding="utf-8")
     checkout_copy = Path(__file__).parents[2] / "docs" / "architecture.md"
@@ -249,7 +246,7 @@ def _export_docs(output: Path) -> None:
     with output.open("x", encoding="utf-8", newline="\n") as stream:
         stream.write(_architecture_text())
     logger.info(
-        "Exported the Rookery architecture contract to %s",
+        "Exported the LookingGlass architecture contract to %s",
         _operator_diagnostic(output.resolve()),
     )
 
@@ -270,7 +267,7 @@ async def _doctor(settings: ProjectSettings) -> None:
 
 def _authority_list(settings: AppSettings) -> None:
     if not os.path.lexists(settings.database_path):
-        raise RuntimeError("authority inventory requires an initialized Rookery database")
+        raise RuntimeError("authority inventory requires an initialized LookingGlass database")
     with SQLiteStore(settings.database_path) as store:
         lines: list[str] = []
         for authority in store.list_authorities():
@@ -304,7 +301,7 @@ def _set_authority_retired(
     retired: bool,
 ) -> None:
     if not os.path.lexists(settings.database_path):
-        raise RuntimeError("authority retirement requires an initialized Rookery database")
+        raise RuntimeError("authority retirement requires an initialized LookingGlass database")
     with SQLiteStore(settings.database_path) as store:
         store.set_authority_retired(system_id, retired=retired)
     logger.info(
@@ -387,7 +384,7 @@ def _reserve_loopback_sockets(port: int, *, backlog: int) -> list[socket.socket]
                 else:
                     # POSIX needs this for immediate restart after accepted sockets
                     # enter TIME_WAIT. Active listeners remain exclusive without
-                    # SO_REUSEPORT, which Rookery never enables.
+                    # SO_REUSEPORT, which LookingGlass never enables.
                     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 listener.bind((host, selected_port))
                 if selected_port == 0:
@@ -432,7 +429,7 @@ def _serve_loopback(
         settings.app.port,
         settings.app.port,
     )
-    server = _RookeryServer(
+    server = _LookingGlassServer(
         config,
         on_started=lambda: _show_browser_activation(
             runtime,
@@ -447,7 +444,7 @@ def _serve_loopback(
         server.run(sockets=listeners)
     except SystemExit as exc:
         if exc.code == 3:
-            raise RuntimeError("Rookery application startup failed") from None
+            raise RuntimeError("LookingGlass application startup failed") from None
         raise
     finally:
         error_logger.removeFilter(diagnostic_filter)
@@ -456,7 +453,7 @@ def _serve_loopback(
 def _serve_lock_path(database_path: Path) -> Path:
     database = absolute_local_path(database_path)
     if os.path.lexists(database.parent / ".git"):
-        raise OSError("Rookery serve state requires a dedicated private directory")
+        raise OSError("LookingGlass serve state requires a dedicated private directory")
     return database.with_name(f".{database.name}.serve.lock")
 
 
@@ -550,7 +547,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:  # pragma: no cover - argparse owns the command vocabulary
             raise RuntimeError(f"unsupported command {args.command}")
     except KeyboardInterrupt:
-        logger.warning("Rookery command interrupted")
+        logger.warning("LookingGlass command interrupted")
         return EXIT_INTERRUPTED
     except sqlite3.Error:
         logger.error("local SQLite state could not be opened or updated")

@@ -13,7 +13,7 @@ from uuid import uuid4
 import httpx2
 import pytest
 
-from async_api_view.adapters.databricks import (
+from lookingglass.adapters.databricks import (
     CliExecution,
     CliIncompatible,
     CliInvocation,
@@ -21,20 +21,22 @@ from async_api_view.adapters.databricks import (
     LifecyclePersistenceFailure,
     workspace_authority_fingerprint,
 )
-from async_api_view.application import SystemBootstrapService
-from async_api_view.cli import _run_once
-from async_api_view.composition import build_runtime
-from async_api_view.config import (
+from lookingglass.application import SystemBootstrapService
+from lookingglass.cli import _run_once
+from lookingglass.composition import build_runtime
+from lookingglass.config import (
     AppSettings,
     ConfigError,
     DatabricksSystemSettings,
     ProjectSettings,
 )
-from async_api_view.contracts import (
+from lookingglass.contracts import (
     ActionCompletion,
     ActionOutcome,
+    CapabilityBinding,
     FacetState,
     KnowledgeState,
+    OperationClass,
     PresenceState,
     RefreshIntent,
     RefreshOrigin,
@@ -43,14 +45,14 @@ from async_api_view.contracts import (
     TargetKind,
     TargetRef,
 )
-from async_api_view.storage import (
+from lookingglass.storage import (
     ActionActivityRecord,
     ActionAttemptRecord,
     FacetActionStatusRecord,
     FacetEvidenceRecord,
     SQLiteStore,
 )
-from async_api_view.web import (
+from lookingglass.web import (
     ActionHistoryQuery,
     AlertHistoryQuery,
     DashboardQuery,
@@ -251,6 +253,53 @@ async def test_dashboard_disables_refresh_when_write_headroom_is_unavailable(
     recovered = await runtime.backend.dashboard()
     assert not recovered.refresh_unavailable
     assert all(option.enabled for option in recovered.refresh_options)
+    runtime.store.close()
+
+
+@pytest.mark.anyio
+async def test_registered_adapter_capability_creates_a_generic_cache_expansion(
+    tmp_path: Path,
+) -> None:
+    runtime = build_runtime(settings(tmp_path), runner=FakeCliRunner(b"[]"))
+    system = runtime.store.list_readable_systems()[0]
+    binding = runtime.store.list_readable_connection_bindings(system_id=system.system_id)[0]
+    target = runtime.store.upsert_object(
+        RemoteObject(
+            object_id=uuid4(),
+            system_id=system.system_id,
+            object_type="generic_object",
+            object_type_version="1",
+            source_kind="example_api.widget",
+            external_key="widget:primary",
+            display_name="Primary widget",
+            presence=PresenceState.PRESENT,
+            first_seen_at=datetime.now(UTC),
+        )
+    )
+    runtime.store.upsert_capability_binding(
+        CapabilityBinding(
+            capability_binding_id=uuid4(),
+            connection_binding_id=binding.binding_id,
+            capability_key="example_api.widget.details.read",
+            capability_version="1",
+            operation_class=OperationClass.OBSERVE,
+            target_kinds=(TargetKind.OBJECT,),
+            produced_facets=("details",),
+            enabled=True,
+            target_source_kinds=("example_api.widget",),
+        )
+    )
+
+    dashboard = await runtime.backend.dashboard()
+
+    assert any(
+        option.system_id == system.system_id
+        and option.target_id == target.object_id
+        and option.capability_key == "example_api.widget.details.read"
+        and option.facet == "details"
+        and option.label == "Add details to cache for Primary widget"
+        for option in dashboard.refresh_options
+    )
     runtime.store.close()
 
 
@@ -1315,7 +1364,7 @@ async def test_malformed_presentation_rows_are_isolated_with_visible_warning(
 
     reopened = build_runtime(project_settings, runner=FakeCliRunner(b"[]"))
     reopened.worker_available = True
-    warning = "Rookery isolated malformed cached records"
+    warning = "LookingGlass isolated malformed cached records"
     dashboard_view = await reopened.backend.dashboard()
     history = await reopened.backend.action_history()
     alerts = await reopened.backend.alert_history()
@@ -2286,18 +2335,18 @@ async def test_configuration_repair_canonicalizes_desired_resource_timestamps(
     checks = repaired.store._connection.execute(
         """
         SELECT
-            (SELECT MIN(rookery_is_canonical_timestamp(record_created_at))
+            (SELECT MIN(lookingglass_is_canonical_timestamp(record_created_at))
              FROM systems WHERE system_id = ?),
-            (SELECT MIN(rookery_is_canonical_timestamp(record_created_at))
+            (SELECT MIN(lookingglass_is_canonical_timestamp(record_created_at))
              FROM connection_bindings WHERE system_id = ?),
-            (SELECT MIN(rookery_is_canonical_timestamp(capability.record_created_at))
+            (SELECT MIN(lookingglass_is_canonical_timestamp(capability.record_created_at))
              FROM capability_bindings AS capability
              JOIN connection_bindings AS binding
                ON binding.binding_id = capability.connection_binding_id
              WHERE binding.system_id = ?),
-            (SELECT MIN(rookery_is_canonical_timestamp(record_created_at))
+            (SELECT MIN(lookingglass_is_canonical_timestamp(record_created_at))
              FROM configured_scopes WHERE system_id = ?),
-            (SELECT MIN(rookery_is_canonical_timestamp(record_created_at))
+            (SELECT MIN(lookingglass_is_canonical_timestamp(record_created_at))
              FROM configured_system_identities WHERE system_id = ?)
         """,
         (system_id,) * 5,

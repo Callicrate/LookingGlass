@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from async_api_view.config import validate_databricks_profile
-from async_api_view.contracts import (
+from lookingglass.config import validate_databricks_profile
+from lookingglass.contracts import (
     AbsenceAuthority,
     CapabilityBinding,
     CapabilityCoveragePolicy,
@@ -20,8 +20,8 @@ from async_api_view.contracts import (
     RemoteObject,
     TargetKind,
 )
-from async_api_view.contracts._validation import JSONValue, require_text
-from async_api_view.storage import ConfiguredScopeRecord, SQLiteStore, SystemRecord
+from lookingglass.contracts._validation import JSONValue, require_text
+from lookingglass.storage import ConfiguredScopeRecord, SQLiteStore, SystemRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,17 +37,42 @@ class DatabricksBootstrapResult:
     unity_catalog_root_scope: ConfiguredScopeRecord | None = None
 
 
-_CAPABILITIES: dict[str, tuple[tuple[TargetKind, ...], tuple[str, ...]]] = {
+_CAPABILITIES: dict[str, tuple[tuple[TargetKind, ...], tuple[str, ...], tuple[str, ...]]] = {
     "databricks.workspace.children.read": (
         (TargetKind.CONFIGURED_SCOPE, TargetKind.OBJECT),
         ("membership", "metadata"),
+        ("databricks.workspace.folder",),
     ),
-    "databricks.workspace.metadata.read": ((TargetKind.OBJECT,), ("metadata",)),
-    "databricks.workspace.content.read": ((TargetKind.OBJECT,), ("content",)),
-    "databricks.uc.catalogs.read": ((TargetKind.CONFIGURED_SCOPE,), ("attributes",)),
-    "databricks.uc.schemas.read": ((TargetKind.OBJECT,), ("attributes",)),
-    "databricks.uc.relations.read": ((TargetKind.OBJECT,), ("attributes",)),
-    "databricks.uc.volumes.read": ((TargetKind.OBJECT,), ("attributes",)),
+    "databricks.workspace.metadata.read": (
+        (TargetKind.OBJECT,),
+        ("metadata",),
+        ("databricks.workspace.folder", "databricks.workspace.file"),
+    ),
+    "databricks.workspace.content.read": (
+        (TargetKind.OBJECT,),
+        ("content",),
+        ("databricks.workspace.file",),
+    ),
+    "databricks.uc.catalogs.read": (
+        (TargetKind.CONFIGURED_SCOPE,),
+        ("attributes",),
+        ("databricks.uc.catalog_collection",),
+    ),
+    "databricks.uc.schemas.read": (
+        (TargetKind.OBJECT,),
+        ("attributes",),
+        ("databricks.uc.catalog",),
+    ),
+    "databricks.uc.relations.read": (
+        (TargetKind.OBJECT,),
+        ("attributes",),
+        ("databricks.uc.schema",),
+    ),
+    "databricks.uc.volumes.read": (
+        (TargetKind.OBJECT,),
+        ("attributes",),
+        ("databricks.uc.schema",),
+    ),
 }
 
 
@@ -211,7 +236,7 @@ class SystemBootstrapService:
             )
         capability_ids: list[str] = []
         for capability_key in capability_keys:
-            target_kinds, produced_facets = _CAPABILITIES[capability_key]
+            target_kinds, produced_facets, target_source_kinds = _CAPABILITIES[capability_key]
             capability_id = str(
                 uuid5(NAMESPACE_URL, f"databricks-capability:{binding_id}:{capability_key}")
             )
@@ -224,7 +249,11 @@ class SystemBootstrapService:
                     operation_class=OperationClass.OBSERVE,
                     target_kinds=target_kinds,
                     produced_facets=produced_facets,
-                    enabled=True,
+                    enabled=(
+                        capability_key != "databricks.workspace.content.read"
+                        or settings.get("content_capture_enabled") is True
+                    ),
+                    target_source_kinds=target_source_kinds,
                     selection_priority=100,
                     collateral_effects=(
                         "remote audit or authentication record",

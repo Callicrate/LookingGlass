@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from async_api_view.contracts import (
+from lookingglass.contracts import (
     CONTRACT_VERSION,
     V1_TYPE_DEFINITION_BY_KEY,
     AbsenceAuthority,
@@ -43,8 +43,8 @@ from async_api_view.contracts import (
     TargetRef,
     UpdateMode,
 )
-from async_api_view.contracts import _validation as contract_validation
-from async_api_view.contracts._validation import validate_json
+from lookingglass.contracts import _validation as contract_validation
+from lookingglass.contracts._validation import validate_json
 
 NOW = datetime(2026, 8, 24, 12, tzinfo=UTC)
 

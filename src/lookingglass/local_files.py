@@ -1,4 +1,4 @@
-"""Current-user filesystem boundaries for local Rookery state."""
+"""Current-user filesystem boundaries for local LookingGlass state."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def _is_redirect(path: Path) -> bool:
 def _assert_no_redirects(path: Path) -> None:
     for candidate in (path, *path.parents):
         if os.path.lexists(candidate) and _is_redirect(candidate):
-            raise OSError("Rookery private paths cannot contain a filesystem redirect")
+            raise OSError("LookingGlass private paths cannot contain a filesystem redirect")
 
 
 def regular_file_identity(
@@ -55,9 +55,9 @@ def regular_file_identity(
     _assert_no_redirects(requested)
     details = requested.lstat()
     if not stat.S_ISREG(details.st_mode):
-        raise OSError("Rookery state must be a regular file")
+        raise OSError("LookingGlass state must be a regular file")
     if expected_links is not None and details.st_nlink != expected_links:
-        raise OSError("Rookery state file hard links have an unexpected count")
+        raise OSError("LookingGlass state file hard links have an unexpected count")
     return details.st_dev, details.st_ino
 
 
@@ -108,7 +108,7 @@ class RegularFileGuard:
         if handle == ctypes.c_void_p(-1).value:
             code = ctypes.get_last_error()
             raise OSError(
-                code, f"could not guard the Rookery state file: {ctypes.FormatError(code)}"
+                code, f"could not guard the LookingGlass state file: {ctypes.FormatError(code)}"
             )
         return int(handle)
 
@@ -116,11 +116,11 @@ class RegularFileGuard:
         if self._descriptor is not None:
             details = os.fstat(self._descriptor)
             if not stat.S_ISREG(details.st_mode):
-                raise OSError("Rookery state must be a regular file")
+                raise OSError("LookingGlass state must be a regular file")
             if details.st_nlink != 1:
-                raise OSError("Rookery state files must not have multiple hard links")
+                raise OSError("LookingGlass state files must not have multiple hard links")
             if details.st_uid != _effective_user_id():
-                raise OSError("Rookery state file owner does not match the current user")
+                raise OSError("LookingGlass state file owner does not match the current user")
             return details.st_dev, details.st_ino
         return regular_file_identity(self.path)
 
@@ -128,7 +128,7 @@ class RegularFileGuard:
         """Fail if the configured path no longer names the guarded file."""
 
         if regular_file_identity(self.path, expected_links=expected_links) != self.identity:
-            raise OSError("Rookery state file identity changed while guarded")
+            raise OSError("LookingGlass state file identity changed while guarded")
 
     def harden(self) -> None:
         """Apply current-user protection to the guarded object, then reverify its path."""
@@ -137,7 +137,7 @@ class RegularFileGuard:
             _set_descriptor_mode(self._descriptor, 0o600)
             details = os.fstat(self._descriptor)
             if stat.S_IMODE(details.st_mode) != 0o600:
-                raise OSError("Rookery state file permissions could not be restricted")
+                raise OSError("LookingGlass state file permissions could not be restricted")
         else:
             _harden_windows_path_acl(self.path, inherit_to_children=False)
         self.verify()
@@ -149,7 +149,7 @@ class RegularFileGuard:
             os.fsync(self._descriptor)
             return
         if self._windows_handle is None:  # pragma: no cover - closed guard misuse
-            raise OSError("Rookery state file guard is closed")
+            raise OSError("LookingGlass state file guard is closed")
         import ctypes
         from ctypes import wintypes
 
@@ -158,7 +158,9 @@ class RegularFileGuard:
         kernel32.FlushFileBuffers.restype = wintypes.BOOL
         if not kernel32.FlushFileBuffers(self._windows_handle):
             code = ctypes.get_last_error()
-            raise OSError(code, f"could not synchronize Rookery state: {ctypes.FormatError(code)}")
+            raise OSError(
+                code, f"could not synchronize LookingGlass state: {ctypes.FormatError(code)}"
+            )
 
     def close(self) -> None:
         if self._descriptor is not None:
@@ -234,23 +236,23 @@ class PrivateDirectoryGuard:
             code = ctypes.get_last_error()
             raise OSError(
                 code,
-                f"could not guard the Rookery state directory: {ctypes.FormatError(code)}",
+                f"could not guard the LookingGlass state directory: {ctypes.FormatError(code)}",
             )
         return int(handle)
 
     def _handle_identity(self) -> tuple[int, int]:
         details = os.fstat(self._descriptor) if self._descriptor is not None else self.path.lstat()
         if not stat.S_ISDIR(details.st_mode):
-            raise OSError("Rookery state directory must be a directory")
+            raise OSError("LookingGlass state directory must be a directory")
         if os.name != "nt" and details.st_uid != os.geteuid():
-            raise OSError("Rookery state directory owner does not match the current user")
+            raise OSError("LookingGlass state directory owner does not match the current user")
         return details.st_dev, details.st_ino
 
     def verify(self) -> None:
         _assert_no_redirects(self.path)
         details = self.path.lstat()
         if not stat.S_ISDIR(details.st_mode) or (details.st_dev, details.st_ino) != self.identity:
-            raise OSError("Rookery state directory identity changed while guarded")
+            raise OSError("LookingGlass state directory identity changed while guarded")
 
     def sync(self) -> None:
         """Synchronize publication metadata for the guarded directory."""
@@ -259,7 +261,7 @@ class PrivateDirectoryGuard:
             os.fsync(self._descriptor)
             return
         if self._windows_handle is None:  # pragma: no cover - closed guard misuse
-            raise OSError("Rookery state directory guard is closed")
+            raise OSError("LookingGlass state directory guard is closed")
         import ctypes
         from ctypes import wintypes
 
@@ -270,7 +272,8 @@ class PrivateDirectoryGuard:
             code = ctypes.get_last_error()
             raise OSError(
                 code,
-                f"could not synchronize Rookery directory metadata: {ctypes.FormatError(code)}",
+                f"could not synchronize LookingGlass directory metadata: "
+                f"{ctypes.FormatError(code)}",
             )
 
     def close(self) -> None:
@@ -316,7 +319,7 @@ class ExclusiveFileLock:
             self._guard = RegularFileGuard(self.path)
             details = os.fstat(descriptor)
             if (details.st_dev, details.st_ino) != self._guard.identity:
-                raise OSError("Rookery lock file identity changed while opening")
+                raise OSError("LookingGlass lock file identity changed while opening")
             if details.st_size == 0:
                 os.write(descriptor, b"\0")
                 os.fsync(descriptor)
@@ -329,7 +332,7 @@ class ExclusiveFileLock:
 
     def _acquire(self) -> None:
         if self._descriptor is None:  # pragma: no cover - construction invariant
-            raise OSError("Rookery lock file is closed")
+            raise OSError("LookingGlass lock file is closed")
         try:
             if os.name == "nt":
                 import msvcrt
@@ -340,7 +343,7 @@ class ExclusiveFileLock:
 
                 fcntl.flock(self._descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
-            raise ExclusiveLockUnavailable("another Rookery process owns this lock") from exc
+            raise ExclusiveLockUnavailable("another LookingGlass process owns this lock") from exc
         self._locked = True
 
     def close(self) -> None:
@@ -496,7 +499,7 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
         acl_buffer = ctypes.create_string_buffer(acl_size)
         acl = ctypes.cast(acl_buffer, wintypes.LPVOID)
         if not advapi32.InitializeAcl(acl, acl_size, 2):
-            raise last_error("could not initialize the Rookery path ACL")
+            raise last_error("could not initialize the LookingGlass path ACL")
         inheritance_flags = 0x3 if inherit_to_children else 0
         if not advapi32.AddAccessAllowedAceEx(
             acl,
@@ -505,7 +508,7 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
             0x001F01FF,
             user_sid,
         ):
-            raise last_error("could not grant the current user access to the Rookery path")
+            raise last_error("could not grant the current user access to the LookingGlass path")
         result = advapi32.SetNamedSecurityInfoW(
             str(path),
             1,
@@ -518,7 +521,7 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
         if result != 0:
             raise OSError(
                 result,
-                f"could not protect the Rookery path: {ctypes.FormatError(result)}",
+                f"could not protect the LookingGlass path: {ctypes.FormatError(result)}",
             )
 
         owner_sid = wintypes.LPVOID()
@@ -537,11 +540,11 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
         if result != 0:
             raise OSError(
                 result,
-                f"could not verify the Rookery path owner: {ctypes.FormatError(result)}",
+                f"could not verify the LookingGlass path owner: {ctypes.FormatError(result)}",
             )
         try:
             if not advapi32.EqualSid(owner_sid, user_sid):
-                raise OSError("Rookery path owner does not match the current user")
+                raise OSError("LookingGlass path owner does not match the current user")
             control = ctypes.c_ushort()
             revision = wintypes.DWORD()
             if not advapi32.GetSecurityDescriptorControl(
@@ -549,7 +552,7 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
                 ctypes.byref(control),
                 ctypes.byref(revision),
             ) or not (control.value & 0x1000):
-                raise OSError("Rookery path DACL is not protected")
+                raise OSError("LookingGlass path DACL is not protected")
             acl_information = AclSizeInformation()
             if not verified_acl or not advapi32.GetAclInformation(
                 verified_acl,
@@ -557,14 +560,14 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
                 ctypes.sizeof(acl_information),
                 2,
             ):
-                raise last_error("could not inspect the Rookery path DACL")
+                raise last_error("could not inspect the LookingGlass path DACL")
             if acl_information.ace_count != 1:
-                raise OSError("Rookery path DACL must contain one access rule")
+                raise OSError("LookingGlass path DACL must contain one access rule")
             ace = wintypes.LPVOID()
             if not advapi32.GetAce(verified_acl, 0, ctypes.byref(ace)):
-                raise last_error("could not inspect the Rookery path access rule")
+                raise last_error("could not inspect the LookingGlass path access rule")
             if ace.value is None:
-                raise OSError("Rookery path access rule pointer is unavailable")
+                raise OSError("LookingGlass path access rule pointer is unavailable")
             ace_address = int(ace.value)
             header = (ctypes.c_ubyte * 2).from_address(ace_address)
             mask = ctypes.c_uint32.from_address(ace_address + 4).value
@@ -575,7 +578,7 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
                 or mask != 0x001F01FF
                 or not advapi32.EqualSid(ace_sid, user_sid)
             ):
-                raise OSError("Rookery path DACL does not match the current-user contract")
+                raise OSError("LookingGlass path DACL does not match the current-user contract")
         finally:
             kernel32.LocalFree(security_descriptor)
     finally:
@@ -585,10 +588,10 @@ def _harden_windows_path_acl(path: Path, *, inherit_to_children: bool) -> None:
 def _harden_posix_path(path: Path, mode: int) -> None:
     details = path.stat(follow_symlinks=False)
     if details.st_uid != _effective_user_id():
-        raise OSError("Rookery path owner does not match the current user")
+        raise OSError("LookingGlass path owner does not match the current user")
     os.chmod(path, mode, follow_symlinks=False)
     if stat.S_IMODE(path.stat(follow_symlinks=False).st_mode) != mode:
-        raise OSError("Rookery path permissions could not be restricted")
+        raise OSError("LookingGlass path permissions could not be restricted")
 
 
 def prepare_private_directory(path: str | Path) -> Path:
@@ -602,10 +605,10 @@ def prepare_private_directory(path: str | Path) -> Path:
         missing.append(candidate)
         parent = candidate.parent
         if parent == candidate:  # pragma: no cover - absolute root always exists
-            raise OSError("Rookery private directory has no existing ancestor")
+            raise OSError("LookingGlass private directory has no existing ancestor")
         candidate = parent
     if not candidate.is_dir():
-        raise OSError("Rookery private directory ancestor is not a directory")
+        raise OSError("LookingGlass private directory ancestor is not a directory")
     for directory in reversed(missing):
         directory.mkdir(mode=0o700)
         if os.name == "nt":
@@ -613,7 +616,7 @@ def prepare_private_directory(path: str | Path) -> Path:
         else:
             _harden_posix_path(directory, 0o700)
     if not requested.is_dir():
-        raise OSError("Rookery private path is not a directory")
+        raise OSError("LookingGlass private path is not a directory")
     if not missing:
         if os.name == "nt":
             _harden_windows_path_acl(requested, inherit_to_children=True)
@@ -621,7 +624,7 @@ def prepare_private_directory(path: str | Path) -> Path:
             _harden_posix_path(requested, 0o700)
     _assert_no_redirects(requested)
     if requested.resolve(strict=True) != requested:
-        raise OSError("Rookery private directory changed during preparation")
+        raise OSError("LookingGlass private directory changed during preparation")
     return requested
 
 

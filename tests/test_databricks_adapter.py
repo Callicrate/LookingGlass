@@ -15,8 +15,8 @@ from uuid import uuid4
 
 import pytest
 
-from async_api_view.adapters import databricks as databricks_adapter
-from async_api_view.adapters.databricks import (
+from lookingglass.adapters import databricks as databricks_adapter
+from lookingglass.adapters.databricks import (
     DATABRICKS_ADAPTER_KEY,
     DATABRICKS_ADAPTER_VERSION,
     MAX_COLLECTION_ITEMS,
@@ -41,7 +41,7 @@ from async_api_view.adapters.databricks import (
     redact_diagnostic,
     workspace_authority_fingerprint,
 )
-from async_api_view.contracts import (
+from lookingglass.contracts import (
     ActionAttempt,
     ActionCompletion,
     ActionLease,
@@ -768,11 +768,11 @@ def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
         "BUNDLE_VAR_target",
     ):
         monkeypatch.setenv(name, "ambient-secret-or-target")
-    monkeypatch.setenv("ROOKERY_TEST_ENV", "preserved")
+    monkeypatch.setenv("LOOKINGGLASS_TEST_ENV", "preserved")
     safe_path = tmp_path / "safe-path"
     safe_path.mkdir()
     monkeypatch.setenv("PATH", f".{os.pathsep}{safe_path}")
-    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root = tmp_path / "trusted-home" / ".lookingglass" / "cli-work"
     work_root.mkdir(parents=True)
     monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
     spawned: list[tuple[Path, dict[str, str]]] = []
@@ -844,7 +844,7 @@ def test_cli_processes_scrub_ambient_databricks_auth_and_bundle_workdir(
     assert len(spawned) == 2
     for index, (working_directory, environment) in enumerate(spawned):
         assert not working_directory.exists()
-        assert environment["ROOKERY_TEST_ENV"] == "preserved"
+        assert environment["LOOKINGGLASS_TEST_ENV"] == "preserved"
         assert environment["PATH"] == str(safe_path)
         databricks_keys = {
             name for name in environment if name.upper().startswith(("DATABRICKS_", "BUNDLE_"))
@@ -871,7 +871,7 @@ def test_cli_work_root_is_private_and_confined_to_home(tmp_path: Path) -> None:
 
     root = databricks_adapter._trusted_cli_work_root(home=home)
 
-    assert root == (home / ".rookery" / "cli-work").resolve()
+    assert root == (home / ".lookingglass" / "cli-work").resolve()
     assert root.is_dir()
     if os.name != "nt":
         assert root.parent.stat().st_mode & 0o777 == 0o700
@@ -938,9 +938,9 @@ def test_hard_exit_profile_snapshot_is_recovered_cross_platform(tmp_path: Path) 
         (
             "import os, sys, tempfile",
             "from pathlib import Path",
-            "from async_api_view.local_files import ExclusiveFileLock, harden_private_file",
+            "from lookingglass.local_files import ExclusiveFileLock, harden_private_file",
             "root = Path(sys.argv[1])",
-            "directory = Path(tempfile.mkdtemp(prefix='rookery-databricks-', dir=root))",
+            "directory = Path(tempfile.mkdtemp(prefix='lookingglass-databricks-', dir=root))",
             "lock = ExclusiveFileLock(directory / '.active.lock')",
             "snapshot = directory / '.databrickscfg'",
             "snapshot.write_bytes(b'[PROFILE]\\ntoken = synthetic-placeholder\\n')",
@@ -975,9 +975,9 @@ def test_surviving_process_retries_snapshot_recovery_after_active_owner_dies(
         (
             "import sys, tempfile, time",
             "from pathlib import Path",
-            "from async_api_view.local_files import ExclusiveFileLock, harden_private_file",
+            "from lookingglass.local_files import ExclusiveFileLock, harden_private_file",
             "root = Path(sys.argv[1])",
-            "directory = Path(tempfile.mkdtemp(prefix='rookery-databricks-', dir=root))",
+            "directory = Path(tempfile.mkdtemp(prefix='lookingglass-databricks-', dir=root))",
             "lock = ExclusiveFileLock(directory / '.active.lock')",
             "snapshot = directory / '.databrickscfg'",
             "snapshot.write_bytes(b'[PROFILE]\\ntoken = synthetic-placeholder\\n')",
@@ -1017,7 +1017,7 @@ def test_surviving_process_retries_snapshot_recovery_after_active_owner_dies(
 @pytest.mark.skipif(os.name != "nt", reason="Windows ownership and DACL regression")
 def test_cli_work_root_replaces_permissive_windows_security(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    state_root = home / ".rookery"
+    state_root = home / ".lookingglass"
     work_root = state_root / "cli-work"
     work_root.mkdir(parents=True)
     icacls = Path(os.environ["SYSTEMROOT"]) / "System32" / "icacls.exe"
@@ -1040,10 +1040,10 @@ def test_cli_work_root_replaces_permissive_windows_security(tmp_path: Path) -> N
     )
     owner_script = (
         "$acl=(New-Object System.IO.DirectoryInfo("
-        "$env:ROOKERY_ACL_TEST_PATH)).GetAccessControl();"
+        "$env:LOOKINGGLASS_ACL_TEST_PATH)).GetAccessControl();"
         "$ownerSid=$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;"
         "$currentSid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;"
-        "if($ownerSid -ne $currentSid){throw 'Rookery directory owner mismatch'}"
+        "if($ownerSid -ne $currentSid){throw 'LookingGlass directory owner mismatch'}"
     )
     for ordinal, directory in enumerate((state_root, work_root)):
         saved_acl = tmp_path / f"acl-{ordinal}.txt"
@@ -1056,7 +1056,7 @@ def test_cli_work_root_replaces_permissive_windows_security(tmp_path: Path) -> N
         assert "D:P" in sddl
         assert ";;;WD)" not in sddl
         owner_environment = dict(os.environ)
-        owner_environment["ROOKERY_ACL_TEST_PATH"] = str(directory)
+        owner_environment["LOOKINGGLASS_ACL_TEST_PATH"] = str(directory)
         owner_result = subprocess.run(  # noqa: S603 - absolute Windows system executable
             (
                 str(powershell),
@@ -1081,7 +1081,7 @@ def test_cli_work_root_rejects_redirected_state_directory(
     redirected = home / "redirected"
     home.mkdir()
     redirected.mkdir()
-    create_directory_redirect(home / ".rookery", redirected)
+    create_directory_redirect(home / ".lookingglass", redirected)
 
     with pytest.raises(CliUnavailable, match="filesystem redirect"):
         databricks_adapter._trusted_cli_work_root(home=home)
@@ -1133,7 +1133,7 @@ def test_cli_process_creation_failure_is_controlled_and_cleans_workdir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root = tmp_path / "trusted-home" / ".lookingglass" / "cli-work"
     work_root.mkdir(parents=True)
     monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
 
@@ -1154,7 +1154,7 @@ def test_cli_process_ownership_failure_reaps_child_and_cleans_workdir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root = tmp_path / "trusted-home" / ".lookingglass" / "cli-work"
     work_root.mkdir(parents=True)
     monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
 
@@ -1198,7 +1198,7 @@ def test_compatibility_check_failures_reap_process_and_readers(
     failure: str,
     tmp_path: Path,
 ) -> None:
-    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root = tmp_path / "trusted-home" / ".lookingglass" / "cli-work"
     work_root.mkdir(parents=True)
     monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
 
@@ -1287,7 +1287,7 @@ def test_cli_timeout_terminates_descendants_holding_output_pipes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root = tmp_path / "trusted-home" / ".lookingglass" / "cli-work"
     work_root.mkdir(parents=True)
     monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
     heartbeat = tmp_path / "descendant-heartbeat"
@@ -1339,7 +1339,7 @@ def test_cli_normal_completion_terminates_detached_descendants(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    work_root = tmp_path / "trusted-home" / ".rookery" / "cli-work"
+    work_root = tmp_path / "trusted-home" / ".lookingglass" / "cli-work"
     work_root.mkdir(parents=True)
     monkeypatch.setattr(databricks_adapter, "_trusted_cli_work_root", lambda: work_root)
     heartbeat = tmp_path / "normal-descendant-heartbeat"
@@ -2323,8 +2323,8 @@ def test_redaction_and_import_boundary() -> None:
         and "\x85" not in diagnostic
         and "\u202e" not in diagnostic
     )
-    source = Path("src/async_api_view/adapters/databricks.py").read_text(encoding="utf-8")
-    assert "async_api_view.storage" not in source
+    source = Path("src/lookingglass/adapters/databricks.py").read_text(encoding="utf-8")
+    assert "lookingglass.storage" not in source
     assert "databricks api" not in source
 
 

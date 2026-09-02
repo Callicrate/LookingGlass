@@ -1,3 +1,3 @@
-"""Public package metadata for async-api-view."""
+"""Public package metadata for lookingglass."""
 
 __version__ = "0.1.0"

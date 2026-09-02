@@ -19,8 +19,8 @@ def _load_script(name: str, filename: str):
     return module
 
 
-_COVERAGE = _load_script("rookery_check_coverage", "check_coverage.py")
-_DISTRIBUTION = _load_script("rookery_verify_distribution_unit", "verify_distribution.py")
+_COVERAGE = _load_script("lookingglass_check_coverage", "check_coverage.py")
+_DISTRIBUTION = _load_script("lookingglass_verify_distribution_unit", "verify_distribution.py")
 validate_coverage_totals = _COVERAGE.validate_coverage_totals
 locked_installed_requirements = _DISTRIBUTION.locked_installed_requirements
 publish_release_evidence = _DISTRIBUTION.publish_release_evidence
@@ -31,7 +31,7 @@ run_owned = _DISTRIBUTION._run_owned
 
 def test_locked_installed_requirements_excludes_local_wheel_and_requires_exact_versions() -> None:
     frozen = """
-async-api-view @ file:///tmp/async_api_view-0.1.0-py3-none-any.whl
+lookingglass @ file:///tmp/lookingglass-0.2.0-py3-none-any.whl
 uvicorn==0.52.4
 fastapi==0.141.1
 """
@@ -51,11 +51,11 @@ def test_dirty_release_verification_preserves_existing_evidence(
 ) -> None:
     distribution = tmp_path / "dist"
     distribution.mkdir()
-    source = distribution / "async_api_view-0.1.0.tar.gz"
-    wheel = distribution / "async_api_view-0.1.0-py3-none-any.whl"
+    source = distribution / "lookingglass-0.2.0.tar.gz"
+    wheel = distribution / "lookingglass-0.2.0-py3-none-any.whl"
     constraints = tmp_path / "runtime-constraints.txt"
     published_constraints = distribution / "runtime-constraints.txt"
-    manifest = distribution / "rookery-0.1.0-clean-SHA256SUMS.txt"
+    manifest = distribution / "lookingglass-0.2.0-clean-SHA256SUMS.txt"
     for path, content in (
         (source, b"source"),
         (wheel, b"wheel"),
@@ -84,7 +84,7 @@ def test_untracked_package_source_is_never_release_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    generated = tmp_path / "src" / "async_api_view" / "generated.py"
+    generated = tmp_path / "src" / "lookingglass" / "generated.py"
     generated.parent.mkdir(parents=True)
     generated.write_text("GENERATED = True\n", encoding="utf-8")
     progress = tmp_path / "progress" / "checkpoint.md"
@@ -94,12 +94,12 @@ def test_untracked_package_source_is_never_release_authority(
         _DISTRIBUTION,
         "_git_file_names",
         lambda *_arguments: (
-            "src/async_api_view/generated.py",
+            "src/lookingglass/generated.py",
             "progress/checkpoint.md",
         ),
     )
 
-    assert untracked_release_sources() == ("src/async_api_view/generated.py",)
+    assert untracked_release_sources() == ("src/lookingglass/generated.py",)
 
 
 def test_release_publication_rejects_archive_replacement_before_writing(
@@ -108,10 +108,10 @@ def test_release_publication_rejects_archive_replacement_before_writing(
 ) -> None:
     distribution = tmp_path / "dist"
     distribution.mkdir()
-    source = distribution / "async_api_view-0.1.0.tar.gz"
-    wheel = distribution / "async_api_view-0.1.0-py3-none-any.whl"
+    source = distribution / "lookingglass-0.2.0.tar.gz"
+    wheel = distribution / "lookingglass-0.2.0-py3-none-any.whl"
     constraints = tmp_path / "runtime-constraints.txt"
-    stale_manifest = distribution / "rookery-0.1.0-stale-SHA256SUMS.txt"
+    stale_manifest = distribution / "lookingglass-0.2.0-stale-SHA256SUMS.txt"
     for path, content in (
         (source, b"verified source"),
         (wheel, b"verified wheel"),
@@ -158,8 +158,8 @@ def test_release_publication_creates_one_commit_qualified_verified_bundle(
 ) -> None:
     distribution = tmp_path / "dist"
     distribution.mkdir()
-    source = distribution / "async_api_view-0.1.0.tar.gz"
-    wheel = distribution / "async_api_view-0.1.0-py3-none-any.whl"
+    source = distribution / "lookingglass-0.2.0.tar.gz"
+    wheel = distribution / "lookingglass-0.2.0-py3-none-any.whl"
     constraints = tmp_path / "runtime-constraints.txt"
     for path, content in (
         (source, b"verified source"),
@@ -192,7 +192,7 @@ def test_release_publication_creates_one_commit_qualified_verified_bundle(
 
     assert manifest is not None
     assert manifest.name == "SHA256SUMS.txt"
-    assert manifest.parent.name == f"rookery-0.1.0-{'a' * 40}-verified"
+    assert manifest.parent.name == f"lookingglass-0.2.0-{'a' * 40}-verified"
     assert {path.name for path in manifest.parent.iterdir()} == {
         source.name,
         wheel.name,

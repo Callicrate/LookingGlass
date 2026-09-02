@@ -5,8 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from async_api_view.application import SystemBootstrapService
-from async_api_view.contracts import (
+from lookingglass.application import SystemBootstrapService
+from lookingglass.contracts import (
     AbsenceAuthority,
     AdapterAction,
     CollectionCoverage,
@@ -25,9 +25,9 @@ from async_api_view.contracts import (
     TargetRef,
     UpdateMode,
 )
-from async_api_view.ingestion import SQLiteObservationIngestor
-from async_api_view.storage import SQLiteStore
-from async_api_view.storage import sqlite as sqlite_storage
+from lookingglass.ingestion import SQLiteObservationIngestor
+from lookingglass.storage import SQLiteStore
+from lookingglass.storage import sqlite as sqlite_storage
 
 NOW = datetime(2026, 8, 24, 12, tzinfo=UTC)
 
@@ -97,7 +97,8 @@ def _rewind_projection_order_migration(store: SQLiteStore) -> None:
         DELETE FROM schema_migrations
         WHERE version IN (
             '0024_corruption_containment', '0025_authority_read_plans',
-            '0026_lazy_scope_warning', '0027_migration_provenance'
+            '0026_lazy_scope_warning', '0027_migration_provenance',
+            '0028_capability_target_source_kinds'
         )
         """
     )
@@ -107,6 +108,7 @@ def _rewind_projection_order_migration(store: SQLiteStore) -> None:
         ("relationships", "received_at"),
         ("relationship_coverage_watermarks", "received_at"),
         ("refresh_credit", "received_at"),
+        ("capability_bindings", "target_source_kinds_json"),
     ):
         store._connection.execute(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
 

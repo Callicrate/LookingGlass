@@ -682,6 +682,7 @@ class CapabilityBinding(JSONDTO):
     target_kinds: tuple[TargetKind, ...]
     produced_facets: tuple[str, ...]
     enabled: bool
+    target_source_kinds: tuple[str, ...] = ()
     selection_priority: int = 0
     collateral_effects: tuple[str, ...] = ()
     mitigations: tuple[str, ...] = ()
@@ -712,6 +713,10 @@ class CapabilityBinding(JSONDTO):
             raise ValueError("version 1 capabilities must be remote-observation-only")
         if not self.target_kinds or not self.produced_facets:
             raise ValueError("a capability requires targets and produced facets")
+        target_source_kinds = tuple(dict.fromkeys(self.target_source_kinds))
+        for source_kind in target_source_kinds:
+            require_contract_key(source_kind, "target source kind")
+        object.__setattr__(self, "target_source_kinds", target_source_kinds)
         for facet in self.produced_facets:
             require_contract_key(facet, "produced facet")
         require_int(self.selection_priority, "selection_priority", minimum=0)

@@ -2,7 +2,7 @@ from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from async_api_view.contracts import (
+from lookingglass.contracts import (
     PolicyLevel,
     QualifyingObservation,
     RefreshCoverage,
@@ -14,7 +14,7 @@ from async_api_view.contracts import (
     TargetKind,
     TargetRef,
 )
-from async_api_view.core import (
+from lookingglass.core import (
     decide_refresh,
     default_interval_map,
     evaluate_eligibility,

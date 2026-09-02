@@ -24,8 +24,8 @@ def create_directory_redirect() -> Callable[[Path, Path], None]:
             / "powershell.exe"
         )
         environment = dict(os.environ)
-        environment["ROOKERY_TEST_LINK"] = str(link)
-        environment["ROOKERY_TEST_TARGET"] = str(target)
+        environment["LOOKINGGLASS_TEST_LINK"] = str(link)
+        environment["LOOKINGGLASS_TEST_TARGET"] = str(target)
         result = subprocess.run(  # noqa: S603 - absolute Windows system executable
             (
                 str(powershell),
@@ -33,7 +33,7 @@ def create_directory_redirect() -> Callable[[Path, Path], None]:
                 "-NonInteractive",
                 "-Command",
                 "$null=New-Item -ItemType Junction "
-                "-Path $env:ROOKERY_TEST_LINK -Target $env:ROOKERY_TEST_TARGET",
+                "-Path $env:LOOKINGGLASS_TEST_LINK -Target $env:LOOKINGGLASS_TEST_TARGET",
             ),
             check=False,
             capture_output=True,

@@ -1,5 +1,5 @@
-"""Run the local CLI through python -m async_api_view."""
+"""Run the local CLI through python -m lookingglass."""
 
-from async_api_view.cli import main
+from lookingglass.cli import main
 
 raise SystemExit(main())

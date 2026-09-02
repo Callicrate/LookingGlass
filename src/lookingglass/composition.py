@@ -18,7 +18,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import FastAPI
 
-from async_api_view.adapters.databricks import (
+from lookingglass.adapters.databricks import (
     CAPABILITIES,
     CliRunner,
     CommandRejected,
@@ -26,14 +26,14 @@ from async_api_view.adapters.databricks import (
     LifecyclePersistenceFailure,
     ResolvedTarget,
 )
-from async_api_view.application import DurableCoordinator, SystemBootstrapService
-from async_api_view.config import (
+from lookingglass.application import DurableCoordinator, SystemBootstrapService
+from lookingglass.config import (
     PLACEHOLDER_AUTHORITY_FINGERPRINT,
     ConfigError,
     ProjectSettings,
     canonical_config_id,
 )
-from async_api_view.contracts import (
+from lookingglass.contracts import (
     ActionState,
     AdapterAction,
     ConnectionBinding,
@@ -48,8 +48,8 @@ from async_api_view.contracts import (
     TargetKind,
     TargetRef,
 )
-from async_api_view.ingestion import SQLiteObservationIngestor
-from async_api_view.storage import (
+from lookingglass.ingestion import SQLiteObservationIngestor
+from lookingglass.storage import (
     MIN_WRITE_RESERVE_BYTES,
     ActionActivityRecord,
     ActionAttemptRecord,
@@ -59,7 +59,7 @@ from async_api_view.storage import (
     SQLiteStore,
     SystemRecord,
 )
-from async_api_view.web import (
+from lookingglass.web import (
     ActionActivityView,
     ActionAttemptView,
     ActionDetailView,
@@ -69,6 +69,7 @@ from async_api_view.web import (
     ActivityView,
     AlertHistoryQuery,
     AlertHistoryView,
+    ApiCapabilityView,
     DashboardQuery,
     DashboardView,
     FacetView,
@@ -255,7 +256,10 @@ class SQLiteWebBackend:
     def _integrity_warning(self) -> str:
         if not self._store.presentation_corruption_detected:
             return ""
-        return "Rookery isolated malformed cached records; healthy cached state remains available."
+        return (
+            "LookingGlass isolated malformed cached records; "
+            "healthy cached state remains available."
+        )
 
     def _facet_view(
         self,
@@ -443,125 +447,77 @@ class SQLiteWebBackend:
             if system.enabled and system.system_id not in malformed_authority_systems
         }
         capabilities_by_system = {
-            system.system_id: {
-                capability.capability_key: capability
+            system.system_id: tuple(
+                capability
                 for capability in self._store.list_readable_capability_bindings(
                     system_id=system.system_id
                 )
                 if capability.enabled
                 and capability.connection_binding_id
                 in {binding.binding_id for binding in bindings_by_system.get(system.system_id, ())}
-            }
+            )
             for system in systems
             if system.enabled and system.system_id not in malformed_authority_systems
         }
 
-        for configured in self._store.list_readable_configured_scopes():
-            capabilities = capabilities_by_system.get(configured.system_id, {})
-            key = (
-                "databricks.workspace.children.read"
-                if configured.object_type == "folder"
-                else "databricks.uc.catalogs.read"
-            )
-            capability = capabilities.get(key)
-            if configured.enabled and capability is not None:
-                facet = "membership" if configured.object_type == "folder" else "attributes"
-                options.append(
+        def add_options(
+            *,
+            system_id: str,
+            target_kind: TargetKind,
+            target_id: str,
+            source_kind: str,
+            display_name: str,
+        ) -> None:
+            for capability in capabilities_by_system.get(system_id, ()):
+                if target_kind not in capability.target_kinds:
+                    continue
+                if (
+                    capability.target_source_kinds
+                    and source_kind not in capability.target_source_kinds
+                ):
+                    continue
+                options.extend(
                     RefreshOption(
-                        system_id=configured.system_id,
-                        target_kind=TargetKind.CONFIGURED_SCOPE.value,
-                        target_id=configured.scope_id,
-                        capability_key=key,
+                        system_id=system_id,
+                        target_kind=target_kind.value,
+                        target_id=target_id,
+                        capability_key=capability.capability_key,
                         facet=facet,
-                        label=f"Refresh {configured.display_name}",
+                        label=f"Add {facet} to cache for {display_name}",
                         collateral_effects="; ".join(capability.collateral_effects)
                         or "None declared",
                         enabled=refresh_available,
                         disabled_reason=refresh_error if not refresh_available else None,
                     )
+                    for facet in capability.produced_facets
                 )
+
+        for configured in self._store.list_readable_configured_scopes():
+            if not configured.enabled:
+                continue
+            scoped_object = (
+                self._store.get_readable_object_sync(configured.object_id)
+                if configured.object_id
+                else None
+            )
+            add_options(
+                system_id=configured.system_id,
+                target_kind=TargetKind.CONFIGURED_SCOPE,
+                target_id=configured.scope_id,
+                source_kind=scoped_object.source_kind if scoped_object is not None else "",
+                display_name=configured.display_name,
+            )
 
         for remote_object in objects:
             if remote_object.presence is PresenceState.ABSENT:
                 continue
-            capabilities = capabilities_by_system.get(remote_object.system_id, {})
-            candidates: list[tuple[str, str, str]] = []
-            if remote_object.source_kind == "databricks.workspace.folder":
-                candidates.extend(
-                    [
-                        (
-                            "databricks.workspace.children.read",
-                            "membership",
-                            f"Refresh children of {remote_object.display_name}",
-                        ),
-                        (
-                            "databricks.workspace.metadata.read",
-                            "metadata",
-                            f"Refresh metadata for {remote_object.display_name}",
-                        ),
-                    ]
-                )
-            elif remote_object.source_kind == "databricks.workspace.file":
-                candidates.append(
-                    (
-                        "databricks.workspace.metadata.read",
-                        "metadata",
-                        f"Refresh metadata for {remote_object.display_name}",
-                    )
-                )
-                content_enabled = any(
-                    binding.non_secret_settings.get("content_capture_enabled") is True
-                    for binding in bindings_by_system.get(remote_object.system_id, ())
-                )
-                if content_enabled:
-                    candidates.append(
-                        (
-                            "databricks.workspace.content.read",
-                            "content",
-                            f"Refresh content for {remote_object.display_name}",
-                        )
-                    )
-            elif remote_object.source_kind == "databricks.uc.catalog":
-                candidates.append(
-                    (
-                        "databricks.uc.schemas.read",
-                        "attributes",
-                        f"Refresh schemas in {remote_object.display_name}",
-                    )
-                )
-            elif remote_object.source_kind == "databricks.uc.schema":
-                candidates.extend(
-                    [
-                        (
-                            "databricks.uc.relations.read",
-                            "attributes",
-                            f"Refresh tables and views in {remote_object.display_name}",
-                        ),
-                        (
-                            "databricks.uc.volumes.read",
-                            "attributes",
-                            f"Refresh volume metadata in {remote_object.display_name}",
-                        ),
-                    ]
-                )
-            for key, facet, label in candidates:
-                capability = capabilities.get(key)
-                if capability is None:
-                    continue
-                options.append(
-                    RefreshOption(
-                        system_id=remote_object.system_id,
-                        target_kind=TargetKind.OBJECT.value,
-                        target_id=remote_object.object_id,
-                        capability_key=key,
-                        facet=facet,
-                        label=label,
-                        collateral_effects="; ".join(capability.collateral_effects)
-                        or "None declared",
-                        enabled=refresh_available,
-                        disabled_reason=refresh_error if not refresh_available else None,
-                    )
-                )
+            add_options(
+                system_id=remote_object.system_id,
+                target_kind=TargetKind.OBJECT,
+                target_id=remote_object.object_id,
+                source_kind=remote_object.source_kind,
+                display_name=remote_object.display_name,
+            )
         return tuple(
             sorted(
                 options,
@@ -691,6 +647,26 @@ class SQLiteWebBackend:
                 else self._store.list_readable_connection_bindings(system_id=system.system_id)
             )
             binding_settings = bindings[0].non_secret_settings if len(bindings) == 1 else {}
+            bindings_by_id = {binding.binding_id: binding for binding in bindings}
+            api_capabilities = tuple(
+                ApiCapabilityView(
+                    adapter_key=bindings_by_id[capability.connection_binding_id].adapter_key,
+                    adapter_version=bindings_by_id[
+                        capability.connection_binding_id
+                    ].adapter_version,
+                    capability_key=capability.capability_key,
+                    capability_version=capability.capability_version,
+                    target_kinds=tuple(kind.value for kind in capability.target_kinds),
+                    target_source_kinds=capability.target_source_kinds,
+                    produced_facets=capability.produced_facets,
+                    enabled=capability.enabled,
+                    collateral_effects=capability.collateral_effects,
+                )
+                for capability in self._store.list_readable_capability_bindings(
+                    system_id=system.system_id
+                )
+                if capability.connection_binding_id in bindings_by_id
+            )
             fingerprint = binding_settings.get("authority_fingerprint")
             authority_label = (
                 f"Verified {fingerprint[:12]}"
@@ -721,6 +697,7 @@ class SQLiteWebBackend:
                         f"{authority_label} · Retired" if retired else authority_label
                     ),
                     retired=retired,
+                    api_capabilities=api_capabilities,
                 )
             )
 
@@ -1081,16 +1058,22 @@ class SQLiteWebBackend:
             if remote_object is None:
                 raise ValueError("object target is unavailable")
             object_type = remote_object.object_type
+        selection = self._store.select_capability(
+            system_id=request.system_id,
+            target_kind=target_kind,
+            facet=request.facet,
+            capability_key=request.capability_key,
+        )
+        if selection is None:
+            raise ValueError("refresh capability is unavailable")
+        _binding, capability = selection
         coverage = (
             RefreshCoverage.COLLECTION_MEMBERS
-            if request.capability_key.endswith(
-                (
-                    "children.read",
-                    "catalogs.read",
-                    "schemas.read",
-                    "relations.read",
-                    "volumes.read",
-                )
+            if any(
+                policy.target_kind is target_kind
+                and policy.facet == request.facet
+                and policy.coverage is RefreshCoverage.COLLECTION_MEMBERS
+                for policy in capability.coverage_policies
             )
             else RefreshCoverage.FACET
         )
@@ -1240,7 +1223,7 @@ class ApplicationRuntime:
         self.worker_error = "Worker compatibility check is in progress."
         self._background_task = asyncio.create_task(
             self._run_background(),
-            name="async-api-view-runtime",
+            name="lookingglass-runtime",
         )
         # Let fast compatibility checks settle without making web readiness depend on
         # an external CLI process that may take minutes or never return.
@@ -1379,7 +1362,7 @@ def build_runtime(
     ):
         raise ConfigError(
             "Databricks authority fingerprint is still the placeholder; run "
-            "async-api-view fingerprint-profile and update authority_fingerprint"
+            "lookingglass fingerprint-profile and update authority_fingerprint"
         )
     config_ids = tuple(
         canonical_config_id(system.config_id)
@@ -1420,7 +1403,8 @@ def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) ->
         legacy_stable = str(
             uuid5(
                 NAMESPACE_URL,
-                "async-api-view/databricks/legacy/"
+                # Deterministic namespace for the legacy (config-id-less) workspace identity.
+                "lookingglass/databricks/legacy/"
                 f"{system.name}/{system.authority_fingerprint}/{system.workspace_root}",
             )
         )
@@ -1434,7 +1418,8 @@ def _apply_local_configuration(settings: ProjectSettings, store: SQLiteStore) ->
             stable = mapped or str(
                 uuid5(
                     NAMESPACE_URL,
-                    f"async-api-view/databricks/{config_id}/{authority_key}",
+                    # Deterministic namespace for the config-id-scoped authority identity.
+                    f"lookingglass/databricks/{config_id}/{authority_key}",
                 )
             )
         seeded = bootstrap.configure_databricks_workspace(
