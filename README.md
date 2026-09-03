@@ -3,14 +3,6 @@
 LookingGlass represents any remote API in a common local data model and presents its
 state through a local UI.
 
-An adapter translates source-native resources and responses into systems, objects,
-relationships, facets, observations, provenance, and freshness. LookingGlass keeps that
-model in SQLite. Add a source and the adapter changes. The core does not.
-
-The UI works with canonical targets and registered capabilities. Endpoint selection,
-command construction, credentials, and source-specific parameters stay inside the
-adapter.
-
 ## One shape, however many sources
 
 ```text
