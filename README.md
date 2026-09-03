@@ -3,8 +3,6 @@
 LookingGlass represents any remote API in a common local data model and presents its
 state through a local UI.
 
-## One shape, however many sources
-
 ```text
 Databricks CLI ─┐
 OpenSSH         ├── adapters ──> one canonical model ──> SQLite ──> one local UI
@@ -14,14 +12,10 @@ your API        ┘                 objects · facets · provenance · freshness
 Adapters own the source-specific mess: authentication, requests, pagination, rate
 limits, command construction, response parsing, and safety limits.
 
-## Memory with receipts
+## What the model keeps
 
-A live response tells you something now. Then the terminal scrolls, the token expires,
-the service goes down, or the next response says something different. LookingGlass
-keeps the useful part: what was known, when it was observed, how it was obtained, and
-whether that evidence is still fresh.
-
-The distinctions are deliberate:
+LookingGlass stores what was known, when it was observed, how it was obtained, and
+whether the evidence is still fresh.
 
 - A folder listing can refresh membership and file metadata. It does not pretend file
   content was read.
@@ -32,10 +26,7 @@ The distinctions are deliberate:
 - Equivalent requests share one action. A request made too soon waits instead of
   becoming a rate-limit bypass.
 
-Cache expansion is explicit today. Cadence controls eligibility; it does not imply a
-hidden automatic poller.
-
-## What ships today
+## Current implementation
 
 **Databricks CLI 0.298.0.** LookingGlass observes Workspace directory, file, and notebook
 metadata plus Unity Catalog catalog, schema, table, view, and volume metadata. It does
@@ -47,26 +38,16 @@ metadata beneath a configured POSIX root. It uses pinned host identity, strict h
 checking, and two fixed remote command shapes. No content reads. No recursive scan. No
 writes. No arbitrary shell.
 
-These are the first two adapters, not the definition of the product. A new adapter
-declares the resource kinds it understands, the capabilities it offers, the facets and
-relationships it produces, how complete its observations are, and what collateral
-effects they may have. The same coordinator, database, refresh path, and UI take it from
-there.
+Cache expansion is explicit today. Cadence controls eligibility; it does not imply a
+hidden automatic poller.
 
-The adapters reuse client configuration you already own. Persistent canonical state
-keeps non-secret binding references and route fingerprints, never credentials.
+## Quick start
 
-> Observation-only does not mean invisible. A read may consume API quota, create an
-> authentication or audit record, or execute a fixed remote observation command.
-> LookingGlass puts those effects next to the capability before you ask for it.
-
-## Get to the first useful screen
-
-The source checkout requires Python 3.12, [`uv`](https://docs.astral.sh/uv/), and the
-certified Databricks CLI 0.298.0 on `PATH`. The current runtime still certifies that CLI
-before refresh workers become ready. For SSH, you also need OpenSSH, a configured host
-alias, a pinned host key, and GNU `find` and `stat` on the remote Linux host. CI covers
-Windows and Ubuntu; these examples use PowerShell.
+The source checkout needs Python 3.12, [`uv`](https://docs.astral.sh/uv/), and the
+certified Databricks CLI 0.298.0 on `PATH`. The current runtime checks that CLI before
+any refresh worker starts, including an SSH-only configuration. SSH also needs OpenSSH,
+a configured host alias, a pinned host key, and GNU `find` and `stat` on the remote
+Linux host. These examples use PowerShell.
 
 **Create the environment and starter config.**
 
@@ -107,27 +88,24 @@ uv run lookingglass --config '.\config.local.toml' serve
 link. Choose an offered **Add to cache** action. Follow its receipt, open an object, and
 inspect the facts, freshness, and provenance that came back.
 
-For headless use, `run-once` drains a bounded batch, `backup` writes a no-overwrite SQLite
-snapshot, and `authority-list` identifies cached authorities. See `lookingglass --help`
-for the rest.
+See `lookingglass --help` for one-shot runs, backups, and authority management.
 
-## The hard edges
+## Operating boundaries
 
-- **Cached is not live.** LookingGlass shows when evidence was observed and whether it
-  is due. It never passes a snapshot off as current remote truth.
-- **The browser is not a console.** Raw endpoints, SQL, CLI flags, query strings, shell
-  fragments, and credentials never enter a refresh intent.
+- **Credentials stay with the existing clients.** Canonical state keeps non-secret
+  binding references and route fingerprints, not credentials.
+- **Remote reads still have effects.** They may consume quota, create authentication or
+  audit records, or execute a fixed observation command. LookingGlass shows those
+  declared effects with the capability.
 - **Authority is part of identity.** The verified route fingerprint and configured root
   form a cache boundary. Retargeting either does not silently inherit old state.
-- **Local means local.** The single-user UI reserves both loopbacks before revealing its
+- **Access is local and single-user.** The UI reserves both loopbacks before revealing its
   one-time activation capability, which stays out of request URLs and access logs.
-- **State is yours to protect.** Move lasting state out of repositories and shared
+- **State belongs in a private directory.** Move lasting state out of repositories and shared
   folders into a private directory, then take no-overwrite backups.
 
-The draft [architecture specification](./docs/architecture.md) carries the data model,
-security boundaries, recovery behavior, and release verification. Its dated roadmap
-predates the [approved SSH adapter design](./docs/superpowers/specs/2026-09-01-ssh-adapter-design.md).
-Start from [`config.example.toml`](./config.example.toml), or export the packaged design
-with `lookingglass export-docs`.
-
-The remote call is temporary. What you learned from it does not have to be.
+The draft [architecture specification](./docs/architecture.md) covers the data model,
+security, and recovery. Its roadmap predates the
+[approved SSH adapter design](./docs/superpowers/specs/2026-09-01-ssh-adapter-design.md).
+Start from [`config.example.toml`](./config.example.toml), or run
+`lookingglass export-docs`.
