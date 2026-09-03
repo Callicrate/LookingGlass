@@ -1,85 +1,149 @@
 # LookingGlass
 
-**LookingGlass** turns approved remote APIs into inspectable local views.
-It keeps a durable cache of normalized metadata and lets each API-specific adapter refresh only the facts it declares safe to observe.
+**Remote APIs answer. LookingGlass remembers.**
 
-## What it does
+Any remote API can fit. An adapter translates that API's native resources and responses
+into one local language: systems, objects, relationships, facets, observations, provenance,
+and freshness. LookingGlass keeps that model in SQLite and renders it through one local
+UI. Add a source and the adapter changes. The core does not.
 
-- Browses cached objects, relationships, facets, provenance, and freshness locally, even when a remote system is unavailable.
-- Lets an adapter declare its API capabilities, supported resource kinds, produced facets, collection coverage, and collateral effects.
-- Lets the operator choose an offered **Add to cache** capability for a known object or configured scope.
-- Queues that request through the same bounded refresh path that later maintains its normal cadence.
+> **The trick is refusal.** The UI never learns how to call the remote system.
+> It can ask for a capability an adapter declared in advance. It cannot invent an
+> endpoint, a query, a flag, or a command.
 
-The first adapter uses the certified Databricks CLI.
-It can cache Workspace and Unity Catalog metadata, but never table or view rows, Unity Catalog volume-file contents, or storage-location contents.
+## One shape, however many sources
 
-## Quick start
+```text
+Databricks CLI ─┐
+OpenSSH         ├── adapters ──> one canonical model ──> SQLite ──> one local UI
+your API        ┘                 objects · facets · provenance · freshness
+```
 
-The current configured adapter requires Windows PowerShell, Python 3.12, [`uv`](https://docs.astral.sh/uv/), and Databricks CLI 0.298.0 on `PATH` with a valid named profile.
+Adapters own the source-specific mess: authentication, requests, pagination, rate
+limits, command construction, response parsing, and safety limits.
+
+On the other side of that boundary, LookingGlass sees only versioned capabilities and
+normalized evidence. The coordinator can decide whether work is valid, duplicate, or
+too early without touching the remote system. Storage does not need a vendor table for
+every vendor object. The UI does not need a vendor screen for every vendor API.
+
+That is the whole seam. Teach an adapter how to observe a source, and the rest of the
+system already knows how to remember and show what it found.
+
+## Memory with receipts
+
+A live response tells you something now. Then the terminal scrolls, the token expires,
+the service goes down, or the next response says something different. LookingGlass
+keeps the useful part: what was known, when it was observed, how it was obtained, and
+whether that evidence is still fresh.
+
+The distinctions are deliberate:
+
+- A folder listing can refresh membership and file metadata. It does not pretend file
+  content was read.
+- A failed refresh does not replace the last-known facts with an error. The facts stay
+  visible, age honestly, and keep the failure beside them.
+- A missing item is not a deletion unless the adapter had complete coverage and the
+  authority to make that claim.
+- Equivalent requests share one action. A request made too soon waits instead of
+  becoming a rate-limit bypass.
+
+Cache expansion is explicit today. Cadence controls eligibility; it does not imply a
+hidden automatic poller.
+
+## What ships today
+
+**Databricks CLI 0.298.0.** LookingGlass observes Workspace directory, file, and notebook
+metadata plus Unity Catalog catalog, schema, table, view, and volume metadata. It does
+not read Workspace content, execute SQL, query table rows, list volume files, follow
+storage locations, or expose the CLI's arbitrary API surface.
+
+**OpenSSH.** LookingGlass observes immediate directory membership and file or folder
+metadata beneath a configured POSIX root. It uses pinned host identity, strict host-key
+checking, and two fixed remote command shapes. No content reads. No recursive scan. No
+writes. No arbitrary shell.
+
+These are the first two adapters, not the definition of the product. A new adapter
+declares the resource kinds it understands, the capabilities it offers, the facets and
+relationships it produces, how complete its observations are, and what collateral
+effects they may have. The same coordinator, database, refresh path, and UI take it from
+there.
+
+The adapters reuse client configuration you already own. Persistent canonical state
+keeps non-secret binding references and route fingerprints, never credentials.
+
+> Observation-only does not mean invisible. A read may consume API quota, create an
+> authentication or audit record, or execute a fixed remote observation command.
+> LookingGlass puts those effects next to the capability before you ask for it.
+
+## Get to the first useful screen
+
+The source checkout requires Python 3.12, [`uv`](https://docs.astral.sh/uv/), and the
+certified Databricks CLI 0.298.0 on `PATH`. The current runtime still certifies that CLI
+before refresh workers become ready. For SSH, you also need OpenSSH, a configured host
+alias, a pinned host key, and GNU `find` and `stat` on the remote Linux host. CI covers
+Windows and Ubuntu; these examples use PowerShell.
+
+**Create the environment and starter config.**
 
 ```powershell
-Copy-Item -LiteralPath '.\config.example.toml' -Destination '.\config.local.toml'
 uv sync --locked --group dev
-uv run lookingglass fingerprint-profile --profile 'YOUR_PROFILE'
+uv run lookingglass init-config
 ```
 
-In the copied configuration, replace `YOUR_PROFILE` and the all-zero `authority_fingerprint` with the command output.
-Choose stable values for the workspace `id` and `name`, and narrow `workspace_root` if `/` is broader than intended.
+The starter contains one `[[databricks]]` block and one `[[ssh]]` block. Delete any block
+you will not use. LookingGlass deliberately rejects every retained block whose
+`authority_fingerprint` is still the all-zero placeholder.
+
+**Bind the remote authority.** Choose stable `id` and `name` values, then narrow
+`workspace_root` or `path_root` to the smallest useful scope. For SSH, set
+`app.ssh_config_path` and `app.ssh_known_hosts_path` before fingerprinting.
 
 ```powershell
-uv run lookingglass --config config.local.toml init
-uv run lookingglass --config config.local.toml doctor
-uv run lookingglass --config config.local.toml serve
+# Databricks
+uv run lookingglass fingerprint-profile --profile 'YOUR_PROFILE'
+
+# SSH
+uv run lookingglass --config '.\config.local.toml' fingerprint-host `
+  --alias 'YOUR_SSH_HOST_ALIAS'
 ```
 
-`serve` prints a one-time activation link to its controlling terminal.
-Open that complete link within ten minutes, then keep using its unique `lookingglass-….localhost` hostname.
+Neither command queries remote inventory. Paste each digest into its matching
+`authority_fingerprint` field.
 
-## Common operations
+**Open the view.**
 
-| Command | Purpose |
-| --- | --- |
-| `lookingglass init-config --output <path>` | Create a starter configuration without opening SQLite. |
-| `lookingglass fingerprint-profile --profile <name>` | Print the non-secret route-authority fingerprint for a Databricks profile. |
-| `lookingglass init` | Apply migrations and register configured systems. |
-| `lookingglass doctor` | Verify the certified Databricks CLI surface. |
-| `lookingglass serve` | Run the local UI, coordinator, and worker. |
-| `lookingglass run-once` | Process a bounded batch of eligible refresh work. |
-| `lookingglass backup --output <path>` | Create a consistent, no-overwrite SQLite snapshot. |
-| `lookingglass authority-list` | List local authority identities without credentials. |
+```powershell
+uv run lookingglass --config '.\config.local.toml' init
+uv run lookingglass --config '.\config.local.toml' doctor
+uv run lookingglass --config '.\config.local.toml' serve
+```
 
-Use `lookingglass --help` for the full command list and `--config <path>` before a subcommand when not using `config.local.toml`.
+`serve` prints a private, single-use browser link valid for ten minutes. Open the whole
+link. Choose an offered **Add to cache** action. Follow its receipt, open an object, and
+inspect the facts, freshness, and provenance that came back.
 
-## Operational boundaries
+For headless use, `run-once` drains a bounded batch, `backup` writes a no-overwrite SQLite
+snapshot, and `authority-list` identifies cached authorities. See `lookingglass --help`
+for the rest.
 
-Each adapter owns downstream details, such as authentication, endpoint or command selection, pagination, rate limits, and source-specific safety limits.
-The generic local model never accepts raw endpoints, query strings, or command fragments from the UI.
-It accepts only registered capabilities, then stores the resulting normalized facts and uses their declared refresh policy thereafter.
+## The hard edges
 
-For Databricks, the profile name and verified route fingerprint form the remote-authority boundary.
-Changing the profile's effective route, `authority_fingerprint`, or `workspace_root` creates a separate cache boundary rather than silently reusing state.
+- **Cached is not live.** LookingGlass shows when evidence was observed and whether it
+  is due. It never passes a snapshot off as current remote truth.
+- **The browser is not a console.** Raw endpoints, SQL, CLI flags, query strings, shell
+  fragments, and credentials never enter a refresh intent.
+- **Authority is part of identity.** The verified route fingerprint and configured root
+  form a cache boundary. Retargeting either does not silently inherit old state.
+- **Local means local.** The single-user UI reserves both loopbacks before revealing its
+  one-time activation capability, which stays out of request URLs and access logs.
+- **State is yours to protect.** Move lasting state out of repositories and shared
+  folders into a private directory, then take no-overwrite backups.
 
-LookingGlass runs the Databricks CLI from a private directory, removes ambient `DATABRICKS_*` and `BUNDLE_*` variables, and creates a minimal per-command profile snapshot.
-The local UI binds only to loopback and protects its activation capability from request URLs and access logs.
+The draft [architecture specification](./docs/architecture.md) carries the data model,
+security boundaries, recovery behavior, and release verification. Its dated roadmap
+predates the [approved SSH adapter design](./docs/superpowers/specs/2026-09-01-ssh-adapter-design.md).
+Start from [`config.example.toml`](./config.example.toml), or export the packaged design
+with `lookingglass export-docs`.
 
-The default database location is `.local/lookingglass.sqlite3` next to the configuration file.
-Keep its parent directory private and outside a Git worktree or shared directory.
-
-New adapters use the same canonical objects, facets, observations, refresh intents, capability declarations, and cadence rules.
-For example, a future SSH adapter can expose an allowlisted Linux file-read capability without changing the cache model or granting an arbitrary shell.
-
-For wheel-only use, install the matching release wheel and `runtime-constraints.txt` from the verified release bundle with hash verification and no source builds.
-The bundle is not an offline dependency bundle.
-
-## Renamed from Outpost
-
-LookingGlass is a rename of the project formerly published as Outpost (and, earlier, as Rookery and `async-api-view`).
-The command and Python module are now `lookingglass`; use `lookingglass` for both after upgrading.
-
-This rename is a clean break: databases created under the earlier names are **not** compatible and are rejected on open.
-Re-run `lookingglass init` against a fresh database path and re-observe your configured systems.
-
-## Documentation
-
-The full design, security boundaries, recovery contract, and release verification process are in the [architecture specification](./docs/architecture.md).
-Start from [`config.example.toml`](./config.example.toml) when creating a configuration.
+The remote call is temporary. What you learned from it does not have to be.
