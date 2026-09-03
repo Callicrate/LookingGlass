@@ -7,9 +7,9 @@ An adapter translates source-native resources and responses into systems, object
 relationships, facets, observations, provenance, and freshness. LookingGlass keeps that
 model in SQLite. Add a source and the adapter changes. The core does not.
 
-> **The trick is refusal.** The UI never learns how to call the remote system.
-> It can ask for a capability an adapter declared in advance. It cannot invent an
-> endpoint, a query, a flag, or a command.
+The UI works with canonical targets and registered capabilities. Endpoint selection,
+command construction, credentials, and source-specific parameters stay inside the
+adapter.
 
 ## One shape, however many sources
 
