@@ -14,14 +14,6 @@ your API        ┘                 objects · facets · provenance · freshness
 Adapters own the source-specific mess: authentication, requests, pagination, rate
 limits, command construction, response parsing, and safety limits.
 
-On the other side of that boundary, LookingGlass sees only versioned capabilities and
-normalized evidence. The coordinator can decide whether work is valid, duplicate, or
-too early without touching the remote system. Storage does not need a vendor table for
-every vendor object. The UI does not need a vendor screen for every vendor API.
-
-That is the whole seam. Teach an adapter how to observe a source, and the rest of the
-system already knows how to remember and show what it found.
-
 ## Memory with receipts
 
 A live response tells you something now. Then the terminal scrolls, the token expires,
