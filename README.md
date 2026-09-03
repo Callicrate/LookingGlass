@@ -1,11 +1,11 @@
 # LookingGlass
 
-**Remote APIs answer. LookingGlass remembers.**
+LookingGlass represents any remote API in a common local data model and presents its
+state through a local UI.
 
-Any remote API can fit. An adapter translates that API's native resources and responses
-into one local language: systems, objects, relationships, facets, observations, provenance,
-and freshness. LookingGlass keeps that model in SQLite and renders it through one local
-UI. Add a source and the adapter changes. The core does not.
+An adapter translates source-native resources and responses into systems, objects,
+relationships, facets, observations, provenance, and freshness. LookingGlass keeps that
+model in SQLite. Add a source and the adapter changes. The core does not.
 
 > **The trick is refusal.** The UI never learns how to call the remote system.
 > It can ask for a capability an adapter declared in advance. It cannot invent an
